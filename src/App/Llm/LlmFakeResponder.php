@@ -140,7 +140,18 @@ final class LlmFakeResponder
 
     private function build(int $status, string $contentType, string $body): SynthesizedResponse
     {
-        return new SynthesizedResponse($status, ['Content-Type' => $contentType], $body, Detection::none());
+        // X-Powered-By is set globally by the front controller for every response, so it already
+        // reaches this tier unchanged — nothing to add here. X-Request-Id, by contrast, is emitted
+        // per response by the template tier (ResponseSynthesizer), so an LLM fake without one would
+        // be a header-distinct minority among app-generated content; mirror it here so both tiers of
+        // synthesized content share the same shape. The plain 404 is styled as nginx's own error
+        // page (bypassing the app), so it carries neither — that split is expected, not a gap.
+        return new SynthesizedResponse(
+            $status,
+            ['Content-Type' => $contentType, 'X-Request-Id' => bin2hex(random_bytes(8))],
+            $body,
+            Detection::none()
+        );
     }
 
     /** App-chosen status (never the model's). Bias auth-looking paths to 401 so not every plausible

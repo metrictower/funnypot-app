@@ -184,6 +184,27 @@ final class LlmFakeResponderTest extends TestCase
         self::assertSame('text/html; charset=utf-8', $resp->headers['Content-Type']);
     }
 
+    public function test_response_carries_a_per_response_request_id(): void
+    {
+        // Header parity with the template tier (ResponseSynthesizer), which stamps every response
+        // with a random X-Request-Id: an LLM fake without one would be a header-distinct minority
+        // among app-generated content. X-Powered-By is not asserted here — it's set globally by the
+        // front controller (demo/index.php), outside LlmFakeResponder's own header set.
+        [$r] = $this->make(fn (): array => ['status' => 200, 'body' => json_encode(['content' => self::GOOD_HTML])]);
+
+        $first = $r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');
+        self::assertNotNull($first);
+        self::assertArrayHasKey('X-Request-Id', $first->headers);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $first->headers['X-Request-Id']);
+
+        // Cache hit is a fresh HTTP response too — it must get its own X-Request-Id, not a value
+        // frozen at cache-write time (a fixed id across many requests would itself be a tell).
+        $second = $r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');
+        self::assertNotNull($second);
+        self::assertArrayHasKey('X-Request-Id', $second->headers);
+        self::assertNotSame($first->headers['X-Request-Id'], $second->headers['X-Request-Id']);
+    }
+
     public function test_non_html_sanitizer_rejection_returns_null(): void
     {
         // A .js body carrying a runtime primitive is rejected → the plain 404 (parity with HTML).
