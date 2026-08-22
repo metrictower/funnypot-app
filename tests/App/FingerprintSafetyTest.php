@@ -147,4 +147,33 @@ final class FingerprintSafetyTest extends TestCase
         $prompt = $builder->build('GET', '/x');
         self::assertClean($prompt, "LlmPromptBuilder::{$factory}(...) exemplar prompt");
     }
+
+    /** The persona-accepting factories, each with a distinct seed so the built persona differs per
+     *  row. A seed (int) rather than a VisualPersona instance keeps the provider serializable — the
+     *  instance is built inside the test. @return array<string,array{0:string,1:int}> */
+    public static function personaExemplarFactories(): array
+    {
+        return [
+            'forJson' => ['forJson', 201],
+            'forJs' => ['forJs', 202],
+            'forXml' => ['forXml', 203],
+            'forPlaintext' => ['forPlaintext', 204],
+        ];
+    }
+
+    /**
+     * Production (demo/index.php) always calls these factories WITH a VisualPersona — the null-path
+     * test above only covers the neutral-placeholder exemplars, never the persona-coherent ones that
+     * actually ship. Same denylist, same scan, through the PERSONA branch instead.
+     *
+     * @dataProvider personaExemplarFactories
+     */
+    public function test_persona_path_prompt_exemplar_carries_no_denylisted_signature(string $factory, int $seed): void
+    {
+        $persona = VisualPersona::fromSeed($seed);
+        /** @var LlmPromptBuilder $builder */
+        $builder = LlmPromptBuilder::{$factory}('nginx', $persona);
+        $prompt = $builder->build('GET', '/x');
+        self::assertClean($prompt, "LlmPromptBuilder::{$factory}('nginx', persona seed {$seed}) exemplar prompt");
+    }
 }

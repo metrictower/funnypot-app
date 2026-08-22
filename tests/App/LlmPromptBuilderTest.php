@@ -127,6 +127,24 @@ final class LlmPromptBuilderTest extends TestCase
         }
     }
 
+    /** forJs/forXml take the same persona param as forJson/forPlaintext but weren't covered above —
+     *  their exemplars must also carry the persona identity and drop the old fixed-fleet literals. */
+    public function test_js_and_xml_persona_paths_carry_persona_identity_and_drop_fixed_literals(): void
+    {
+        $persona = VisualPersona::fromSeed(123);
+
+        $js = LlmPromptBuilder::forJs('nginx', $persona)->build('GET', '/static/js/config.js');
+        self::assertStringContainsString($persona->company(), $js);
+        self::assertStringNotContainsString('a1f9c3', $js);
+
+        $xml = LlmPromptBuilder::forXml('nginx', $persona)->build('GET', '/config/services.xml');
+        self::assertStringContainsString($persona->company(), $xml);
+        self::assertStringContainsString($persona->dbHost(), $xml);
+        self::assertStringContainsString($persona->dbName(), $xml);
+        self::assertStringNotContainsString('10.0.0.5', $xml);
+        self::assertStringNotContainsString('appdb', $xml);
+    }
+
     /** No persona given (the existing 3-arg call shape) still builds — backward compatible with any
      *  caller/test that predates the persona param, falling back to the neutral placeholders. */
     public function test_no_persona_path_still_builds_with_neutral_placeholders(): void
