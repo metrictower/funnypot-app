@@ -30,4 +30,32 @@ final class VisualPersonaTest extends TestCase
         self::assertMatchesRegularExpression('/^tok_[0-9a-f]{12}$/', $p->fakeToken('x'));
         self::assertMatchesRegularExpression('/^fp-[0-9a-f]{4}$/', $p->classPrefix());
     }
+
+    /** The db.* accessors delegate to the wrapped PersonaIdentity — non-empty and, since the
+     *  identity is a pure function of the seed, byte-identical across two instances of the same seed. */
+    public function test_db_accessors_are_nonempty_and_deterministic_per_seed(): void
+    {
+        $a = VisualPersona::fromSeed(123);
+        $b = VisualPersona::fromSeed(123);
+
+        self::assertNotSame('', $a->dbHost());
+        self::assertNotSame('', $a->dbName());
+        self::assertNotSame('', $a->dbUser());
+        self::assertNotSame('', $a->dbPassword());
+
+        self::assertSame($a->dbHost(), $b->dbHost());
+        self::assertSame($a->dbName(), $b->dbName());
+        self::assertSame($a->dbUser(), $b->dbUser());
+        self::assertSame($a->dbPassword(), $b->dbPassword());
+    }
+
+    public function test_db_accessors_diverge_across_seeds(): void
+    {
+        $x = VisualPersona::fromSeed(1);
+        $y = VisualPersona::fromSeed(2);
+
+        // Not every field is guaranteed to diverge for any two seeds (small dictionaries), but the
+        // high-entropy password must, and it's enough to prove the accessor isn't a fixed constant.
+        self::assertNotSame($x->dbPassword(), $y->dbPassword());
+    }
 }

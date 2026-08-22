@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Llm\LlmPromptBuilder;
+use Funnypot\App\Render\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -101,6 +102,40 @@ final class LlmPromptBuilderTest extends TestCase
         self::assertStringContainsString('Velthora', $p);
         self::assertStringContainsString('APITOKEN', $p);         // marker convention documented
         self::assertStringNotContainsString('<!doctype', $p);     // not asking for HTML anymore
+    }
+
+    /**
+     * The non-HTML exemplars (json/js/xml/plaintext) take an optional persona so a /.env or
+     * /config.json reflects the SAME company/domain identity as the HTML tier, instead of a fixed
+     * fleet-wide literal (m.hale, tok_7c1d20b4, appdb, 10.0.0.5, changeme_7c1d20) every deployment
+     * imitates near-verbatim.
+     */
+    public function test_persona_path_carries_persona_identity_and_drops_fixed_literals(): void
+    {
+        $persona = VisualPersona::fromSeed(123);
+        $banned = ['m.hale', 'tok_7c1d20b4', 'appdb', 'changeme_7c1d20', '10.0.0.5'];
+
+        $json = LlmPromptBuilder::forJson('nginx', $persona)->build('GET', '/api/v2/users');
+        $plaintext = LlmPromptBuilder::forPlaintext('nginx', $persona)->build('GET', '/config/app.env');
+
+        foreach ([$json, $plaintext] as $prompt) {
+            self::assertStringContainsString($persona->company(), $prompt);
+            self::assertStringContainsString($persona->domain(), $prompt);
+            foreach ($banned as $needle) {
+                self::assertStringNotContainsString($needle, $prompt, "leaked fixed literal: {$needle}");
+            }
+        }
+    }
+
+    /** No persona given (the existing 3-arg call shape) still builds — backward compatible with any
+     *  caller/test that predates the persona param, falling back to the neutral placeholders. */
+    public function test_no_persona_path_still_builds_with_neutral_placeholders(): void
+    {
+        foreach (['forJson', 'forJs', 'forXml', 'forPlaintext'] as $factory) {
+            $out = LlmPromptBuilder::{$factory}('nginx')->build('GET', '/x');
+            self::assertStringContainsString('<|im_start|>system', $out);
+            self::assertStringEndsWith("<|im_start|>assistant\n", $out);
+        }
     }
 
     public function test_no_public_fingerprint_literals_in_any_prompt(): void

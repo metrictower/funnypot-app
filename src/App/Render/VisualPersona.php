@@ -55,6 +55,11 @@ final class VisualPersona
     public function domain(): string { return $this->identity->field('company.domain') ?? 'example.internal'; }
     public function adminEmail(): string { return $this->identity->field('user.admin.email') ?? 'admin@example.internal'; }
 
+    public function dbHost(): string { return $this->identity->field('db.host') ?? 'localhost'; }
+    public function dbName(): string { return $this->identity->field('db.name') ?? 'appdb'; }
+    public function dbUser(): string { return $this->identity->field('db.user') ?? 'appuser'; }
+    public function dbPassword(): string { return $this->identity->field('db.password') ?? 'changeme'; }
+
     public function fakeToken(string $salt): string
     {
         return 'tok_' . substr(hash('sha256', $this->seed . '|token|' . $salt), 0, 12);

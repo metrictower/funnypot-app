@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Llm;
 
 use Funnypot\App\Render\PageShellRenderer;
+use Funnypot\App\Render\VisualPersona;
 
 /**
  * Maps a request path's file extension to the shape of fake to synthesize. A real server answers a
@@ -40,16 +41,17 @@ final class LlmResponseProfiles
         ?PageShellRenderer $renderer = null,
         string $pageSlotsGrammar = '',
         string $company = 'Internal',
+        ?VisualPersona $persona = null,
     ) {
         $this->byKind = [
             'html' => $renderer !== null
                 ? new LlmResponseProfile('html', 'text/html; charset=utf-8', LlmPromptBuilder::forHtmlSlots($serverStack, $company), $pageSlotsGrammar, $renderer)
                 : new LlmResponseProfile('html', 'text/html; charset=utf-8', LlmPromptBuilder::forHtml($serverStack), $htmlGrammar),
-            'json' => new LlmResponseProfile('json', 'application/json', LlmPromptBuilder::forJson($serverStack), $jsonGrammar),
+            'json' => new LlmResponseProfile('json', 'application/json', LlmPromptBuilder::forJson($serverStack, $persona), $jsonGrammar),
             'css' => new LlmResponseProfile('css', 'text/css; charset=utf-8', LlmPromptBuilder::forCss($serverStack), ''),
-            'js' => new LlmResponseProfile('js', 'application/javascript', LlmPromptBuilder::forJs($serverStack), ''),
-            'xml' => new LlmResponseProfile('xml', 'application/xml; charset=utf-8', LlmPromptBuilder::forXml($serverStack), ''),
-            'text' => new LlmResponseProfile('text', 'text/plain; charset=utf-8', LlmPromptBuilder::forPlaintext($serverStack), ''),
+            'js' => new LlmResponseProfile('js', 'application/javascript', LlmPromptBuilder::forJs($serverStack, $persona), ''),
+            'xml' => new LlmResponseProfile('xml', 'application/xml; charset=utf-8', LlmPromptBuilder::forXml($serverStack, $persona), ''),
+            'text' => new LlmResponseProfile('text', 'text/plain; charset=utf-8', LlmPromptBuilder::forPlaintext($serverStack, $persona), ''),
         ];
     }
 

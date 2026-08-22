@@ -35,6 +35,7 @@ use Funnypot\App\Render\Skins\GrafanaSkin;
 use Funnypot\App\Render\Skins\PhpMyAdminSkin;
 use Funnypot\App\Render\Skins\WordpressSkin;
 use Funnypot\App\Render\SkinSet;
+use Funnypot\App\Render\VisualPersona;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
@@ -98,6 +99,9 @@ if ($config->llmEnabled) {
     );
     $renderer = new PageShellRenderer($skins);
     $company = PersonaIdentity::fromSeed($config->personaSeed)->field('company.name') ?? 'Internal';
+    // Same persona seed as the html tier's $company, so a /.env or /config.json reflects the same
+    // coherent identity as the html pages (cross-kind coherence, not just per-kind determinism).
+    $visualPersona = VisualPersona::fromSeed($config->personaSeed);
     $pageSlotsGrammar = (string) @file_get_contents(dirname(__DIR__) . '/resources/llm/page-slots.gbnf');
     $artifactVersion = ArtifactVersion::current(dirname(__DIR__) . '/resources/llm', dirname(__DIR__) . '/src/App/Render', $config->llmPromptVersion);
     $llmFakes = new LlmFakeResponder(
@@ -118,6 +122,7 @@ if ($config->llmEnabled) {
             $renderer,
             $pageSlotsGrammar,
             $company,
+            $visualPersona,
         ),
         $config->llmPromptVersion,
         $config->llmMaxConcurrent,
