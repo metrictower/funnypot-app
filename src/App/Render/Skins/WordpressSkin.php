@@ -2,9 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\App\Render\Esc;
+use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\Skin;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -14,7 +13,7 @@ use Funnypot\App\Render\VisualPersona;
  * literals on purpose: for this skin, blending into the WP install-base fleet-wide *is* the anti-
  * fingerprint property, unlike GenericSkin where seed-derived CSS avoids a shared hash.
  */
-final class WordpressSkin implements Skin
+final class WordpressSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
@@ -29,24 +28,18 @@ final class WordpressSkin implements Skin
     public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
     {
         $siteRaw = $slots->appName() !== '' ? $slots->appName() : $persona->company();
-        $site = Esc::text($siteRaw);
-        $domain = Esc::text($persona->domain());
+        $site = $this->esc($siteRaw);
+        $domain = $this->esc($persona->domain());
 
-        $html = '<!doctype html><html lang="en-US"><head><meta charset="utf-8">'
-            . '<meta name="viewport" content="width=device-width">'
-            . '<title>' . $site . ' - Log In</title>'
-            . '<style>' . $this->css() . '</style>'
-            . '</head><body class="login no-js">';
-
-        $html .= '<div id="login">';
+        $html = '<div id="login">';
         $html .= '<h1><a href="#">' . $site . '</a></h1>';
 
         $notice = $slots->heading() !== '' ? $slots->heading() : $slots->flash();
         if ($notice !== '') {
-            $html .= '<div id="login_error">' . Esc::text($notice) . '</div>';
+            $html .= '<div id="login_error">' . $this->esc($notice) . '</div>';
         }
         if ($slots->intro() !== '') {
-            $html .= '<p class="message">' . Esc::text($slots->intro()) . '</p>';
+            $html .= '<p class="message">' . $this->esc($slots->intro()) . '</p>';
         }
 
         // action is the pre-escaped request path; hrefs below are trusted literals, never model bytes.
@@ -72,13 +65,18 @@ final class WordpressSkin implements Skin
 
         $html .= '<p class="footer">' . $domain;
         if ($slots->footerNote() !== '') {
-            $html .= ' &middot; ' . Esc::text($slots->footerNote());
+            $html .= ' &middot; ' . $this->esc($slots->footerNote());
         }
         $html .= '</p>';
 
-        $html .= '</body></html>';
-
-        return $html;
+        return $this->document(
+            $siteRaw . ' - Log In',
+            $this->css(),
+            $html,
+            ' lang="en-US"',
+            '<meta charset="utf-8"><meta name="viewport" content="width=device-width">',
+            ' class="login no-js"'
+        );
     }
 
     private function css(): string

@@ -2,9 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\App\Render\Esc;
+use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\Skin;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -14,7 +13,7 @@ use Funnypot\App\Render\VisualPersona;
  * matcher of the four skins (`/admin`, `/dashboard`, `/manage`), so it is registered last in the
  * SkinSet — more specific product analogs (WordPress, phpMyAdmin, Grafana) get first refusal.
  */
-final class AdminLteSkin implements Skin
+final class AdminLteSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
@@ -28,17 +27,11 @@ final class AdminLteSkin implements Skin
 
     public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
     {
-        $company = Esc::text($persona->company());
-        $appName = Esc::text($slots->appName());
+        $company = $this->esc($persona->company());
+        $appName = $this->esc($slots->appName());
         $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $slots->appName();
 
-        $html = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            . '<meta name="viewport" content="width=device-width">'
-            . '<title>' . Esc::text($title) . '</title>'
-            . '<style>' . $this->css() . '</style>'
-            . '</head><body class="alte-body">';
-
-        $html .= '<div class="alte-wrapper">';
+        $html = '<div class="alte-wrapper">';
 
         $html .= '<nav class="alte-navbar">';
         $html .= '<span class="alte-brand">' . $company . '</span>';
@@ -50,8 +43,7 @@ final class AdminLteSkin implements Skin
         $html .= '<aside class="alte-sidebar">';
         $html .= '<ul class="alte-nav-sidebar">';
         foreach ($slots->navItems() as $item) {
-            // href is a trusted literal — a model value never reaches a URL sink.
-            $html .= '<li class="alte-nav-item"><a class="alte-nav-link" href="#">' . Esc::text($item) . '</a></li>';
+            $html .= '<li class="alte-nav-item">' . $this->navHtml([$item], 'alte-nav-link') . '</li>';
         }
         $html .= '</ul>';
         $html .= '</aside>';
@@ -61,55 +53,32 @@ final class AdminLteSkin implements Skin
 
         $heading = $slots->heading();
         if ($heading !== '') {
-            $html .= '<div class="alte-card-header">' . Esc::text($heading) . '</div>';
+            $html .= '<div class="alte-card-header">' . $this->esc($heading) . '</div>';
         }
         $html .= '<div class="alte-card-body">';
         if ($slots->intro() !== '') {
-            $html .= '<p class="alte-intro">' . Esc::text($slots->intro()) . '</p>';
+            $html .= '<p class="alte-intro">' . $this->esc($slots->intro()) . '</p>';
         }
 
-        $html .= $this->table($slots->tableCols(), $slots->tableRows());
+        $html .= $this->tableHtml($slots->tableCols(), $slots->tableRows(), ' class="alte-table"');
 
         if ($slots->flash() !== '') {
-            $html .= '<div class="alte-flash">' . Esc::text($slots->flash()) . '</div>';
+            $html .= '<div class="alte-flash">' . $this->esc($slots->flash()) . '</div>';
         }
         $html .= '</div>'; // alte-card-body
         $html .= '</div>'; // alte-card
         $html .= '</section></div>'; // alte-content-wrapper
 
         $html .= '</div>'; // alte-wrapper
-        $html .= '</body></html>';
 
-        return $html;
-    }
-
-    /**
-     * @param list<string> $cols
-     * @param list<list<string>> $rows
-     */
-    private function table(array $cols, array $rows): string
-    {
-        if ($cols === [] && $rows === []) {
-            return '';
-        }
-        $html = '<table class="alte-table">';
-        if ($cols !== []) {
-            $html .= '<thead><tr>';
-            foreach ($cols as $col) {
-                $html .= '<th>' . Esc::text($col) . '</th>';
-            }
-            $html .= '</tr></thead>';
-        }
-        $html .= '<tbody>';
-        foreach ($rows as $row) {
-            $html .= '<tr>';
-            foreach ($row as $cell) {
-                $html .= '<td>' . Esc::text($cell) . '</td>';
-            }
-            $html .= '</tr>';
-        }
-        $html .= '</tbody></table>';
-        return $html;
+        return $this->document(
+            $title,
+            $this->css(),
+            $html,
+            ' lang="en"',
+            '<meta charset="utf-8"><meta name="viewport" content="width=device-width">',
+            ' class="alte-body"'
+        );
     }
 
     private function css(): string

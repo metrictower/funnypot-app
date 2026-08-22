@@ -2,9 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\App\Render\Esc;
+use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\Skin;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -14,7 +13,7 @@ use Funnypot\App\Render\VisualPersona;
  * deterministically from a small plausible pool, keyed by the persona — a byte-identical version
  * banner on every deployment would itself be a fleet-wide static tell.
  */
-final class PhpMyAdminSkin implements Skin
+final class PhpMyAdminSkin extends AbstractSkin
 {
     /** Plausible MySQL/MariaDB version banners — never a copied real-world signature string. */
     private const VERSION_POOL = [
@@ -37,18 +36,12 @@ final class PhpMyAdminSkin implements Skin
 
     public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
     {
-        $company = Esc::text($persona->company());
-        $domain = Esc::text($persona->domain());
-        $db = Esc::text($this->slug($persona->company()));
+        $company = $this->esc($persona->company());
+        $domain = $this->esc($persona->domain());
+        $db = $this->esc($this->slug($persona->company()));
 
-        $html = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            . '<meta name="viewport" content="width=device-width">'
-            . '<title>phpMyAdmin</title>'
-            . '<style>' . $this->css() . '</style>'
-            . '</head><body>';
-
-        $version = Esc::text($this->version($persona));
-        $html .= '<div class="pma-topbar">phpMyAdmin &middot; Server: ' . $domain
+        $version = $this->esc($this->version($persona));
+        $html = '<div class="pma-topbar">phpMyAdmin &middot; Server: ' . $domain
             . ' via TCP/IP &middot; Server version: ' . $version . '</div>';
 
         $html .= '<div class="pma-shell">';
@@ -58,22 +51,27 @@ final class PhpMyAdminSkin implements Skin
 
         $heading = $slots->heading() !== '' ? $slots->heading() : $slots->appName();
         if ($heading !== '') {
-            $html .= '<h1 class="pma-heading">' . Esc::text($heading) . '</h1>';
+            $html .= '<h1 class="pma-heading">' . $this->esc($heading) . '</h1>';
         }
         if ($slots->intro() !== '') {
-            $html .= '<p class="pma-intro">' . Esc::text($slots->intro()) . '</p>';
+            $html .= '<p class="pma-intro">' . $this->esc($slots->intro()) . '</p>';
         }
         if ($slots->flash() !== '') {
-            $html .= '<div class="pma-notice">' . Esc::text($slots->flash()) . '</div>';
+            $html .= '<div class="pma-notice">' . $this->esc($slots->flash()) . '</div>';
         }
 
         $html .= $this->results($slots->tableCols(), $slots->tableRows());
 
         $html .= '</main>';
         $html .= '</div>';
-        $html .= '</body></html>';
 
-        return $html;
+        return $this->document(
+            'phpMyAdmin',
+            $this->css(),
+            $html,
+            ' lang="en"',
+            '<meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+        );
     }
 
     /** Deterministic per-persona pick from VERSION_POOL — stable per host, varies across deployments. */
@@ -121,23 +119,7 @@ final class PhpMyAdminSkin implements Skin
             return '';
         }
         $html = '<div class="pma-results-info">Showing rows 0 - ' . count($rows) . '</div>';
-        $html .= '<table class="pma-results">';
-        if ($cols !== []) {
-            $html .= '<thead><tr>';
-            foreach ($cols as $col) {
-                $html .= '<th>' . Esc::text($col) . '</th>';
-            }
-            $html .= '</tr></thead>';
-        }
-        $html .= '<tbody>';
-        foreach ($rows as $row) {
-            $html .= '<tr>';
-            foreach ($row as $cell) {
-                $html .= '<td>' . Esc::text($cell) . '</td>';
-            }
-            $html .= '</tr>';
-        }
-        $html .= '</tbody></table>';
+        $html .= $this->tableHtml($cols, $rows, ' class="pma-results"');
         return $html;
     }
 

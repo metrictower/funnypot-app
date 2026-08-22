@@ -2,9 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\App\Render\Esc;
+use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\Skin;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -12,7 +11,7 @@ use Funnypot\App\Render\VisualPersona;
  * content area. Structural resemblance only — no upstream Grafana markup/CSS bytes are reproduced,
  * and the accent color is shifted off the product's exact brand hex.
  */
-final class GrafanaSkin implements Skin
+final class GrafanaSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
@@ -26,49 +25,44 @@ final class GrafanaSkin implements Skin
 
     public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
     {
-        $company = Esc::text($persona->company());
+        $company = $this->esc($persona->company());
         $title = $slots->heading() !== '' ? $slots->heading() : ($slots->appName() !== '' ? $slots->appName() : 'Dashboard');
+        $titleEsc = $this->esc($title);
 
-        $html = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            . '<meta name="viewport" content="width=device-width">'
-            . '<title>' . Esc::text($title) . '</title>'
-            . '<style>' . $this->css() . '</style>'
-            . '</head><body class="gf-body">';
-
-        $html .= '<div class="gf-topnav"><span class="gf-brand">' . $company . '</span>'
-            . '<span class="gf-topnav-title">' . Esc::text($title) . '</span></div>';
+        $html = '<div class="gf-topnav"><span class="gf-brand">' . $company . '</span>'
+            . '<span class="gf-topnav-title">' . $titleEsc . '</span></div>';
 
         $html .= '<div class="gf-shell">';
         $html .= $this->rail($slots->navItems());
 
         $html .= '<main class="gf-content">';
-        $html .= '<h1 class="gf-dashboard-title">' . Esc::text($title) . '</h1>';
+        $html .= '<h1 class="gf-dashboard-title">' . $titleEsc . '</h1>';
         if ($slots->intro() !== '') {
-            $html .= '<p class="gf-sub">' . Esc::text($slots->intro()) . '</p>';
+            $html .= '<p class="gf-sub">' . $this->esc($slots->intro()) . '</p>';
         }
         if ($slots->flash() !== '') {
-            $html .= '<div class="gf-alert">' . Esc::text($slots->flash()) . '</div>';
+            $html .= '<div class="gf-alert">' . $this->esc($slots->flash()) . '</div>';
         }
 
         $html .= $this->panelGrid($slots->tableCols(), $slots->tableRows());
 
         $html .= '</main>';
         $html .= '</div>';
-        $html .= '</body></html>';
 
-        return $html;
+        return $this->document(
+            $title,
+            $this->css(),
+            $html,
+            ' lang="en"',
+            '<meta charset="utf-8"><meta name="viewport" content="width=device-width">',
+            ' class="gf-body"'
+        );
     }
 
     /** @param list<string> $items */
     private function rail(array $items): string
     {
-        $html = '<nav class="gf-rail">';
-        foreach ($items as $item) {
-            // href is a trusted literal — a model value never reaches a URL sink.
-            $html .= '<a class="gf-rail-item" href="#">' . Esc::text($item) . '</a>';
-        }
-        $html .= '</nav>';
-        return $html;
+        return '<nav class="gf-rail">' . $this->navHtml($items, 'gf-rail-item') . '</nav>';
     }
 
     /**
@@ -80,25 +74,7 @@ final class GrafanaSkin implements Skin
         $html = '<div class="gf-panel-grid">';
         $html .= '<div class="gf-panel">';
         $html .= '<div class="gf-panel-header">Query results</div>';
-        if ($cols !== [] || $rows !== []) {
-            $html .= '<table class="gf-panel-table">';
-            if ($cols !== []) {
-                $html .= '<thead><tr>';
-                foreach ($cols as $col) {
-                    $html .= '<th>' . Esc::text($col) . '</th>';
-                }
-                $html .= '</tr></thead>';
-            }
-            $html .= '<tbody>';
-            foreach ($rows as $row) {
-                $html .= '<tr>';
-                foreach ($row as $cell) {
-                    $html .= '<td>' . Esc::text($cell) . '</td>';
-                }
-                $html .= '</tr>';
-            }
-            $html .= '</tbody></table>';
-        }
+        $html .= $this->tableHtml($cols, $rows, ' class="gf-panel-table"');
         $html .= '</div>';
         $html .= '</div>';
         return $html;

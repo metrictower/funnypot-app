@@ -8,7 +8,7 @@ namespace Funnypot\App\Render;
  * is seed-derived (palette()/classPrefix()) so a fixed public skin still gives each fake host its
  * own look — collapsing every host to one static stylesheet would itself be a fleet-wide fingerprint.
  */
-final class GenericSkin implements Skin
+final class GenericSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
@@ -25,42 +25,35 @@ final class GenericSkin implements Skin
         $p = $persona->classPrefix();
         $pal = $persona->palette();
 
-        $company = Esc::text($persona->company());
-        $appName = Esc::text($slots->appName());
+        $company = $this->esc($persona->company());
+        $appName = $this->esc($slots->appName());
         $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $slots->appName();
 
-        $html = '<!doctype html><html lang=en><head><meta charset=utf-8>'
-            . '<title>' . Esc::text($title) . '</title>'
-            . '<style>' . $this->css($p, $pal) . '</style>'
-            . '</head><body>';
-
-        $html .= '<header class="' . $p . '-hd">'
+        $body = '<header class="' . $p . '-hd">'
             . '<span class="' . $p . '-brand">' . $company . '</span>';
         if ($appName !== '') {
-            $html .= ' <span class="' . $p . '-app">' . $appName . '</span>';
+            $body .= ' <span class="' . $p . '-app">' . $appName . '</span>';
         }
-        $html .= '</header>';
+        $body .= '</header>';
 
-        $html .= $this->nav($p, $slots->navItems());
+        $body .= $this->nav($p, $slots->navItems());
 
-        $html .= '<main class="' . $p . '-box">';
-        $html .= $this->heading($slots->heading());
-        $html .= $this->intro($p, $slots->intro());
-        $html .= $this->table($p, $slots->tableCols(), $slots->tableRows());
-        $html .= $this->form($p, $slots->formFields(), $escapedPath);
-        $html .= $this->flash($p, $slots->flash());
-        $html .= '</main>';
+        $body .= '<main class="' . $p . '-box">';
+        $body .= $this->heading($slots->heading());
+        $body .= $this->intro($p, $slots->intro());
+        $body .= $this->tableHtml($slots->tableCols(), $slots->tableRows(), ' class="' . $p . '-table"');
+        $body .= $this->form($p, $slots->formFields(), $escapedPath);
+        $body .= $this->flash($p, $slots->flash());
+        $body .= '</main>';
 
-        $html .= '<footer class="' . $p . '-ft">&copy; ' . $company;
+        $body .= '<footer class="' . $p . '-ft">&copy; ' . $company;
         $footerNote = $slots->footerNote();
         if ($footerNote !== '') {
-            $html .= ' &middot; ' . Esc::text($footerNote);
+            $body .= ' &middot; ' . $this->esc($footerNote);
         }
-        $html .= '</footer>';
+        $body .= '</footer>';
 
-        $html .= '</body></html>';
-
-        return $html;
+        return $this->document($title, $this->css($p, $pal), $body);
     }
 
     /** @param array{bg:string,fg:string,accent:string,muted:string,border:string} $pal */
@@ -86,50 +79,17 @@ final class GenericSkin implements Skin
         if ($items === []) {
             return '';
         }
-        $html = '<nav class="' . $p . '-nav">';
-        foreach ($items as $item) {
-            // href is a trusted literal — a model value is never allowed into a URL sink.
-            $html .= '<a href="#">' . Esc::text($item) . '</a>';
-        }
-        return $html . '</nav>';
+        return '<nav class="' . $p . '-nav">' . $this->navHtml($items) . '</nav>';
     }
 
     private function heading(string $heading): string
     {
-        return $heading !== '' ? '<h1>' . Esc::text($heading) . '</h1>' : '';
+        return $heading !== '' ? '<h1>' . $this->esc($heading) . '</h1>' : '';
     }
 
     private function intro(string $p, string $intro): string
     {
-        return $intro !== '' ? '<p class="' . $p . '-intro">' . Esc::text($intro) . '</p>' : '';
-    }
-
-    /**
-     * @param list<string> $cols
-     * @param list<list<string>> $rows
-     */
-    private function table(string $p, array $cols, array $rows): string
-    {
-        if ($cols === [] && $rows === []) {
-            return '';
-        }
-        $html = '<table class="' . $p . '-table">';
-        if ($cols !== []) {
-            $html .= '<thead><tr>';
-            foreach ($cols as $col) {
-                $html .= '<th>' . Esc::text($col) . '</th>';
-            }
-            $html .= '</tr></thead>';
-        }
-        $html .= '<tbody>';
-        foreach ($rows as $row) {
-            $html .= '<tr>';
-            foreach ($row as $cell) {
-                $html .= '<td>' . Esc::text($cell) . '</td>';
-            }
-            $html .= '</tr>';
-        }
-        return $html . '</tbody></table>';
+        return $intro !== '' ? '<p class="' . $p . '-intro">' . $this->esc($intro) . '</p>' : '';
     }
 
     /** @param list<string> $fields */
@@ -142,7 +102,7 @@ final class GenericSkin implements Skin
         // model value, so both are safe directly in these attribute sinks.
         $html = '<form class="' . $p . '-form" method="post" action="' . $escapedPath . '">';
         foreach ($fields as $idx => $field) {
-            $html .= '<label>' . Esc::text($field)
+            $html .= '<label>' . $this->esc($field)
                 . '<input type="text" name="f' . $idx . '"></label>';
         }
         return $html . '<button type="submit">Submit</button></form>';
@@ -150,6 +110,6 @@ final class GenericSkin implements Skin
 
     private function flash(string $p, string $flash): string
     {
-        return $flash !== '' ? '<div class="' . $p . '-flash">' . Esc::text($flash) . '</div>' : '';
+        return $flash !== '' ? '<div class="' . $p . '-flash">' . $this->esc($flash) . '</div>' : '';
     }
 }
