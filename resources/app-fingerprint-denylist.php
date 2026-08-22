@@ -41,7 +41,10 @@ return [
     'patterns' => [
         // A bare CRS rule id: six digits in the 9xxxxx request-rule range, not part of a longer
         // number. Serving one back would echo CRS's own rule numbering.
-        '\b9\d{5}\b',
+        // Excludes a run immediately preceded by `#` or another hex digit, so a seed-derived
+        // 6-hex-digit accent color like #912345 (all-decimal hex just happens to look like a
+        // rule id) isn't misread as one — a hex color is not a CRS rule id.
+        '(?<![#0-9a-fA-F])9\d{5}(?![0-9a-fA-F])\b',
         // ModSecurity with an underscore/hyphen separator (mod_security, mod-security,
         // mod_security_id …); the bare `ModSecurity` literal misses these variants.
         'mod[_-]?security',

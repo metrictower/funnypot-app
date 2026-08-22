@@ -176,4 +176,25 @@ final class FingerprintSafetyTest extends TestCase
         $prompt = $builder->build('GET', '/x');
         self::assertClean($prompt, "LlmPromptBuilder::{$factory}('nginx', persona seed {$seed}) exemplar prompt");
     }
+
+    /**
+     * Regression for the bare-CRS-id pattern: a seed-derived 6-hex-digit accent color that happens
+     * to be all decimal digits (e.g. #912345) must NOT be misread as a CRS rule id. The `#` gives
+     * `\b` a false word boundary that a plain `\b9\d{5}\b` pattern would match; a hex color is not
+     * a fingerprint leak.
+     */
+    public function test_hex_accent_color_starting_with_9_is_not_flagged_as_crs_rule_id(): void
+    {
+        self::assertClean(
+            '<style>:root { --accent: #912345; } .btn { color: #987654; }</style>',
+            'synthetic hex-accent-color snippet'
+        );
+    }
+
+    /** Same pattern must still catch a genuine bare CRS rule id sitting in prose (not hex-adjacent). */
+    public function test_bare_crs_rule_id_in_prose_is_still_flagged(): void
+    {
+        $hits = self::scan('blocked by rule 942100 during the scan');
+        self::assertNotSame([], $hits, 'expected the bare CRS rule id 942100 to be flagged');
+    }
 }
