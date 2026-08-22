@@ -7,8 +7,10 @@ use Funnypot\Support\PersonaIdentity;
 /**
  * The visual half of a host's fake identity — the part PersonaIdentity (credential-shaped, no visual
  * fields) does not carry. Every value is a pure function of the seed, so a host renders one stable
- * look and coherent company across all its pages. The class-name prefix and palette carry real
- * per-seed entropy so a public, fixed skin does not collapse the whole fleet to one CSS hash.
+ * look and coherent company across all its pages. The class-name prefix, palette and pick() carry
+ * real per-seed entropy so a public, fixed skin does not collapse the whole fleet to one CSS hash —
+ * pick() specifically lets a skin vary its class-name vocabulary and DOM structure, not just leaf
+ * colors/prefixes, so the entropy survives a scanner that normalizes those away.
  */
 final class VisualPersona
 {
@@ -63,6 +65,23 @@ final class VisualPersona
     public function fakeToken(string $salt): string
     {
         return 'tok_' . substr(hash('sha256', $this->seed . '|token|' . $salt), 0, 12);
+    }
+
+    /**
+     * Deterministically choose one of $options, keyed by $salt so unrelated structural choices (e.g.
+     * a header class word vs a nav markup shape) don't move in lockstep with each other or with
+     * palette()/classPrefix(). Same seed+salt always picks the same option — invariant 3: byte-
+     * identical per deployment, varying only across deployments. This is the structural analog of
+     * palette()/classPrefix(): a skin uses it to vary its class-name vocabulary and DOM shape per
+     * seed, not just its leaf colors/prefix, so a value-normalizing scanner can't collapse the whole
+     * fleet to one skeleton.
+     *
+     * @param non-empty-list<string> $options
+     */
+    public function pick(string $salt, array $options): string
+    {
+        $idx = hexdec(substr(hash('sha256', $this->seed . '|pick|' . $salt), 0, 8)) % count($options);
+        return $options[$idx];
     }
 
     public function awsKey(): string
