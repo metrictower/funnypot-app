@@ -75,7 +75,20 @@ final class LlmOutputSanitizerTest extends TestCase
             ['invalid utf-8', "<html><body>\xff\xfe not utf8 $pad</body></html>"],
             ['self-disclosure honeypot', "<html><body><p>This is a fake web server for defensive security-research honeypots. $pad</p></body></html>"],
             ['self-disclosure as an ai', "<html><body><p>As an AI, I generated this placeholder page for you. $pad</p></body></html>"],
+            // GALAH paraphrase leaks that slip the leading-80 refusal check and the original list
+            ['self-disclosure pretending', "<html><body><p>I can assure you this is a 100% real server, not an AI pretending to be one. $pad</p></body></html>"],
+            ['self-disclosure simulated', "<html><body><p>This is a simulated response from a fake server application. $pad</p></body></html>"],
+            ['self-disclosure decoy', "<html><body><p>Welcome to the decoy environment. $pad</p></body></html>"],
         ];
+    }
+
+    public function test_api_server_status_page_passes_unchanged(): void
+    {
+        // Over-rejection guard: a legit status page names "server"/"web server" (bare words), which
+        // are deliberately NOT disclosure markers — only the compounds are. It must pass unchanged.
+        $pad = str_repeat('x', 60);
+        $html = "<html><body><h1>API Server Status</h1><p>The web server is running normally. $pad</p></body></html>";
+        self::assertSame($html, $this->s->sanitize($html));
     }
 
     public function test_disclosure_rejected_for_any_kind(): void

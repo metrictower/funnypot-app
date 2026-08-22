@@ -24,6 +24,22 @@ final class ProbeClassifier
         'credentials.txt', 'backup.sql', '.aws', '.ssh', 'server-status', 'actuator',
     ];
 
+    /** Identity / prompt-extraction probes. A real server just 404s these; letting the tuned model
+     *  answer risks it echoing a loaded word from its own framing (see funnypot-llm GALAH-RESULTS).
+     *  Matched against the path with all non-alphanumerics stripped, so separator/case variants
+     *  collapse. Every entry is a multi-word compound that never occurs in a genuine app path. */
+    private const IDENTITY_PROBE_TOKENS = [
+        // authenticity / "what are you"
+        'honeypot', 'honeytrap', 'areyoua', 'areyouan', 'areyoureal', 'areyoufake',
+        'areyoubot', 'areyourobot', 'whoareyou', 'whatareyou', 'isthisa', 'isthisreal',
+        'isthisfake', 'fakeserver', 'fakewebserver', 'decoy',
+        // prompt extraction / injection
+        'ignoreprevious', 'ignoreall', 'ignoreabove', 'ignoreyourinstruction',
+        'printyourinstruction', 'printyourprompt', 'revealyourprompt', 'revealyourinstruction',
+        'showyourprompt', 'showyourinstruction', 'systemprompt', 'jailbreak', 'promptinjection',
+        'languagemodel', 'largelanguagemodel',
+    ];
+
     /** Explicit calibration tells in a filename stem: an obvious "prove the 404" probe. */
     private const PROBE_TOKENS = [
         'random', 'nonexist', 'notfound', 'intentional', 'donotexist', 'shouldnotexist',
@@ -63,6 +79,15 @@ final class ProbeClassifier
     {
         $path = $this->normalize($path);
         $lower = strtolower($path);
+
+        // Identity/injection probes are shed to the plain 404 before any allow-list shortcut, so a
+        // bait prefix (/wp-admin/are-you-a-honeypot) can't smuggle one through to the model.
+        $collapsed = preg_replace('/[^a-z0-9]/', '', $lower) ?? $lower;
+        foreach (self::IDENTITY_PROBE_TOKENS as $tok) {
+            if (strpos($collapsed, $tok) !== false) {
+                return 'probe';
+            }
+        }
 
         // Advertised bait always deserves a rich response.
         foreach (self::HARD_ALLOW as $bait) {

@@ -41,6 +41,10 @@ final class LlmOutputSanitizer
     private const META_DISCLOSURE = [
         'honeypot', 'security research', 'security-research', 'defensive security',
         'as an ai', 'as a language model', 'i am an ai', "i'm an ai", 'system prompt',
+        // Paraphrase leaks the model reaches for when a probe coaxes it into denying/describing what
+        // it is. Every entry is a multi-word compound so a legit page ("API Server Status") still
+        // passes — bare 'server'/'fake'/'ai' would false-reject.
+        'fake server', 'fake web server', 'decoy', 'pretending to be', 'simulated response',
     ];
 
     /** A leading refusal / self-identification / fence — the tell a grammar-free body must not open

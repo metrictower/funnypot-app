@@ -79,6 +79,15 @@ final class ProbeGateTest extends TestCase
         self::assertSame('probe', $d['reason']);
     }
 
+    public function test_identity_probe_path_never_reaches_the_model(): void
+    {
+        // End-to-end: an identity-probe path is shed by Gate B to the plain 404, so client->generate
+        // is never called and the model can't echo a loaded word from its own framing.
+        $d = $this->gate($this->store())->decide('GET', '/are-you-a-honeypot', '2.2.2.2');
+        self::assertFalse($d['generate']);
+        self::assertSame('probe', $d['reason']);
+    }
+
     public function test_bulk_scan_trips_and_pins_even_after_going_quiet(): void
     {
         $s = $this->store();
