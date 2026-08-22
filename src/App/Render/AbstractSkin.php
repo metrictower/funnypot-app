@@ -74,9 +74,11 @@ abstract class AbstractSkin implements Skin
     }
 
     /**
-     * Escapes each nav item's label. href is always the trusted literal '#' — a model value must
-     * never reach a URL sink (item 9 will make hrefs real later). A skin wraps the returned anchors
-     * in its own `<nav>`/`<ul>` chrome; this only owns the per-item escaping + href.
+     * Escapes each nav item's label and points href at a slug derived from that label, so a crawl
+     * of the honeypot can follow a nav link to another sibling path the honeypot itself answers
+     * (site-graph feel) instead of a dead '#' anchor. The href is never raw model text — see
+     * navHref() for how the slug is constructed to be structurally safe. A skin wraps the returned
+     * anchors in its own `<nav>`/`<ul>` chrome; this only owns the per-item escaping + href.
      *
      * @param list<string> $items
      * @param string $linkClass trusted literal class name, or '' for no class attribute
@@ -86,8 +88,25 @@ abstract class AbstractSkin implements Skin
         $classAttr = $linkClass !== '' ? ' class="' . $linkClass . '"' : '';
         $html = '';
         foreach ($items as $item) {
-            $html .= '<a' . $classAttr . ' href="#">' . $this->esc($item) . '</a>';
+            $href = $this->esc($this->navHref($item));
+            $html .= '<a' . $classAttr . ' href="' . $href . '">' . $this->esc($item) . '</a>';
         }
         return $html;
+    }
+
+    /**
+     * Turns a nav label into a safe relative sibling path: lowercase, collapse every run of
+     * non-`[a-z0-9]` characters to a single '-', trim leading/trailing '-', prefix with '/'.
+     * The result can only ever match `/[a-z0-9-]*` — it structurally cannot carry a scheme
+     * (javascript:/data:), a protocol-relative `//host`, a quote, or an HTML breakout, so a
+     * model-controlled label can never turn the href into anything but another sibling path
+     * that the honeypot's own routing answers. Falls back to '#' when the label has no
+     * alnum content to slug (still run through esc() by the caller as attribute
+     * defense-in-depth, though the slug is already the real guard).
+     */
+    private function navHref(string $label): string
+    {
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($label)), '-');
+        return $slug === '' ? '#' : '/' . $slug;
     }
 }
