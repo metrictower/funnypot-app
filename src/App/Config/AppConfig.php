@@ -144,7 +144,16 @@ final class AppConfig
             llmVelocityPer60s: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_60S', '5')),
             llmVelocityPer10m: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_10M', '15')),
             llmGateAllowIps: array_values(array_filter(array_map('trim', explode(',', $str('FUNNYPOT_LLM_GATE_ALLOW', ''))))),
-            personaSeed: (int) crc32($str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_LE_DOMAIN', 'funnypot'))),
+            // Seed source must be private: the cert CN (FUNNYPOT_LE_DOMAIN) is public, so deriving
+            // from it lets a scanner read the domain and precompute the whole persona identity
+            // offline. FUNNYPOT_PERSONA_SECRET is the private per-deployment value; unset falls back
+            // to a fixed default (set it for a unique per-host identity). hash('sha256', ...) over
+            // crc32 for a wide, non-trivially-invertible seed rather than a 32-bit checksum.
+            personaSeed: (int) hexdec(substr(
+                hash('sha256', 'funnypot-persona|' . $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'))),
+                0,
+                15
+            )),
         );
     }
 }

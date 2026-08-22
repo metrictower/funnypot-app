@@ -108,7 +108,35 @@ final class AppConfigTest extends TestCase
     {
         putenv('FUNNYPOT_PERSONA_SEED=my-host');
         $c = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame((int) crc32('my-host'), $c->personaSeed);
+        self::assertSame($this->expectedPersonaSeed('my-host'), $c->personaSeed);
         putenv('FUNNYPOT_PERSONA_SEED');
+    }
+
+    public function test_persona_seed_default_ignores_public_le_domain(): void
+    {
+        putenv('FUNNYPOT_LE_DOMAIN=example-honeypot.com');
+        $c = AppConfig::fromEnv(sys_get_temp_dir());
+        self::assertSame($this->expectedPersonaSeed('funnypot'), $c->personaSeed); // public cert CN must never seed identity
+        putenv('FUNNYPOT_LE_DOMAIN');
+    }
+
+    public function test_persona_seed_uses_private_secret_and_seed_takes_precedence(): void
+    {
+        putenv('FUNNYPOT_PERSONA_SECRET=super-private-value');
+        $c = AppConfig::fromEnv(sys_get_temp_dir());
+        self::assertSame($this->expectedPersonaSeed('super-private-value'), $c->personaSeed);
+        self::assertNotSame($this->expectedPersonaSeed('funnypot'), $c->personaSeed);
+
+        putenv('FUNNYPOT_PERSONA_SEED=explicit-override');
+        $c2 = AppConfig::fromEnv(sys_get_temp_dir());
+        self::assertSame($this->expectedPersonaSeed('explicit-override'), $c2->personaSeed);
+
+        putenv('FUNNYPOT_PERSONA_SECRET');
+        putenv('FUNNYPOT_PERSONA_SEED');
+    }
+
+    private function expectedPersonaSeed(string $src): int
+    {
+        return (int) hexdec(substr(hash('sha256', 'funnypot-persona|' . $src), 0, 15));
     }
 }
