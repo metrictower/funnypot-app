@@ -194,6 +194,33 @@ final class HvacSectionTest extends TestCase
         self::assertStringNotContainsString('<script>alert(1)', $html);
     }
 
+    public function test_crac_points_tab_renders_without_undefined_key_warnings(): void
+    {
+        // C1: a CRAC record lacks the office-zone-only keys (co2/damper/valve). The points tab must render
+        // a CRAC-specific point list with filled cells and raise no "Undefined array key" warning.
+        set_error_handler(static function (int $severity, string $message): bool {
+            throw new \RuntimeException('PHP warning/notice: ' . $message);
+        });
+        try {
+            $hvac = Hvac::fromSeed(4);
+            $c = $hvac->crac('crac-01');
+            // The generator itself must not touch missing keys.
+            $points = $hvac->points($c);
+            self::assertNotEmpty($points);
+            foreach ($points as $p) {
+                self::assertNotSame('', $p['value'], 'every CRAC point must have a present value');
+                self::assertStringContainsString(':' . Hvac::BACNET_PORT, $p['host']);
+            }
+            // And the rendered points tab must show them.
+            $html = (new HvacSection())->render($this->route('crac-01', 'points'), VisualPersona::fromSeed(4), '/panel');
+            self::assertStringContainsString('BACnet points', $html);
+            self::assertStringContainsString('Supply Air Temperature', $html);
+            self::assertStringContainsString('Unit Setpoint', $html);
+        } finally {
+            restore_error_handler();
+        }
+    }
+
     public function test_crac_detail_cross_links_the_server_room(): void
     {
         $html = (new HvacSection())->render($this->route('crac-01'), VisualPersona::fromSeed(4), '/panel');

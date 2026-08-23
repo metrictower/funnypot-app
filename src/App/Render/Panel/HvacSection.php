@@ -102,7 +102,7 @@ final class HvacSection extends AbstractPanelSection
 
         $body = $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Climate / HVAC'))
             . $tiles
-            . $this->card('Climate zones', $table, $total . ' zones · last BMS poll 42 s ago')
+            . $this->card('Climate zones', $table, $total . ' zones · last BMS poll ' . $hvac->lastPollAge())
             . $this->cracCard($hvac, $navBase);
 
         return $body . $this->searchScript();
@@ -138,7 +138,7 @@ final class HvacSection extends AbstractPanelSection
     private function zoneDetail(Hvac $hvac, string $zoneId, string $subtab, int $page, string $navBase): string
     {
         $z = $hvac->zone($zoneId);
-        $crumbs = [['OneControl', $navBase], ['Climate / HVAC', $navBase . '/hvac'], [$z['name'], '']];
+        $crumbs = [['Corevance', $navBase], ['Climate / HVAC', $navBase . '/hvac'], [$z['name'], '']];
         $body = $this->breadcrumbHtml($crumbs)
             . $this->tabStrip($navBase . '/hvac/' . $zoneId, $subtab, self::SUBTABS);
 
@@ -291,7 +291,7 @@ final class HvacSection extends AbstractPanelSection
     private function cracDetail(Hvac $hvac, string $cracId, string $subtab, string $navBase): string
     {
         $c = $hvac->crac($cracId);
-        $crumbs = [['OneControl', $navBase], ['Climate / HVAC', $navBase . '/hvac'], [$c['name'], '']];
+        $crumbs = [['Corevance', $navBase], ['Climate / HVAC', $navBase . '/hvac'], [$c['name'], '']];
         $body = $this->breadcrumbHtml($crumbs)
             . $this->tabStrip($navBase . '/hvac/' . $cracId, $subtab, ['overview', 'points', 'maintenance']);
 
@@ -385,13 +385,13 @@ final class HvacSection extends AbstractPanelSection
     {
         if ($isCrac) {
             $c = $hvac->crac($entityId);
-            $crumbs = [['OneControl', $navBase], ['Climate / HVAC', $navBase . '/hvac'],
+            $crumbs = [['Corevance', $navBase], ['Climate / HVAC', $navBase . '/hvac'],
                        [$c['name'], $navBase . '/hvac/' . $entityId], ['Command', '']];
             return $this->breadcrumbHtml($crumbs) . $this->cracSoftDeny($c, $action, $arg, $persona);
         }
 
         $z = $hvac->zone($entityId);
-        $crumbs = [['OneControl', $navBase], ['Climate / HVAC', $navBase . '/hvac'],
+        $crumbs = [['Corevance', $navBase], ['Climate / HVAC', $navBase . '/hvac'],
                    [$z['name'], $navBase . '/hvac/' . $entityId], ['Command', '']];
         return $this->breadcrumbHtml($crumbs) . $this->zoneReceipt($z, $action, $arg, $persona);
     }
@@ -401,7 +401,7 @@ final class HvacSection extends AbstractPanelSection
     {
         $job = 'cmd-' . substr(hash('sha256', $persona->seed() . '|hvaccmd|' . $z['id'] . '|' . $action . '|' . $arg), 0, 8);
         $what = $this->commandLabel($action, $arg);
-        return $this->controlResultCard('Setpoint change queued — ' . $z['name'], [
+        return $this->controlResultCard($this->receiptTitle($action) . ' — ' . $z['name'], [
             ['Command', $what],
             ['Target', $z['name'] . ' (' . $z['id'] . ')'],
             ['Controller', 'bacnet://' . $z['controllerIp'] . ':' . Hvac::BACNET_PORT . ' (' . $z['controller'] . ')'],
@@ -436,6 +436,21 @@ final class HvacSection extends AbstractPanelSection
                 ['Request', $req . ' routed to Facilities desk'],
             ], ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
             . '</div></div>';
+    }
+
+    /** Receipt heading matching the command verb — a mode/fan/preset change is not a "setpoint" change. */
+    private function receiptTitle(string $action): string
+    {
+        switch ($action) {
+            case 'mode':
+                return 'Mode change queued';
+            case 'fan':
+                return 'Fan change queued';
+            case 'preset':
+                return 'Preset change queued';
+            default:
+                return 'Setpoint change queued';
+        }
     }
 
     /** Human label for a control action + its (escaped-by-construction slug) arg. */

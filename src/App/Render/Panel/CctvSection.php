@@ -56,7 +56,7 @@ final class CctvSection extends AbstractPanelSection
 
         $cam = $cctv->camera($camId);
         if ($verbOrTab !== '' && !in_array($verbOrTab, self::TABS, true)) {
-            return $this->controlLeaf($cctv, $cam, $verbOrTab, $arg, $navBase);
+            return $this->controlLeaf($cctv, $cam, $verbOrTab, $arg, $navBase, $persona->seed());
         }
         $tab = in_array($verbOrTab, self::TABS, true) ? $verbOrTab : 'live';
         return $this->cameraDetail($cctv, $cam, $tab, $navBase);
@@ -107,7 +107,7 @@ final class CctvSection extends AbstractPanelSection
 
     private function cameraDetail(Cctv $cctv, array $cam, string $tab, string $navBase): string
     {
-        $crumbs = [['OneControl', $navBase], ['CCTV', $navBase . '/cctv'], [$cam['name'], '']];
+        $crumbs = [['Corevance', $navBase], ['CCTV', $navBase . '/cctv'], [$cam['name'], '']];
         $base = $navBase . '/cctv/' . $cam['id'];
 
         $info = $this->kvTableHtml([
@@ -119,7 +119,7 @@ final class CctvSection extends AbstractPanelSection
             ['Codec', $cam['codec']],
             ['IP address', $cam['ip'] . ':' . $cam['port']],
             ['RTSP URL', $cam['rtsp']],
-            ['Recorder', $cam['nvr'] . ' &middot; ' . $cam['channel']],
+            ['Recorder', $cam['nvr'] . ' · ' . $cam['channel']],
             ['Retention', $cam['retentionDays'] . ' days'],
             ['PTZ', $cam['ptz'] ? 'Supported' : 'Fixed'],
         ], ' class="alte-kv"');
@@ -174,7 +174,7 @@ final class CctvSection extends AbstractPanelSection
             . $this->actionLink($base . '/record/toggle', 'Toggle recording')
             . $this->actionLink($base . '/purge/all', 'Purge footage')
             . '</p>';
-        return $this->card('PTZ &amp; controls', $controls . $presets . $actions, $cam['id']);
+        return $this->card('PTZ & controls', $controls . $presets . $actions, $cam['id']);
     }
 
     private function ptzPad(string $base): string
@@ -262,7 +262,7 @@ final class CctvSection extends AbstractPanelSection
         foreach ($cctv->nvrArrays() as $n) {
             $cards .= $this->card($n['id'], $this->nvrDetail($n, $navBase), $n['model']);
         }
-        $crumbs = [['OneControl', $navBase], ['CCTV', $navBase . '/cctv'], ['NVR arrays', '']];
+        $crumbs = [['Corevance', $navBase], ['CCTV', $navBase . '/cctv'], ['NVR arrays', '']];
         return $this->breadcrumbHtml($crumbs) . $cards;
     }
 
@@ -287,42 +287,34 @@ final class CctvSection extends AbstractPanelSection
 
     private function eventsLog(Cctv $cctv, string $navBase): string
     {
-        $crumbs = [['OneControl', $navBase], ['CCTV', $navBase . '/cctv'], ['Event log', '']];
+        $crumbs = [['Corevance', $navBase], ['CCTV', $navBase . '/cctv'], ['Event log', '']];
         $pane = $this->preScrollHtml($cctv->events(120), 'alte-log');
+        $total = number_format($cctv->eventBufferTotal());
         return $this->breadcrumbHtml($crumbs)
-            . $this->card('Camera events', $pane . '<div class="alte-pager">Showing 1&ndash;120 of 84,204 events</div>', 'motion &middot; tamper &middot; signal');
+            . $this->card('Camera events', $pane . '<div class="alte-pager">Showing 1&ndash;120 of ' . $total . ' events</div>', 'motion · tamper · signal');
     }
 
-    /** @return list<string> */
+    /** This camera's own event tail — always scoped to the camera, never another camera's ids. @return list<string> */
     private function cameraEvents(Cctv $cctv, array $cam): array
     {
-        $out = [];
-        foreach ($cctv->events(60) as $line) {
-            if (strpos($line, ' ' . $cam['id'] . ' ') !== false) {
-                $out[] = $line;
-            }
-        }
-        // Never dead-end an events tab: fall back to the global tail keyed to this camera.
-        if ($out === []) {
-            $out = $cctv->events(12);
-        }
-        return $out;
+        return $cctv->cameraEventsFor($cam['id'], 24);
     }
 
     // --- control leaf ---
 
-    private function controlLeaf(Cctv $cctv, array $cam, string $verb, string $arg, string $navBase): string
+    private function controlLeaf(Cctv $cctv, array $cam, string $verb, string $arg, string $navBase, int $seed): string
     {
-        $crumbs = [['OneControl', $navBase], ['CCTV', $navBase . '/cctv'],
+        $crumbs = [['Corevance', $navBase], ['CCTV', $navBase . '/cctv'],
                    [$cam['name'], $navBase . '/cctv/' . $cam['id']], ['Command', '']];
         $target = $cam['name'] . ' (' . $cam['id'] . ')';
 
         if (in_array($verb, self::GUARDED_VERBS, true)) {
-            return $this->breadcrumbHtml($crumbs) . $this->guardedCard($verb, $arg, $target, $cam);
+            return $this->breadcrumbHtml($crumbs) . $this->guardedCard($verb, $arg, $target, $cam, $seed);
         }
 
-        // Queued (canned) receipt. Per-module pending vocab, and the reflected arg is escaped by the helper.
-        $jobId = 'cmd-' . substr(hash('sha256', $cctv->summary()['total'] . '|' . $cam['id'] . '|' . $verb . '|' . $arg), 0, 8);
+        // Queued (canned) receipt. The command ref mixes the persona seed so it varies per deploy (D.5);
+        // the reflected arg is escaped by the helper.
+        $jobId = 'cmd-' . substr(hash('sha256', $seed . '|cctvcmd|' . $cam['id'] . '|' . $verb . '|' . $arg), 0, 8);
         $action = $this->verbLabel($verb, $arg);
         $card = $this->controlResultCard($action . ' — ' . $target, [
             ['Camera', $cam['id']],
@@ -335,9 +327,9 @@ final class CctvSection extends AbstractPanelSection
     }
 
     /** The sensitive-verb wall: reads like footage-integrity / dual-control policy, never returns "done". */
-    private function guardedCard(string $verb, string $arg, string $target, array $cam): string
+    private function guardedCard(string $verb, string $arg, string $target, array $cam, int $seed): string
     {
-        $req = 'FAC-CMD-' . strtoupper(substr(hash('sha256', $cam['id'] . '|' . $verb . '|' . $arg), 0, 6));
+        $req = 'FAC-CMD-' . strtoupper(substr(hash('sha256', $seed . '|cctvcmd|' . $cam['id'] . '|' . $verb . '|' . $arg), 0, 6));
         $map = [
             'purge' => 'Purge footage DENIED — evidentiary hold. Retention is enforced by the recorder;'
                 . ' a purge needs dual authorization (Security + Facilities) and a case reference.',
@@ -431,7 +423,7 @@ final class CctvSection extends AbstractPanelSection
         if ($cam['floor'] === '') {
             return $cam['area'];
         }
-        return 'Floor ' . $cam['floor'] . ' &middot; ' . $cam['zone'] . ($cam['room'] !== '' ? ' &middot; ' . $cam['room'] : '');
+        return 'Floor ' . $cam['floor'] . ' · ' . $cam['zone'] . ($cam['room'] !== '' ? ' · ' . $cam['room'] : '');
     }
 
     private function verbLabel(string $verb, string $arg): string

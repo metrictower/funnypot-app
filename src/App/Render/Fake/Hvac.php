@@ -236,14 +236,19 @@ final class Hvac
     // --- BACnet points (recon bait: raw object list per zone) ---
 
     /**
-     * The BACnet point list for a zone — object type + instance + name + present value + unit, each
-     * addressed at the zone's BMS controller host:port. Values reconcile with the zone's own readings.
+     * The BACnet point list for a zone OR a CRAC unit — object type + instance + name + present value +
+     * unit, each addressed at the unit's BMS controller host:port. Values reconcile with the record's own
+     * readings. A CRAC record carries different fields to an office zone (no CO2/damper/valve), so it gets
+     * its own point list rather than reading keys it does not have.
      *
-     * @param array<string,mixed> $z a zone() record
+     * @param array<string,mixed> $z a zone() or crac() record
      * @return list<array{object:string,name:string,value:string,unit:string,host:string}>
      */
     public function points(array $z): array
     {
+        if (isset($z['kind']) && $z['kind'] === 'crac') {
+            return $this->cracPoints($z);
+        }
         $host = ((string) $z['controllerIp']) . ':' . self::BACNET_PORT;
         $id = (string) $z['id'];
         $ai = $this->intIn(1, 60, $id . '|ai');
@@ -264,6 +269,39 @@ final class Hvac
             ['object' => 'BI:' . $bi, 'name' => 'Filter Status', 'value' => $z['filterStatus'] === 'OK' ? 'Normal' : 'Alarm', 'unit' => '', 'host' => $host],
             ['object' => 'MV:' . $mv, 'name' => 'Occupancy Mode', 'value' => $occupied ? 'Occupied' : 'Standby', 'unit' => '', 'host' => $host],
         ];
+    }
+
+    /**
+     * The BACnet point list for a CRAC / precision-cooling unit. Points reconcile with the CRAC record's
+     * own supply/return/setpoint/humidity/compressor/filter readings — no office-zone-only fields.
+     *
+     * @param array<string,mixed> $c a crac() record
+     * @return list<array{object:string,name:string,value:string,unit:string,host:string}>
+     */
+    private function cracPoints(array $c): array
+    {
+        $host = ((string) $c['controllerIp']) . ':' . self::BACNET_PORT;
+        $id = (string) $c['id'];
+        $ai = $this->intIn(1, 60, $id . '|ai');
+        $av = $this->intIn(1, 40, $id . '|av');
+        $mv = $this->intIn(1, 20, $id . '|mv');
+        $bi = $this->intIn(1, 30, $id . '|bi');
+        $bv = $this->intIn(1, 30, $id . '|bv');
+        return [
+            ['object' => 'AI:' . $ai, 'name' => 'Supply Air Temperature', 'value' => number_format((float) $c['supplyTemp'], 1), 'unit' => '°C', 'host' => $host],
+            ['object' => 'AI:' . ($ai + 1), 'name' => 'Return Air Temperature', 'value' => number_format((float) $c['returnTemp'], 1), 'unit' => '°C', 'host' => $host],
+            ['object' => 'AV:' . $av, 'name' => 'Unit Setpoint', 'value' => number_format((float) $c['setpoint'], 1), 'unit' => '°C', 'host' => $host],
+            ['object' => 'AI:' . ($ai + 2), 'name' => 'Return Humidity', 'value' => (string) $c['humidity'], 'unit' => '%', 'host' => $host],
+            ['object' => 'MV:' . $mv, 'name' => 'Compressor Stage', 'value' => (string) $c['compressor'], 'unit' => '', 'host' => $host],
+            ['object' => 'BI:' . $bi, 'name' => 'Filter Status', 'value' => $c['filterStatus'] === 'OK' ? 'Normal' : 'Alarm', 'unit' => '', 'host' => $host],
+            ['object' => 'BV:' . $bv, 'name' => 'Unit Enable', 'value' => 'Active', 'unit' => '', 'host' => $host],
+        ];
+    }
+
+    /** Seeded "last BMS poll" freshness for the landing — varies per deploy, never time() (spec E11). */
+    public function lastPollAge(): string
+    {
+        return $this->intIn(15, 55, 'bmspoll') . ' s ago';
     }
 
     // --- 24h temperature trend (sparkline) ---

@@ -11,7 +11,7 @@ namespace Funnypot\App\Render\Fake;
  *
  * Design rules (deep-admin dashboard spec §C.1 + adversarial critique):
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
- *    time()/date()/rand()/shuffle(); ages derive from one frozen DEPLOY_EPOCH. Same seed -> identical
+ *    time()/date()/rand()/shuffle(); "N ago" ages are pure hash(seed+slot). Same seed -> identical
  *    topology across cache regenerations (a shifting building is itself a tell).
  *  - COHERENT: floors -> zones -> rooms -> devices -> controllers all reconcile. A device names a real
  *    floor code, a real room on that floor, the zone that room belongs to, and a real controller id.
@@ -24,9 +24,6 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Building
 {
-    /** Frozen "now" for ages/last-seen so a static reload is not a tell (spec E11). */
-    public const DEPLOY_EPOCH = 1756000000;
-
     /** @var int */
     private $seed;
 
@@ -72,7 +69,7 @@ final class Building
             . '.' . $this->intIn(0, 40, $salt . '|fc');
     }
 
-    /** Seeded "N ago" string off DEPLOY_EPOCH — deterministic, never time()/date(). */
+    /** Seeded "N ago" string — pure hash(seed+slot), deterministic, never time()/date(). */
     private function ageAgo(string $salt): string
     {
         $sec = $this->intIn(3, 172800, $salt);           // 3 s .. 2 days
@@ -188,6 +185,9 @@ final class Building
     /** Zone codes present on a floor — basements/roof/mezzanine carry a reduced set. */
     private function zoneCodesFor(string $floorCode): array
     {
+        if ($floorCode === '') {
+            return ['N', 'E', 'S', 'W', 'Core'];
+        }
         if ($floorCode === 'Roof') {
             return ['Core'];
         }

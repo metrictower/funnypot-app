@@ -114,7 +114,7 @@ final class AdminLteSkin extends AbstractSkin
         $module = $route['module'];
 
         $company = $this->esc($persona->company());
-        $appName = $this->esc($slots->appName() !== '' ? $slots->appName() : 'OneControl');
+        $appName = $this->esc($slots->appName() !== '' ? $slots->appName() : 'Corevance');
         $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $this->titleFor($module);
 
         $html = '<div class="alte-wrapper">';
@@ -249,6 +249,19 @@ final class AdminLteSkin extends AbstractSkin
             . '.alte-dl:hover{text-decoration:underline}'
             . '.alte-pager{padding:10px 4px;color:#6c757d;font-size:.84em}'
             . '.alte-log{background:#1b1e21;color:#c9ccd1;padding:12px;border-radius:4px;overflow-x:auto;'
-            . 'font-size:.78em;line-height:1.5;max-height:520px;overflow-y:auto;margin:0}';
+            . 'font-size:.78em;line-height:1.5;max-height:520px;overflow-y:auto;margin:0}'
+            // Control widgets (buttons, danger buttons, control rows, PIN forms) used by the building/
+            // life-safety sections; inline styles on individual controls still override these.
+            . '.alte-btn{display:inline-block;padding:7px 14px;border:1px solid #2f6b8a;border-radius:4px;'
+            . 'background:#3b7ea1;color:#fff;text-decoration:none;font-size:.86em;font-weight:600;'
+            . 'cursor:pointer;line-height:1.3}'
+            . '.alte-btn:hover{background:#336d8b}'
+            . '.alte-btn-danger{background:#b23b3b;border-color:#8f2f2f}'
+            . '.alte-btn-danger:hover{background:#9c3030}'
+            . '.alte-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}'
+            . '.alte-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:8px 0}'
+            . '.alte-field{display:flex;flex-direction:column;gap:4px;color:#6c757d;font-size:.85em}'
+            . '.alte-input{padding:6px 10px;border:1px solid #c9ccd1;border-radius:4px;font-size:.9em;'
+            . 'color:#2c3136;background:#fff}';
     }
 }

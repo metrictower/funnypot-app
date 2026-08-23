@@ -18,30 +18,38 @@ namespace Funnypot\App\Render\Fake;
  *    directory "manager" column, the profile "reports to" and org-chart edges can never disagree.
  *  - SAFE: all PII is fabricated and invalid-format (masked bank/tax id, employee-VLAN 10.0.20.x ip).
  *    No real person, no real trademark.
- *  - DETERMINISTIC: hash(seed+slot) only; no time()/date()/rand()/shuffle(); ages off DEPLOY_EPOCH.
+ *  - ONE DOMAIN: emails render at the host's persona domain (passed in by the caller), never a second
+ *    invented domain — one host = one domain. A no-domain fallback is only for standalone/test use.
+ *  - DETERMINISTIC: hash(seed+slot) only; no time()/date()/rand()/shuffle(); tenure is pure hash(seed).
  *  - PHP 7.3-clean so a fact can promote into a core template unchanged when one needs it.
  *
  * Returns plain data only — the skins render, mask and escape it.
  */
 final class Org
 {
-    /** Frozen "now" for tenure/ages so a static reload is not a tell (spec E11). Matches Building. */
-    public const DEPLOY_EPOCH = 1756000000;
-
     /** Org-chart branching factor: each manager carries up to this many direct reports. */
     private const BRANCH = 6;
 
     /** @var int */
     private $seed;
 
-    private function __construct(int $seed)
+    /** @var string the host persona domain emails render at ('' -> the standalone fallback). */
+    private $personaDomain;
+
+    private function __construct(int $seed, string $personaDomain)
     {
         $this->seed = $seed;
+        $this->personaDomain = $personaDomain;
     }
 
-    public static function fromSeed(int $seed): self
+    /**
+     * Build a roster for a seed. Callers that render emails MUST pass the host's persona domain so the
+     * roster never contradicts the one domain shown elsewhere on the host. The default '' is only for
+     * standalone/test use, where a seeded fallback domain keeps addresses well-formed.
+     */
+    public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed);
+        return new self($seed, $personaDomain);
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---
@@ -71,9 +79,16 @@ final class Org
         return ($this->h('headcount') % 180) + 90;
     }
 
-    /** Invented email/AD domain — never a real registrable brand (spec E7). */
+    /**
+     * The email/AD domain the roster renders at. When the host persona domain was supplied it is used
+     * verbatim (one host = one domain); otherwise a seeded, invented, never-real-brand domain keeps
+     * standalone/test emails well-formed. It never invents a second domain over the persona's.
+     */
     public function domain(): string
     {
+        if ($this->personaDomain !== '') {
+            return $this->personaDomain;
+        }
         $stem = $this->pick(
             ['nordav', 'brightpk', 'apexfit', 'maplegrv', 'lumensta', 'harbourco',
              'meridianfm', 'northgatehq', 'silverbrook', 'oakmontgrp'],

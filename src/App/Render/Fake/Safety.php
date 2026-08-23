@@ -137,19 +137,28 @@ final class Safety
     {
         $rows = [];
 
-        // Anchor on the real server rooms of the building (up to 3), clean-agent protected.
+        // All rooms across the building, flat — the pool every protected space anchors to, so a suppression
+        // zone always names a real floor + room (same-rooms-everywhere coherence, never a phantom B1 vault).
         $bld = Building::fromSeed($this->seed);
-        $serverRooms = array();
+        $allRooms = array();
         foreach ($bld->floors() as $f) {
             foreach ($bld->roomsFor($f['code']) as $r) {
-                if ($r['type'] === 'Server-Comms') {
-                    $serverRooms[] = $r;
-                }
+                $allRooms[] = $r;
+            }
+        }
+        $used = array();
+
+        // Anchor on the real server rooms of the building (up to 3), clean-agent protected.
+        $serverRooms = array();
+        foreach ($allRooms as $r) {
+            if ($r['type'] === 'Server-Comms') {
+                $serverRooms[] = $r;
             }
         }
         $take = count($serverRooms) < 3 ? count($serverRooms) : 3;
         for ($i = 0; $i < $take; $i++) {
             $r = $serverRooms[$i];
+            $used[$r['id']] = true;
             $rows[] = $this->zoneRow(
                 'srv-' . strtolower($r['floor']) . '-' . sprintf('%02d', $i + 1),
                 $r['name'] . ' (Server Room)',
@@ -162,16 +171,27 @@ final class Safety
             );
         }
 
-        // Fixed special spaces, always present so the crown-jewel list reads complete.
+        // Fixed special spaces, always present so the crown-jewel list reads complete — but each anchored to
+        // a REAL room of a fitting type (with fallbacks), never a hardcoded floor/room the topology lacks.
         $fixed = array(
-            array('records-vault', 'Records Vault', 'Basement · Records Vault', 'B1', 'room-b1-vault', 'Novec 1230', 'gaseous'),
-            array('main-kitchen', 'Main Kitchen', 'Ground · Staff Kitchen', 'G', 'room-g-kitchen', 'Wet chemical (K-class)', 'wet-chem'),
-            array('parking-preaction', 'Parking / Loading', 'Basement · Parking', 'B1', 'room-b1-parking', 'Pre-action (water)', 'preaction'),
-            array('comms-riser', 'Comms Riser Stack', 'Riser · Vertical shaft', 'Core', 'room-core-riser', 'CO2 total flood', 'gaseous'),
+            array('records-vault', 'Records Vault', array('Store', 'Server-Comms'), 'Novec 1230', 'gaseous'),
+            array('main-kitchen', 'Main Kitchen', array('Kitchen'), 'Wet chemical (K-class)', 'wet-chem'),
+            array('parking-preaction', 'Parking / Loading', array('Plant', 'Store'), 'Pre-action (water)', 'preaction'),
+            array('comms-riser', 'Comms Riser Stack', array('Server-Comms', 'Plant', 'Store'), 'CO2 total flood', 'gaseous'),
         );
         $n = 1;
         foreach ($fixed as $fx) {
-            $rows[] = $this->zoneRow($fx[0], $fx[1], $fx[2], $fx[3], $fx[4], $fx[5], $fx[6], $take + $n);
+            $room = $this->pickSpaceRoom($allRooms, $used, $fx[2]);
+            $rows[] = $this->zoneRow(
+                $fx[0],
+                $fx[1],
+                'Floor ' . $room['floor'] . ' · ' . $room['name'],
+                $room['floor'],
+                $room['id'],
+                $fx[3],
+                $fx[4],
+                $take + $n
+            );
             $n++;
         }
 
@@ -182,6 +202,38 @@ final class Safety
         }
 
         return $rows;
+    }
+
+    /**
+     * Pick a real building room for a fixed protected space: the first unused room of a preferred type,
+     * else the first unused room of any type, else any room; marks the chosen room used so two special
+     * spaces never collide. Falls back to a slug-safe synthetic only if the building has no rooms at all.
+     *
+     * @param list<array<string,mixed>> $allRooms
+     * @param array<string,bool> $used
+     * @param list<string> $preferredTypes
+     * @return array<string,mixed>
+     */
+    private function pickSpaceRoom(array $allRooms, array &$used, array $preferredTypes): array
+    {
+        foreach ($preferredTypes as $type) {
+            foreach ($allRooms as $r) {
+                if ($r['type'] === $type && !isset($used[$r['id']])) {
+                    $used[$r['id']] = true;
+                    return $r;
+                }
+            }
+        }
+        foreach ($allRooms as $r) {
+            if (!isset($used[$r['id']])) {
+                $used[$r['id']] = true;
+                return $r;
+            }
+        }
+        if ($allRooms !== array()) {
+            return $allRooms[0];
+        }
+        return array('id' => 'room-g-01', 'name' => 'Core', 'floor' => 'G', 'zone' => 'Core', 'type' => 'Store');
     }
 
     /** @return array<string,mixed> one suppression zone row */

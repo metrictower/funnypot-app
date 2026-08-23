@@ -47,7 +47,6 @@ final class DatabasesSection extends AbstractPanelSection
     /** Schema catalogue — no secrets, just the table list a DB admin tool opens on. */
     private function landing(int $seed, string $navBase): string
     {
-        $dbHref = $this->esc($navBase . '/databases');
         $rowsHtml = '';
         foreach (self::TABLES as $name => $engine) {
             $count = $this->rowCount($seed, $name);
@@ -70,7 +69,7 @@ final class DatabasesSection extends AbstractPanelSection
         $total = $sp->lootRowCount('users');
         $table = $this->tableHtml(['id', 'username', 'email', 'role', 'password_hash'], $rows, ' class="alte-table"');
         $table .= '<div class="alte-pager">Showing 1&ndash;' . count($rows) . ' of ' . number_format($total) . ' rows</div>';
-        $crumbs = [['OneControl', $navBase], ['Databases', $navBase . '/databases'], ['appdb.users', '']];
+        $crumbs = [['Corevance', $navBase], ['Databases', $navBase . '/databases'], ['appdb.users', '']];
         return $this->breadcrumbHtml($crumbs) . $this->card('users', $table, 'appdb · InnoDB');
     }
 
@@ -88,7 +87,7 @@ final class DatabasesSection extends AbstractPanelSection
         }
         $html = $this->tableHtml(['id', 'ref', 'created'], $rows, ' class="alte-table"');
         $html .= '<div class="alte-pager">Showing 1&ndash;' . $show . ' of ' . number_format($total) . ' rows</div>';
-        $crumbs = [['OneControl', $navBase], ['Databases', $navBase . '/databases'], ['appdb.' . $table, '']];
+        $crumbs = [['Corevance', $navBase], ['Databases', $navBase . '/databases'], ['appdb.' . $table, '']];
         return $this->breadcrumbHtml($crumbs) . $this->card($table, $html, 'appdb · InnoDB');
     }
 

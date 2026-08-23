@@ -387,6 +387,36 @@ final class Cctv
     }
 
     /**
+     * This camera's own recent event tail (newest first) — every line names THIS camera, so a per-camera
+     * events tab never shows another camera's id. Deterministic per (camId,index).
+     *
+     * @return list<string>
+     */
+    public function cameraEventsFor(string $camId, int $count): array
+    {
+        if ($count < 0) {
+            $count = 0;
+        }
+        $cam = $this->camera($camId);
+        $kinds = ['MOTION', 'MOTION', 'LINE-CROSS', 'TAMPER', 'SIGNAL-LOSS', 'PTZ-PRESET', 'RECORD-START'];
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $salt = 'camevt|' . $camId . '|' . $i;
+            $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];
+            $hh = 23 - ($i % 24);
+            $out[] = self::FROZEN_DATE . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
+                . '  ' . $kind . '  ' . $cam['id'] . '  ' . $cam['name'];
+        }
+        return $out;
+    }
+
+    /** Seeded depth of the event buffer for the landing pager — varies per deploy, never a fixed tell. */
+    public function eventBufferTotal(): int
+    {
+        return 40000 + ($this->h('eventtotal') % 80000);
+    }
+
+    /**
      * Reconciled headline counts for the landing tiles.
      *
      * @return array{total:int,online:int,offline:int,recording:int,nvrCount:int,capacityTb:int,usedTb:float}

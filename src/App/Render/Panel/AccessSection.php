@@ -121,7 +121,7 @@ final class AccessSection extends AbstractPanelSection
     {
         $doorBase = $navBase . '/access/' . $door['id'];
         $crumbs = [
-            ['OneControl', $navBase],
+            ['Corevance', $navBase],
             ['Access & Doors', $navBase . '/access'],
             [$door['name'], ''],
         ];
@@ -270,7 +270,7 @@ final class AccessSection extends AbstractPanelSection
             )
             . '</div>';
 
-        $crumbs = [['OneControl', $navBase], ['Access & Doors', $navBase . '/access'], ['Cardholders', '']];
+        $crumbs = [['Corevance', $navBase], ['Access & Doors', $navBase . '/access'], ['Cardholders', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Cardholders & badges', $search . $table . $pager . $export . $this->filterScript('acc-ch-q', 'acc-ch-tbl'),
                 number_format($total) . ' active credentials');
@@ -282,7 +282,7 @@ final class AccessSection extends AbstractPanelSection
     {
         $lines = $access->accessEventLog(220);
         $scroll = $this->preScrollHtml($lines, 'alte-log');
-        $crumbs = [['OneControl', $navBase], ['Access & Doors', $navBase . '/access'], ['Access events', '']];
+        $crumbs = [['Corevance', $navBase], ['Access & Doors', $navBase . '/access'], ['Access events', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Access-event log', $scroll, 'ACS controllers · live tail (cached ~30 s)');
     }
@@ -297,13 +297,15 @@ final class AccessSection extends AbstractPanelSection
     {
         $doorBase = $navBase . '/access/' . $door['id'];
         $crumbs = [
-            ['OneControl', $navBase],
+            ['Corevance', $navBase],
             ['Access & Doors', $navBase . '/access'],
             [$door['name'], $doorBase],
             [ucfirst($verb), ''],
         ];
 
-        $guarded = $door['highSecurity'] && in_array($verb, ['unlock', 'hold', 'lockdown'], true);
+        // Every actuating verb on a crown-jewel door is guarded — including a momentary `pulse` (which is
+        // still a real unlock) and a `mode` change — so none slips through to a plain success receipt.
+        $guarded = $door['highSecurity'] && in_array($verb, ['unlock', 'hold', 'lockdown', 'pulse', 'mode'], true);
         if ($guarded) {
             $ref = $this->cmdRef($seed, $door['id'] . '|' . $verb);
             $body = $this->softDenyCard(
@@ -354,7 +356,7 @@ final class AccessSection extends AbstractPanelSection
             ['Request', $ref . ' routed to Security desk'],
             ['Second approver', 'awaiting — request pending'],
         ], $extra);
-        $crumbs = [['OneControl', $navBase], ['Access & Doors', $navBase . '/access'], [$title, '']];
+        $crumbs = [['Corevance', $navBase], ['Access & Doors', $navBase . '/access'], [$title, '']];
         return $this->breadcrumbHtml($crumbs) . $body;
     }
 

@@ -450,11 +450,14 @@ final class Access
             $person = $this->rosterAt($this->h($salt . '|who') % $n);
 
             $roll = $this->h($salt . '|res') % 100;
+            $time = $this->clock($epoch);
             if ($plantOffHours && $i === 3) {
-                // The buried off-hours server-room grant — the anomaly the alerts module narrates.
+                // The buried off-hours server-room grant — the anomaly the alerts module narrates. Its
+                // timestamp is forced into off-hours so the "off-hours access" narrative actually holds.
                 $result = 'GRANTED';
                 $srv = $this->firstHighSecDoor($doors);
                 $door = $srv !== null ? $srv : $door;
+                $time = $this->clock($this->offHoursSecond($salt));
             } elseif ($roll < 8) {
                 $result = 'FORCED';
             } elseif ($roll < 22) {
@@ -463,7 +466,7 @@ final class Access
                 $result = 'GRANTED';
             }
 
-            $out[] = $this->clock($epoch)
+            $out[] = $time
                 . '  ' . str_pad($result, 8)
                 . ' ' . str_pad($this->maskBadge($person['badgeId']), 8)
                 . ' ' . str_pad($this->truncate($person['name'], 20), 20)
@@ -471,6 +474,14 @@ final class Access
                 . ' src ' . $door['controllerIp'];
         }
         return $out;
+    }
+
+    /** A deterministic second-of-day inside the off-hours window (22:00–05:00) for the planted grant. */
+    private function offHoursSecond(string $salt): int
+    {
+        // 7-hour window: 00:00–05:00 (5 h) then 22:00–24:00 (2 h).
+        $r = $this->h($salt . '|offhrs') % (7 * 3600);
+        return $r < 5 * 3600 ? $r : (22 * 3600 + ($r - 5 * 3600));
     }
 
     private function firstHighSecDoor(array $doors): ?array

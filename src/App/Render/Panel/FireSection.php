@@ -432,10 +432,10 @@ final class FireSection extends AbstractPanelSection
 
     // --- shared building blocks ---
 
-    /** Fire-rooted breadcrumbs: OneControl -> Fire & Life Safety -> ...trail (each [label, href]). */
+    /** Fire-rooted breadcrumbs: Corevance -> Fire & Life Safety -> ...trail (each [label, href]). */
     private function fireCrumbs(string $navBase, array $trail): string
     {
-        $crumbs = [['OneControl', $navBase], ['Fire & Life Safety', $navBase . '/fire']];
+        $crumbs = [['Corevance', $navBase], ['Fire & Life Safety', $navBase . '/fire']];
         foreach ($trail as $c) {
             $crumbs[] = $c;
         }

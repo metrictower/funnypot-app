@@ -398,6 +398,11 @@ trait RenderHtmlHelpers
      */
     private function safeCrumbHref(string $href): string
     {
+        // Also reject any `..` run so a rooted slug path can never carry a traversal segment (matches
+        // navBase's guarantee), on top of the character allowlist.
+        if (strpos($href, '..') !== false) {
+            return '#';
+        }
         return preg_match('#^/[A-Za-z0-9/_.-]*$#', $href) === 1 ? $href : '#';
     }
 

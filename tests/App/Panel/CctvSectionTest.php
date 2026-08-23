@@ -187,6 +187,30 @@ final class CctvSectionTest extends TestCase
         self::assertStringNotContainsStringIgnoringCase('purged', $html);
     }
 
+    public function test_command_ref_and_job_id_vary_per_deploy(): void
+    {
+        // I3: both the guarded command ref and the queued job id mix the persona seed, so two deploys never
+        // share the same FAC-CMD/cmd- handle for the same camera+verb (a cross-deploy fingerprint otherwise).
+        // A fixed (synthetic) camera id isolates the seed as the only varying input.
+        $guarded = $this->route('cam-x-01', 'purge', 'all');
+        $refA = $this->grab('/FAC-CMD-[0-9A-F]{6}/', $this->render($guarded, 1));
+        $refB = $this->grab('/FAC-CMD-[0-9A-F]{6}/', $this->render($guarded, 2));
+        self::assertNotSame('', $refA, 'a guarded command ref must render');
+        self::assertNotSame($refA, $refB, 'guarded command ref must vary per deploy');
+
+        $queued = $this->route('cam-x-01', 'snapshot', 'now');
+        $jobA = $this->grab('/cmd-[0-9a-f]{8}/', $this->render($queued, 1));
+        $jobB = $this->grab('/cmd-[0-9a-f]{8}/', $this->render($queued, 2));
+        self::assertNotSame('', $jobA, 'a queued job id must render');
+        self::assertNotSame($jobA, $jobB, 'queued job id must vary per deploy');
+    }
+
+    /** First match of $pattern in $html, or '' if none. */
+    private function grab(string $pattern, string $html): string
+    {
+        return preg_match($pattern, $html, $m) === 1 ? $m[0] : '';
+    }
+
     public function test_reflected_arg_is_escaped(): void
     {
         // A control arg is the one attacker-influenced value that reaches HTML; it must be escaped.

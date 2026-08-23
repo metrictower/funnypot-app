@@ -18,7 +18,8 @@ final class DashboardSection extends AbstractPanelSection
     public function render(array $route, VisualPersona $persona, string $navBase): string
     {
         $seed = $persona->seed();
-        $org = Org::fromSeed($seed);
+        // One host = one domain: the roster reads the persona domain, never a second invented one.
+        $org = Org::fromSeed($seed, $persona->domain());
         $bld = Building::fromSeed($seed);
         $site = $bld->site();
 
@@ -55,24 +56,24 @@ final class DashboardSection extends AbstractPanelSection
         return $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Dashboard'))
             . $tiles
             . $this->card('Site', $siteKv, $site['name'])
-            . $this->card('Recent sign-ins', $this->recentSignins($org), 'last 24 h · SSO');
+            . $this->card('Recent sign-ins', $this->recentSignins($org, $seed), 'last 24 h · SSO');
     }
 
     /** Benign activity summary: who signed in and when — name/title/dept/last sign-in, NO secrets. */
-    private function recentSignins(Org $org): string
+    private function recentSignins(Org $org, int $seed): string
     {
         $seed_people = $org->people(8);
         $rows = [];
         foreach ($seed_people as $p) {
-            $rows[] = [$p['name'], $p['title'], $p['dept'], $this->signinAgo($p['id'])];
+            $rows[] = [$p['name'], $p['title'], $p['dept'], $this->signinAgo($seed, $p['id'])];
         }
         return $this->tableHtml(['Name', 'Title', 'Department', 'Last sign-in'], $rows, ' class="alte-table"');
     }
 
-    /** Seeded "N ago" off the person id — deterministic, never time()/date(). */
-    private function signinAgo(string $empId): string
+    /** Seeded "N ago" off the persona seed + person id — deterministic per deploy, never time()/date(). */
+    private function signinAgo(int $seed, string $empId): string
     {
-        $sec = 60 + ($this->h(0, 'signin|' . $empId) % 82800); // 1 min .. ~23 h
+        $sec = 60 + ($this->h($seed, 'signin|' . $empId) % 82800); // 1 min .. ~23 h
         if ($sec < 5400) {
             return (int) round($sec / 60) . ' min ago';
         }

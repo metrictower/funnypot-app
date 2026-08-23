@@ -22,6 +22,6 @@ abstract class AbstractPanelSection implements PanelSection
      */
     protected function baseCrumbs(string $navBase, string $moduleTitle): array
     {
-        return [['OneControl', $navBase], [$moduleTitle, '']];
+        return [['Corevance', $navBase], [$moduleTitle, '']];
     }
 }

@@ -92,6 +92,26 @@ final class AccessSectionTest extends TestCase
         self::assertStringNotContainsString('Queued', $html);
     }
 
+    public function test_server_room_pulse_is_denied_state_unchanged(): void
+    {
+        // I5: a momentary `pulse` (still a real unlock) on a crown-jewel door must be guarded like unlock —
+        // a dual-auth soft-deny, never a plain success receipt, and the door state must not change.
+        $html = $this->render('/admin/access/door-srv-a/pulse');
+        self::assertStringContainsString('Denied', $html);
+        self::assertStringContainsStringIgnoringCase('dual authorization', $html);
+        self::assertStringNotContainsString('Queued', $html);        // never a success receipt
+        self::assertStringNotContainsString('next poll', $html);
+
+        // State unchanged: the door detail still reads Secured after the pulse attempt (nothing persisted).
+        $detail = $this->render('/admin/access/door-srv-a');
+        self::assertStringContainsString('Secured', $detail);
+
+        // A `mode` change on a high-security door is guarded too.
+        $mode = $this->render('/admin/access/door-srv-a/mode/card-only');
+        self::assertStringContainsString('Denied', $mode);
+        self::assertStringNotContainsString('Queued', $mode);
+    }
+
     public function test_building_wide_levers_soft_deny(): void
     {
         foreach (['lockdown-all', 'unlock-all'] as $lever) {
