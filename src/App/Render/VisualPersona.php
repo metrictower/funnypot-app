@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render;
 
+use Funnypot\Support\Fake\FakePeople;
 use Funnypot\Support\PersonaIdentity;
 
 /**

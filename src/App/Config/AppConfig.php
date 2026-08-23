@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Config;
 
+use Funnypot\Support\PersonaIdentity;
+
 /**
  * One source of truth for the app's runtime configuration. Every FUNNYPOT_* environment variable
  * the app reads is resolved here once, instead of scattered getenv() calls re-deriving the same
@@ -147,13 +149,12 @@ final class AppConfig
             // Seed source must be private: the cert CN (FUNNYPOT_LE_DOMAIN) is public, so deriving
             // from it lets a scanner read the domain and precompute the whole persona identity
             // offline. FUNNYPOT_PERSONA_SECRET is the private per-deployment value; unset falls back
-            // to a fixed default (set it for a unique per-host identity). hash('sha256', ...) over
-            // crc32 for a wide, non-trivially-invertible seed rather than a 32-bit checksum.
-            personaSeed: (int) hexdec(substr(
-                hash('sha256', 'funnypot-persona|' . $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'))),
-                0,
-                15
-            )),
+            // to a fixed default (set it for a unique per-host identity). seedFromMaterial is the
+            // canonical derivation shared with the core template tier, so both resolve the SAME
+            // PersonaIdentity for one deployment.
+            personaSeed: PersonaIdentity::seedFromMaterial(
+                $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'))
+            ),
         );
     }
 }

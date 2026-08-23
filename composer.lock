@@ -12,16 +12,16 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/metrictower/funnypot-core.git",
-                "reference": "69ba84671682c4055d03b7d2e9884503112fc1e7"
+                "reference": "728b92ff6db1809069c38fd1ebbea2896cfa8f20"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/69ba84671682c4055d03b7d2e9884503112fc1e7",
-                "reference": "69ba84671682c4055d03b7d2e9884503112fc1e7",
+                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/728b92ff6db1809069c38fd1ebbea2896cfa8f20",
+                "reference": "728b92ff6db1809069c38fd1ebbea2896cfa8f20",
                 "shasum": ""
             },
             "require": {
-                "php": ">=8.0"
+                "php": ">=7.3"
             },
             "require-dev": {
                 "nyholm/psr7": "^1.8",
@@ -29,7 +29,7 @@
                 "psr/http-factory": "^1.1",
                 "psr/http-message": "^2.0",
                 "psr/http-server-middleware": "^1.0",
-                "symfony/yaml": "^5.4 || ^6.0"
+                "symfony/yaml": "^5.4"
             },
             "suggest": {
                 "ext-openssl": "Required only for the pure-PHP SSH honeypot server (Protocol\\Ssh): the aes256-ctr transport cipher.",
@@ -67,7 +67,7 @@
                 "source": "https://github.com/metrictower/funnypot-core/tree/main",
                 "issues": "https://github.com/metrictower/funnypot-core/issues"
             },
-            "time": "2026-08-19T12:25:32+00:00"
+            "time": "2026-08-23T11:17:44+00:00"
         }
     ],
     "packages-dev": [

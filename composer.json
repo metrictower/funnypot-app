@@ -5,9 +5,12 @@
     "license": "MIT",
     "minimum-stability": "dev",
     "prefer-stable": true,
-    "repositories": [
-        { "type": "vcs", "url": "https://github.com/metrictower/funnypot-core" }
-    ],
+    "repositories": {
+        "0": {
+            "type": "vcs",
+            "url": "https://github.com/metrictower/funnypot-core"
+        }
+    },
     "require": {
         "php": ">=8.0",
         "ext-sodium": "*",
