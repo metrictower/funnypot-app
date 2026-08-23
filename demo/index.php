@@ -164,6 +164,9 @@ if ($config->aiApiEnabled) {
         $abuse,
         $config->aiStrictAuth,
         $config->aiStrictModel,
+        $config->aiTemp,
+        $config->aiMinP,
+        $config->aiTopP,
         $config->llmMaxConcurrent,
     ));
 }

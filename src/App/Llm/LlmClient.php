@@ -25,13 +25,23 @@ final class LlmClient
     ) {
     }
 
-    /** Raw generation. Returns the model body, or null on any failure / open breaker. */
-    public function generate(string $prompt, string $grammar): ?string
+    /**
+     * Raw generation. Returns the model body, or null on any failure / open breaker.
+     *
+     * $sampling is null for the default (page-generation) path, which keeps the exact low-temp,
+     * fixed-seed sampling that the deterministic HTML fakes depend on. The chat path passes an
+     * override map so it can crank temperature / min_p and randomise the seed for real nonsense,
+     * without disturbing page-gen. Only these keys are honoured: temperature, min_p, top_p, top_k,
+     * repeat_penalty, seed. n_predict stays as configured.
+     *
+     * @param array<string,mixed>|null $sampling
+     */
+    public function generate(string $prompt, string $grammar, ?array $sampling = null): ?string
     {
         if ($this->breaker !== null && !$this->breaker->allow()) {
             return null;
         }
-        $payload = json_encode([
+        $params = [
             'prompt' => $prompt,
             'grammar' => $grammar,
             'n_predict' => $this->nPredict,
@@ -41,7 +51,15 @@ final class LlmClient
             'cache_prompt' => true,
             'stop' => ['<|im_end|>', '</html>'],
             'seed' => 42,
-        ], JSON_UNESCAPED_SLASHES);
+        ];
+        if ($sampling !== null) {
+            foreach (['temperature', 'min_p', 'top_p', 'top_k', 'repeat_penalty', 'seed'] as $key) {
+                if (array_key_exists($key, $sampling)) {
+                    $params[$key] = $sampling[$key];
+                }
+            }
+        }
+        $payload = json_encode($params, JSON_UNESCAPED_SLASHES);
         if ($payload === false) {
             return null;
         }

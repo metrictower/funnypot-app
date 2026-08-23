@@ -53,6 +53,12 @@ class AiChatHandler
         // request turns a scanner away and defeats engagement, so strictness is opt-in only.
         private bool $strictAuth = false,
         private bool $strictModel = false,
+        // Chat-only sampling. High temperature + min_p 0 + a per-request random seed is what turns the
+        // low-temp sidecar's (otherwise correct) output into believable nonsense. Page generation is a
+        // different LLM path and is unaffected by these.
+        private float $temp = 1.5,
+        private float $minP = 0.0,
+        private float $topP = 1.0,
         private int $maxConcurrent = 4,
         private int $delayMs = 20,
         private $emitBuffered = null,
@@ -145,7 +151,14 @@ class AiChatHandler
         }
 
         try {
-            $raw = $this->llm->generate($this->prompt->build($req), '');
+            // Random seed per request so the same question does not always get the identical reply.
+            $raw = $this->llm->generate($this->prompt->build($req), '', [
+                'temperature' => $this->temp,
+                'min_p' => $this->minP,
+                'top_p' => $this->topP,
+                'top_k' => 0,
+                'seed' => random_int(1, PHP_INT_MAX),
+            ]);
             if (is_string($raw) && trim($raw) !== '') {
                 $clean = $this->sanitizeAnswer($raw);
                 if ($clean !== null) {

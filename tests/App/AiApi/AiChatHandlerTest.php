@@ -74,8 +74,14 @@ final class AiChatHandlerTest extends TestCase
         return $p;
     }
 
-    private function make(callable $transport, bool $strictAuth = false, bool $strictModel = false): AiChatHandler
-    {
+    private function make(
+        callable $transport,
+        bool $strictAuth = false,
+        bool $strictModel = false,
+        float $temp = 1.5,
+        float $minP = 0.0,
+        float $topP = 1.0
+    ): AiChatHandler {
         $this->store = new SqliteHitStore($this->dbPath('hits'));
         $this->abuse = new AbuseIpdb('testkey', $this->dbPath('intel'), ['10.0.0.1']);
         $cap = $this->cap;
@@ -93,6 +99,9 @@ final class AiChatHandlerTest extends TestCase
             $this->abuse,
             $strictAuth,
             $strictModel,
+            $temp,
+            $minP,
+            $topP,
             4,
             0,
             static function (int $s, array $h, string $b) use ($cap): void {
@@ -293,5 +302,34 @@ final class AiChatHandlerTest extends TestCase
     private function requestedModelIn(string $bytes): string
     {
         return strpos($bytes, self::ANTHROPIC_MODEL) !== false ? self::ANTHROPIC_MODEL : '';
+    }
+
+    public function test_chat_llm_call_uses_configured_sampling_and_a_varying_seed(): void
+    {
+        $payloads = [];
+        $transport = function (string $url, string $body) use (&$payloads): array {
+            $payloads[] = json_decode($body, true);
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])];
+        };
+        // Distinctive non-default values prove the handler forwards ITS config, not a hardcode.
+        $handler = $this->make($transport, false, false, 1.25, 0.05, 0.8);
+
+        $req = fn (): RequestContext => $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]);
+        $handler->serve(new OllamaDialect(), $req(), self::IP);
+        $handler->serve(new OllamaDialect(), $req(), self::IP);
+
+        self::assertCount(2, $payloads);
+        self::assertSame(1.25, $payloads[0]['temperature']);
+        self::assertSame(0.05, $payloads[0]['min_p']);
+        self::assertSame(0.8, $payloads[0]['top_p']);
+        self::assertSame(0, $payloads[0]['top_k']);
+        // Per-request random seed: not the page-gen fixed 42, and different across two calls.
+        self::assertNotSame(42, $payloads[0]['seed']);
+        self::assertNotSame($payloads[0]['seed'], $payloads[1]['seed']);
     }
 }
