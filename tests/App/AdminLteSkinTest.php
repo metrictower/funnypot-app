@@ -18,24 +18,26 @@ final class AdminLteSkinTest extends TestCase
         self::assertFalse($s->matches('/hr/portal'));
     }
 
-    public function test_renders_deterministic_server_enrichment(): void
+    public function test_dashboard_is_business_metrics_only_no_secrets(): void
     {
+        // T1: the loudest tell — a password_hash column on the landing — must be gone. The dashboard is
+        // now business/ops metrics (stat tiles + a benign recent-sign-ins table), no secrets.
         $s = new AdminLteSkin();
-        $slots = PageSlots::fromArray(['heading' => 'Dashboard', 'app_name' => 'Control Panel']);
+        $slots = PageSlots::fromArray(['app_name' => 'OneControl']);
         $a = $s->render($slots, VisualPersona::fromSeed(77), '/panel/dashboard', '/panel/dashboard');
         $b = $s->render($slots, VisualPersona::fromSeed(77), '/panel/dashboard', '/panel/dashboard');
         self::assertSame($a, $b, 'enrichment must be byte-identical per seed (cache-safe)');
-        self::assertStringContainsString('alte-stats', $a);            // stat cards
-        self::assertStringContainsString('System Information', $a);
-        self::assertStringContainsString('Backups', $a);
-        self::assertMatchesRegularExpression('/of [\d,]+ rows/', $a);   // bottomless loot count
+        self::assertStringContainsString('alte-stats', $a);                 // business stat tiles
+        self::assertStringContainsString('Recent sign-ins', $a);            // benign activity summary
+        self::assertStringContainsString('Employees', $a);
+        self::assertStringNotContainsString('password_hash', $a);           // the tell is gone (T1)
     }
 
     public function test_backup_links_preserve_archive_ext_and_stay_in_panel(): void
     {
         $html = (new AdminLteSkin())->render(
-            PageSlots::fromArray(['heading' => 'Dashboard']),
-            VisualPersona::fromSeed(9), '/panel/dashboard', '/panel/dashboard'
+            PageSlots::fromArray([]),
+            VisualPersona::fromSeed(9), '/panel/backups', '/panel/backups'
         );
         // A backup link under the panel prefix, keeping its archive extension so it routes to the
         // decoy-archive handler (the download rabbit-hole).
@@ -43,19 +45,36 @@ final class AdminLteSkinTest extends TestCase
         self::assertStringNotContainsString('javascript:', $html);
     }
 
-    public function test_loot_emails_use_the_persona_domain(): void
+    public function test_users_loot_is_one_drilldown_deep_with_persona_domain(): void
     {
+        // The password_hash loot still exists as bait — but one drill-down deep (the users table Browse),
+        // never the landing. Emails use the persona domain so the loot stays coherent with the host.
         $persona = VisualPersona::fromSeed(123);
         $html = (new AdminLteSkin())->render(
-            PageSlots::fromArray(['heading' => 'Users']),
-            $persona, '/panel/users', '/panel/users'
+            PageSlots::fromArray([]), $persona, '/panel/users', '/panel/users'
         );
-        self::assertStringContainsString('@' . $persona->domain(), $html); // loot coherent with host identity
+        self::assertStringContainsString('password_hash', $html);
+        self::assertStringContainsString('@' . $persona->domain(), $html);
+        self::assertMatchesRegularExpression('/of [\d,]+ rows/', $html);   // bottomless loot count
+    }
+
+    public function test_databases_landing_lists_tables_without_secrets(): void
+    {
+        // The Databases landing is a schema catalogue — no password_hash. Drilling into the users table
+        // is where the loot lives.
+        $html = (new AdminLteSkin())->render(
+            PageSlots::fromArray([]), VisualPersona::fromSeed(5), '/panel/databases', '/panel/databases'
+        );
+        self::assertStringContainsString('appdb', $html);
+        self::assertStringContainsString('Browse', $html);
+        self::assertStringNotContainsString('password_hash', $html);
+        // And the drill-down link into the users table Browse is reachable.
+        self::assertStringContainsString('href="/panel/databases/users"', $html);
     }
 
     /**
-     * Each sidebar link leads to a different bait section, chosen from the path's last segment; stat
-     * cards ride on every view. The needles are section-specific (not sidebar labels).
+     * Each sidebar link leads to a different bait section, now selected by PanelRoute's positional module
+     * slot (not the path's last segment). The needles are section-specific.
      *
      * @dataProvider panelViews
      */
@@ -63,7 +82,6 @@ final class AdminLteSkinTest extends TestCase
     {
         $html = (new AdminLteSkin())->render(PageSlots::fromArray([]), VisualPersona::fromSeed(42), $path, $path);
         self::assertStringContainsString($needle, $html);
-        self::assertStringContainsString('alte-stats', $html); // stat cards on every view
     }
 
     /** @return array<string,array{0:string,1:string}> */
@@ -78,7 +96,35 @@ final class AdminLteSkinTest extends TestCase
             'system' => ['/panel/system-info', 'Service tag'],
             'backups' => ['/panel/backups', 'Keep last 7'],
             'users' => ['/panel/users', 'password_hash'],
+            'databases' => ['/panel/databases', 'appdb'],
+            // A deep leaf still resolves its module (was collapsed to the last segment before PanelRoute).
+            'deep-leaf' => ['/panel/system/host/detail', 'Service tag'],
         ];
+    }
+
+    public function test_every_view_has_breadcrumbs(): void
+    {
+        foreach (['/panel', '/panel/system', '/panel/logs', '/panel/users', '/panel/databases'] as $path) {
+            $html = (new AdminLteSkin())->render(PageSlots::fromArray([]), VisualPersona::fromSeed(3), $path, $path);
+            self::assertStringContainsString('fp-breadcrumb', $html, "breadcrumb missing on $path");
+        }
+    }
+
+    public function test_grouped_sidebar_links_route_under_the_mount(): void
+    {
+        $html = (new AdminLteSkin())->render(PageSlots::fromArray([]), VisualPersona::fromSeed(1), '/panel', '/panel');
+        self::assertStringContainsString('alte-nav-group-title', $html);         // grouped headers
+        self::assertStringContainsString('href="/panel/logs"', $html);          // links rooted at mount
+        self::assertStringContainsString('href="/panel/databases"', $html);
+    }
+
+    public function test_unknown_module_falls_back_to_dashboard(): void
+    {
+        $html = (new AdminLteSkin())->render(
+            PageSlots::fromArray([]), VisualPersona::fromSeed(8), '/panel/nonsense-module', '/panel/nonsense-module'
+        );
+        self::assertStringContainsString('Recent sign-ins', $html);              // dashboard, not a 404
+        self::assertStringNotContainsString('password_hash', $html);
     }
 
     public function test_key_is_adminlte(): void
@@ -92,8 +138,6 @@ final class AdminLteSkinTest extends TestCase
             PageSlots::fromArray([
                 'heading' => '<x onerror=1>',
                 'app_name' => 'Ops Console',
-                'nav_items' => ['Dashboard', 'Users'],
-                'table' => ['cols' => ['id', 'user'], 'rows' => [['1', 'bob']]],
             ]),
             VisualPersona::fromSeed(4), '/admin/index.php'
         );

@@ -3,39 +3,76 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
-use Funnypot\App\Render\Fake\FakeCron;
-use Funnypot\App\Render\Fake\FakeFiles;
-use Funnypot\App\Render\Fake\FakeInfra;
-use Funnypot\App\Render\Fake\FakeLog;
-use Funnypot\App\Render\Fake\FakeSecrets;
-use Funnypot\App\Render\Fake\MinerRig;
 use Funnypot\App\Render\Fake\ServerProfile;
 use Funnypot\App\Render\PageSlots;
+use Funnypot\App\Render\PanelRoute;
 use Funnypot\App\Render\PathSegments;
+use Funnypot\App\Render\Panel\PanelRegistry;
 use Funnypot\App\Render\VisualPersona;
 
 /**
- * A hand-authored lookalike of an AdminLTE/Bootstrap-style server control panel. Structural resemblance
- * only — no upstream AdminLTE/Bootstrap markup or CSS bytes are reproduced.
+ * A hand-authored lookalike of an AdminLTE/Bootstrap-style server control panel — the honeypot's
+ * flagship "juicy host" deep panel. Structural resemblance only; no upstream AdminLTE/Bootstrap markup
+ * or CSS bytes are reproduced.
  *
- * This is the honeypot's flagship "juicy host" panel: a fixed sidebar whose every link leads to a
- * different deterministic, INERT, bait-filled sub-page (system info, backups, users, API keys, cron,
- * processes, logs, files). The current page is chosen from the request path's last segment, so a
- * crawler following the nav stays inside one coherent site and finds a fresh rabbit hole on each click.
- * All data comes from the Fake\* generators seeded off the persona, so the whole host identity agrees;
- * it is frozen per deploy so the cached page is byte-identical. Every downloadable link keeps its
- * archive extension so it routes to the decoy-archive handler.
+ * Routing (design ruling R2 + spec §B.1): the request path is parsed positionally by PanelRoute into
+ * module -> section -> entity -> sub-tab -> control leaf, and the module is dispatched to its own
+ * PanelSection renderer via PanelRegistry. Adding a module is a new class behind the registry, not
+ * another arm of a switch. An unknown module falls back to the Dashboard — a 404 inside a deep panel is
+ * itself a tell. The grouped fixed sidebar links every registered module, so a crawl stays inside one
+ * coherent site and finds a fresh rabbit hole on each click. All data comes from the seeded Fake\*
+ * generators so the whole host identity agrees, frozen per deploy so the cached page is byte-identical.
  *
  * It is the broadest matcher of the skins, so it is registered last in the SkinSet — more specific
  * product analogs (WordPress, phpMyAdmin, Grafana) get first refusal.
  */
 final class AdminLteSkin extends AbstractSkin
 {
-    /** Fixed sidebar — each label slugs to a view the panel can render (see viewFor()). */
-    private const NAV = [
-        'Dashboard', 'System Info', 'Databases', 'Backups', 'Users',
-        'API Keys', 'Cron', 'Processes', 'Logs', 'Files',
+    /** Mount tokens (mirror of PanelRoute::MOUNTS) — used to root breadcrumb/nav links at the mount. */
+    private const MOUNTS = ['admin', 'dashboard', 'manage', 'panel', 'console', 'cp', 'administrator'];
+
+    /**
+     * The grouped fixed sidebar (spec §B.2). [label, module-slug]; '' targets the panel root (Dashboard).
+     * Every slug resolves to a registered section, so no nav link dead-ends.
+     *
+     * @var array<string,list<array{0:string,1:string}>>
+     */
+    private const NAV_GROUPS = [
+        'Overview' => [
+            ['Dashboard', ''],
+        ],
+        'IT & Platform' => [
+            ['Servers', 'system'],
+            ['Databases', 'databases'],
+            ['Backups', 'backups'],
+            ['Users & Roles', 'users'],
+            ['API Keys', 'keys'],
+            ['Cron', 'cron'],
+            ['Processes', 'processes'],
+            ['Logs', 'logs'],
+            ['Files', 'files'],
+        ],
     ];
+
+    /** Module slug -> page <title>; unmapped modules fall to the Dashboard title. */
+    private const TITLES = [
+        'system' => 'System Information', 'system-info' => 'System Information', 'servers' => 'System Information',
+        'databases' => 'Databases', 'database' => 'Databases', 'db' => 'Databases', 'users' => 'Users',
+        'backups' => 'Backups', 'backup' => 'Backups',
+        'keys' => 'API Keys', 'api-keys' => 'API Keys', 'tokens' => 'API Keys',
+        'cron' => 'Scheduled Tasks', 'jobs' => 'Scheduled Tasks',
+        'processes' => 'Processes', 'ps' => 'Processes',
+        'logs' => 'Logs', 'log' => 'Logs',
+        'files' => 'File Manager', 'filemanager' => 'File Manager',
+    ];
+
+    /** @var PanelRegistry */
+    private $registry;
+
+    public function __construct()
+    {
+        $this->registry = new PanelRegistry();
+    }
 
     public function matches(string $path): bool
     {
@@ -58,29 +95,27 @@ final class AdminLteSkin extends AbstractSkin
 
     public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
-        $navBase = $this->navBase($path);
         $seed = $persona->seed();
         $sp = ServerProfile::fromSeed($seed);
+        $route = PanelRoute::parse($path);
+        $mountBase = $this->mountBase($path);
+        $module = $route['module'];
+
         $company = $this->esc($persona->company());
-        $appName = $this->esc($slots->appName() !== '' ? $slots->appName() : 'Control Panel');
-        $view = $this->viewFor($path);
-        $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $this->viewTitle($view);
+        $appName = $this->esc($slots->appName() !== '' ? $slots->appName() : 'OneControl');
+        $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $this->titleFor($module);
 
         $html = '<div class="alte-wrapper">';
 
         $html .= '<nav class="alte-navbar"><span class="alte-brand">' . $company . '</span>'
             . '<span class="alte-app">' . $appName . ' &middot; ' . $this->esc($sp->hostname()) . '</span></nav>';
 
-        $html .= '<aside class="alte-sidebar"><ul class="alte-nav-sidebar">';
-        foreach (self::NAV as $label) {
-            $html .= '<li class="alte-nav-item">' . $this->navHtml([$label], 'alte-nav-link', $navBase) . '</li>';
-        }
-        $html .= '</ul></aside>';
+        $html .= $this->sidebar($mountBase, $module);
 
         $html .= '<div class="alte-content-wrapper"><section class="alte-content">';
 
-        // The model's heading/intro (when present) becomes a small page header above the deterministic
-        // sections, so an LLM-shaped page still reads coherently on a templated-miss path.
+        // The model's heading/intro (when present) becomes a small page header above the section, so an
+        // LLM-shaped page still reads coherently on a templated-miss path.
         if ($slots->heading() !== '' || $slots->intro() !== '') {
             $html .= '<div class="alte-card"><div class="alte-card-body">';
             if ($slots->heading() !== '') {
@@ -92,8 +127,8 @@ final class AdminLteSkin extends AbstractSkin
             $html .= '</div></div>';
         }
 
-        $html .= $this->statCards($sp);
-        $html .= $this->sectionFor($view, $sp, $persona, $navBase);
+        // Dispatch the module to its PanelSection; unknown module -> Dashboard (never a 404 in-panel).
+        $html .= $this->registry->sectionFor($module)->render($route, $persona, $mountBase);
 
         $html .= '</section></div>'; // alte-content-wrapper
         $html .= '</div>'; // alte-wrapper
@@ -108,195 +143,50 @@ final class AdminLteSkin extends AbstractSkin
         );
     }
 
-    /** Map the request path's last segment to a panel view; unknown/root falls to the dashboard. */
-    private function viewFor(string $path): string
+    /** The grouped fixed sidebar. Group headers are native <details> so the collapse is zero-JS. */
+    private function sidebar(string $mountBase, string $currentModule): string
     {
-        $segs = array_values(array_filter(explode('/', $path), static function (string $s): bool {
-            return $s !== '';
-        }));
-        $last = $segs === [] ? '' : strtolower((string) preg_replace('/[^a-z0-9]+/', '-', strtolower(end($segs))));
-        $map = [
-            'system-info' => 'system', 'system' => 'system',
-            'databases' => 'db', 'database' => 'db', 'users' => 'db', 'db' => 'db',
-            'backups' => 'backups', 'backup' => 'backups',
-            'api-keys' => 'keys', 'keys' => 'keys', 'tokens' => 'keys',
-            'cron' => 'cron', 'jobs' => 'cron',
-            'processes' => 'processes', 'ps' => 'processes',
-            'logs' => 'logs', 'log' => 'logs',
-            'files' => 'files', 'filemanager' => 'files',
-        ];
-        return $map[$last] ?? 'dashboard';
-    }
-
-    private function viewTitle(string $view): string
-    {
-        $t = [
-            'system' => 'System Information', 'db' => 'Databases', 'backups' => 'Backups',
-            'keys' => 'API Keys', 'cron' => 'Scheduled Tasks', 'processes' => 'Processes',
-            'logs' => 'Logs', 'files' => 'File Manager', 'dashboard' => 'Dashboard',
-        ];
-        return $t[$view] ?? 'Dashboard';
-    }
-
-    private function statCards(ServerProfile $sp): string
-    {
-        $cpu = $sp->cpu();
-        $mem = $sp->memory();
-        $stg = $sp->storage();
-        $live = $sp->liveStats(0);
-        $upd = $sp->pendingUpdates();
-        return $this->statCardsHtml([
-            ['label' => 'CPU load', 'value' => $live['cpuPct'] . '%', 'sub' => $cpu['cores'] . ' cores / ' . $cpu['threads'] . ' threads'],
-            ['label' => 'Memory', 'value' => $live['memUsedGib'] . ' / ' . $mem['totalGib'] . ' GiB'],
-            ['label' => 'Load average', 'value' => $live['load1'] . ', ' . $live['load5'] . ', ' . $live['load15']],
-            ['label' => 'Uptime', 'value' => $sp->uptimeDays() . ' days'],
-            ['label' => 'Data volume', 'value' => $stg['usedPct'] . '% of ' . $stg['usableTb'] . ' TB', 'sub' => 'RAID-6'],
-            ['label' => 'Pending updates', 'value' => (string) $upd['total'], 'sub' => $upd['security'] . ' security'],
-        ], 'alte-stats', 'alte-st');
-    }
-
-    private function sectionFor(string $view, ServerProfile $sp, VisualPersona $persona, string $navBase): string
-    {
-        switch ($view) {
-            case 'system':
-                return $this->systemCard($sp);
-            case 'backups':
-                return $this->backupsCard($sp, $navBase);
-            case 'db':
-                return $this->lootCard($sp, $persona);
-            case 'keys':
-                return $this->keysCard($persona->seed());
-            case 'cron':
-                return $this->cronCard($persona->seed());
-            case 'processes':
-                return $this->processesCard($persona->seed());
-            case 'logs':
-                return $this->logsCard($persona->seed());
-            case 'files':
-                return $this->filesCard($persona->seed(), $navBase);
-            default:
-                // Dashboard: a summary of the most tempting rabbit holes.
-                return $this->systemCard($sp) . $this->backupsCard($sp, $navBase) . $this->lootCard($sp, $persona);
-        }
-    }
-
-    private function card(string $header, string $body, string $headerExtra = ''): string
-    {
-        $extra = $headerExtra !== '' ? '<span class="alte-muted">' . $this->esc($headerExtra) . '</span>' : '';
-        return '<div class="alte-card"><div class="alte-card-header">' . $this->esc($header) . $extra . '</div>'
-            . '<div class="alte-card-body">' . $body . '</div></div>';
-    }
-
-    private function systemCard(ServerProfile $sp): string
-    {
-        $cpu = $sp->cpu();
-        $mem = $sp->memory();
-        $stg = $sp->storage();
-        $osx = $sp->os();
-        $chs = $sp->chassis();
-        $kv = $this->kvTableHtml([
-            ['CPU', $cpu['sockets'] . '× ' . $cpu['model'] . ' (' . $cpu['cores'] . 'C/' . $cpu['threads'] . 'T)'],
-            ['Memory', $mem['totalGib'] . ' GiB — ' . $mem['dimmCount'] . '× ' . $mem['dimmSizeGb'] . ' GB ' . $mem['dimmPart'] . ' @ ' . $mem['speed'] . ' MT/s'],
-            ['Storage', '2× ' . $stg['bootModel'] . ' NVMe RAID-1 · ' . $stg['dataDisks'] . '× ' . $stg['dataDiskTb'] . ' TB ' . $stg['dataModel'] . ' on ' . $stg['controller'] . ' (~' . $stg['usableTb'] . ' TB, ' . $stg['usedPct'] . '% full)'],
-            ['OS', $osx['distro'] . ' — ' . $osx['kernel']],
-            ['Chassis', $chs['vendor'] . ' ' . $chs['product'] . ' · BIOS ' . $chs['biosVendor'] . ' ' . $chs['biosVer']],
-            ['Service tag', $chs['serviceTag'] . ' · UUID ' . $chs['uuid']],
-            ['Network', 'bond0 (LACP) 20000 Mb/s · ' . $sp->primaryIp() . '/24'],
-        ], ' class="alte-kv"');
-        return $this->card('System Information', $kv, $sp->chassis()['vendor'] . ' ' . $sp->chassis()['product']);
-    }
-
-    private function backupsCard(ServerProfile $sp, string $navBase): string
-    {
-        $rows = [];
-        foreach ($sp->backups() as $b) {
-            $rows[] = ['file' => $b['name'], 'cells' => [$b['size'], $b['age'], 'Download']];
-        }
-        $table = $this->downloadTableHtml(['File', 'Size', 'Created', ''], $rows, $navBase, '/backups', ' class="alte-table"', 'alte-dl');
-        return $this->card('Backups', $table, 'Keep last 7 · retain 30 days');
-    }
-
-    private function lootCard(ServerProfile $sp, VisualPersona $persona): string
-    {
-        $rows = $sp->lootUsers($persona->domain());
-        $total = $sp->lootRowCount('users');
-        $table = $this->tableHtml(['id', 'username', 'email', 'role', 'password_hash'], $rows, ' class="alte-table"');
-        $table .= '<div class="alte-pager">Showing 1&ndash;' . count($rows) . ' of ' . number_format($total) . ' rows</div>';
-        return $this->card('users', $table, 'appdb · InnoDB');
-    }
-
-    private function keysCard(int $seed): string
-    {
-        $fs = FakeSecrets::fromSeed($seed);
-        $rows = [];
-        foreach ($fs->keys() as $k) {
-            $rows[] = [$k['label'], $k['masked'], $k['created'], $k['lastUsed']];
-        }
-        $keys = $this->tableHtml(['Name', 'Key', 'Created', 'Last used'], $rows, ' class="alte-table"');
-        $env = $this->kvTableHtml($fs->envVars(), ' class="alte-kv"');
-        return $this->card('API Keys', $keys, 'Reveal to copy')
-            . $this->card('.env', $env, 'application environment');
-    }
-
-    private function cronCard(int $seed): string
-    {
-        $rows = [];
-        foreach (FakeCron::fromSeed($seed)->cronJobs() as $c) {
-            $rows[] = [$c['schedule'], $c['user'], $c['command']];
-        }
-        return $this->card('Scheduled Tasks', $this->tableHtml(['Schedule', 'User', 'Command'], $rows, ' class="alte-table alte-mono"'), 'crontab');
-    }
-
-    private function processesCard(int $seed): string
-    {
-        $rows = [];
-        foreach (FakeCron::fromSeed($seed)->processes() as $p) {
-            $rows[] = [$p['pid'], $p['user'], $p['cpu'], $p['mem'], $p['command']];
-        }
-        $ps = $this->tableHtml(['PID', 'User', '%CPU', '%MEM', 'Command'], $rows, ' class="alte-table alte-mono"');
-        // Miner lure: the box looks already-compromised and actively mining — a rabbit hole in itself.
-        $mr = MinerRig::fromSeed($seed);
-        $s = $mr->summary();
-        $miner = $this->kvTableHtml([
-            ['Status', 'ACTIVE — ' . $s['coin'] . ' (' . $s['algo'] . ')'],
-            ['Pool', $s['pool']],
-            ['Wallet', $s['wallet']],
-            ['Hashrate', $s['totalHashrate'] . ' · ' . $s['workersOnline'] . ' workers'],
-            ['Unpaid balance', $s['unpaidBalance'] . ' (~' . $s['estDailyUsd'] . '/day)'],
-        ], ' class="alte-kv"');
-        return $this->card('Processes', $ps, 'ps aux')
-            . $this->card('Miner detected', $miner, 'lfd: suspicious process');
-    }
-
-    private function logsCard(int $seed): string
-    {
-        $log = FakeLog::fromSeed($seed);
-        return $this->card('auth.log', $this->preScrollHtml($log->authLog(400), 'alte-log'), '/var/log/auth.log')
-            . $this->card('access.log', $this->preScrollHtml($log->accessLog(200), 'alte-log'), '/var/log/nginx/access.log');
-    }
-
-    private function filesCard(int $seed, string $navBase): string
-    {
-        $ff = FakeFiles::fromSeed($seed);
-        $out = '';
-        foreach ($ff->dirs() as $dir) {
-            $rows = '';
-            foreach ($ff->listing($dir) as $f) {
-                $name = $f['name'];
-                $label = $f['isDir'] ? $this->esc($name . '/') : $this->esc($name);
-                // Only downloadable files become links (they keep their extension -> decoy-archive handler);
-                // dirs and text lures render as plain text.
-                if ($f['isDownload'] && preg_match('/^[A-Za-z0-9._-]+$/', $name) === 1 && strpos($name, '..') === false) {
-                    $label = '<a class="alte-dl" href="' . $this->esc($navBase . '/files/download/' . $name) . '">' . $this->esc($name) . '</a>';
-                }
-                $rows .= '<tr><td>' . $label . '</td><td>' . $this->esc($f['size']) . '</td><td>' . $this->esc($f['modified'])
-                    . '</td><td>' . $this->esc($f['perms']) . '</td><td>' . $this->esc($f['owner']) . '</td></tr>';
+        $html = '<aside class="alte-sidebar">';
+        foreach (self::NAV_GROUPS as $group => $links) {
+            $html .= '<details class="alte-nav-group" open><summary class="alte-nav-group-title">'
+                . $this->esc($group) . '</summary><ul class="alte-nav-sidebar">';
+            foreach ($links as $link) {
+                $html .= '<li class="alte-nav-item">' . $this->sidebarLink($mountBase, $link[1], $link[0], $currentModule) . '</li>';
             }
-            $table = '<table class="alte-table alte-mono"><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Perms</th><th>Owner</th></tr></thead><tbody>'
-                . $rows . '</tbody></table>';
-            $out .= $this->card($dir, $table, 'file manager');
+            $html .= '</ul></details>';
         }
-        return $out;
+        return $html . '</aside>';
+    }
+
+    /** One sidebar link. Slug + label are trusted skin vocab; both are still escaped as defense-in-depth
+     *  (the slug is the real structural guard — it can only ever be another sibling path under the mount). */
+    private function sidebarLink(string $mountBase, string $slug, string $label, string $currentModule): string
+    {
+        $href = $slug === '' ? $mountBase : $mountBase . '/' . $slug;
+        $active = ($slug === '' && $currentModule === '') || ($slug !== '' && $slug === $currentModule);
+        $cls = $active ? 'alte-nav-link alte-nav-link-active' : 'alte-nav-link';
+        return '<a class="' . $cls . '" href="' . $this->esc($href) . '">' . $this->esc($label) . '</a>';
+    }
+
+    /** The mount-rooted panel base for links, e.g. `/panel`, `/admin`. Uses the first mount segment's
+     *  base token (extension stripped) so `/admin.php/...` roots cleanly at `/admin`. Defaults to
+     *  `/admin` when no mount is present (matches() has already gated non-panel paths out). */
+    private function mountBase(string $path): string
+    {
+        foreach (PathSegments::of($path) as $seg) {
+            $lower = strtolower($seg);
+            $base = strstr($lower, '.', true);
+            $tok = $base === false ? $lower : $base;
+            if (in_array($tok, self::MOUNTS, true)) {
+                return '/' . $tok;
+            }
+        }
+        return '/admin';
+    }
+
+    private function titleFor(string $module): string
+    {
+        return self::TITLES[$module] ?? 'Dashboard';
     }
 
     private function css(): string
@@ -311,11 +201,16 @@ final class AdminLteSkin extends AbstractSkin
             . '.alte-brand{font-weight:bold;color:#3b7ea1}'
             . '.alte-app{color:#6c757d;font-size:.9em}'
             . '.alte-sidebar{position:fixed;top:52px;bottom:0;left:0;width:210px;background:#2f3640;'
-            . 'padding-top:10px;box-sizing:border-box;overflow-y:auto}'
-            . '.alte-nav-sidebar{list-style:none;margin:0;padding:0}'
+            . 'padding-top:6px;box-sizing:border-box;overflow-y:auto}'
+            . '.alte-nav-group{margin:0}'
+            . '.alte-nav-group-title{padding:10px 16px 4px;color:#8b93a0;font-size:.72em;font-weight:600;'
+            . 'text-transform:uppercase;letter-spacing:.06em;cursor:pointer;list-style:none}'
+            . '.alte-nav-group-title::-webkit-details-marker{display:none}'
+            . '.alte-nav-sidebar{list-style:none;margin:0 0 8px;padding:0}'
             . '.alte-nav-item{margin:0}'
-            . '.alte-nav-link{display:block;padding:10px 16px;color:#c9ccd1;text-decoration:none}'
+            . '.alte-nav-link{display:block;padding:8px 16px;color:#c9ccd1;text-decoration:none;font-size:.92em}'
             . '.alte-nav-link:hover{background:#3b4148;color:#fff}'
+            . '.alte-nav-link-active{background:#3b4148;color:#fff;border-left:3px solid #3b7ea1;padding-left:13px}'
             . '.alte-content-wrapper{margin-left:210px;padding-top:52px;box-sizing:border-box}'
             . '.alte-content{padding:20px}'
             . '.alte-card{background:#fff;border:1px solid #d7dbdf;border-radius:4px;margin-bottom:20px}'
