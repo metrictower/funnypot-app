@@ -163,6 +163,10 @@ final class HoneypotController
             severityCeiling: $this->config->severityCeiling,
             responseStyle: $this->config->style,
             personaSeed: static fn (RequestContext $r) => $clientIp ?: 'anon',
+            // Per-deploy identity material shared with the app tier: once the engine wires deploySeed()
+            // into its renderers, the template tier's {{persona.*}} resolves the SAME company/domain/admin
+            // the LLM/skin pages show. Distinct from personaSeed above (per-request; drives fake secrets).
+            deploySeed: $this->config->personaMaterial,
             latencyMs: $this->config->latencyMs,
             latencyJitterMs: $this->config->jitterMs,
             attackEmulation: $this->config->attackEmulation,

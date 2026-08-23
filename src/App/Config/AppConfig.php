@@ -88,6 +88,9 @@ final class AppConfig
         public array $llmGateAllowIps,
         /** Seeds persona/skin selection; per-deployment and stable — never clientIp or time. */
         public int $personaSeed,
+        /** Raw persona material (pre-hash). Passed to core Config so the template tier derives the
+         *  SAME per-deploy PersonaIdentity via seedFromMaterial. Private per-deploy value — never emit. */
+        public string $personaMaterial,
     ) {
     }
 
@@ -108,6 +111,11 @@ final class AppConfig
         if ($db === 'off') {
             $db = $store . '/funnypot.sqlite'; // SQLite is canonical now; 'off' no longer disables it
         }
+
+        // Private per-deploy persona material (never a public value like the cert CN). Both the app
+        // persona seed and the core template tier (via Config->deploySeed) derive from this SAME string,
+        // so the two tiers present one coherent identity.
+        $personaMaterial = $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'));
 
         return new self(
             mode: getenv('FUNNYPOT_MODE') === 'stealth' ? 'stealth' : 'public',
@@ -170,9 +178,8 @@ final class AppConfig
             // to a fixed default (set it for a unique per-host identity). seedFromMaterial is the
             // canonical derivation shared with the core template tier, so both resolve the SAME
             // PersonaIdentity for one deployment.
-            personaSeed: PersonaIdentity::seedFromMaterial(
-                $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'))
-            ),
+            personaSeed: PersonaIdentity::seedFromMaterial($personaMaterial),
+            personaMaterial: $personaMaterial,
         );
     }
 }
