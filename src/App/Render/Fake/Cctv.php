@@ -26,11 +26,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Cctv
 {
-    /** Frozen "now" base for burned timecodes / recording windows. Matches Building/Org. */
-    public const DEPLOY_EPOCH = 1756000000;
-
-    /** Frozen calendar day the burned timecodes read (derived-once, never date()). */
-    private const FROZEN_DATE = '2026-08-23';
+    /** Frozen "now" base for burned timecodes / recording windows — the one shared clock. */
+    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
 
     /** @var int */
     private $seed;
@@ -219,7 +216,7 @@ final class Cctv
             'recording' => $status === 'online' || $status === 'tampering',
             'ptz' => ($this->h($salt . '|ptz') % 3) === 0,
             'retentionDays' => $retention,
-            'timecode' => self::FROZEN_DATE . ' ' . $this->clock($salt . '|tc'),
+            'timecode' => FrozenClock::todayYmd() . ' ' . $this->clock($salt . '|tc'),
         ];
     }
 
@@ -287,9 +284,9 @@ final class Cctv
             $secs = $this->intIn(20, 1800, $salt . '|dur');
             $mb = $this->intIn(40, 2400, $salt . '|mb');
             $out[] = [
-                'file' => $camId . '_' . str_replace('-', '', self::FROZEN_DATE)
+                'file' => $camId . '_' . str_replace('-', '', FrozenClock::todayYmd())
                     . '_' . sprintf('%02d%02d', $hh, $mm) . '.mp4.zip',
-                'start' => self::FROZEN_DATE . ' ' . sprintf('%02d:%02d:%02d', $hh, $mm, $this->intIn(0, 59, $salt . '|ss')),
+                'start' => FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $mm, $this->intIn(0, 59, $salt . '|ss')),
                 'duration' => $this->durationLabel($secs),
                 'size' => $mb < 1024 ? $mb . ' MB' : number_format($mb / 1024, 1) . ' GB',
                 'trigger' => $triggers[$this->h($salt . '|trig') % count($triggers)],
@@ -380,7 +377,7 @@ final class Cctv
             $cam = $cams[$this->h($salt . '|cam') % count($cams)];
             $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];
             $hh = 23 - ($i % 24);
-            $out[] = self::FROZEN_DATE . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
+            $out[] = FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
                 . '  ' . $kind . '  ' . $cam['id'] . '  ' . $cam['name'];
         }
         return $out;
@@ -404,7 +401,7 @@ final class Cctv
             $salt = 'camevt|' . $camId . '|' . $i;
             $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];
             $hh = 23 - ($i % 24);
-            $out[] = self::FROZEN_DATE . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
+            $out[] = FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
                 . '  ' . $kind . '  ' . $cam['id'] . '  ' . $cam['name'];
         }
         return $out;

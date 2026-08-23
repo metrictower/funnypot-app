@@ -30,11 +30,6 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Bank
 {
-    /** Frozen calendar day the ledger's newest row reads; older rows walk back from here. Matches Cctv. */
-    private const FROZEN_Y = 2026;
-    private const FROZEN_M = 8;
-    private const FROZEN_D = 23;
-
     /** A ledger's advertised depth is a big seeded constant; only the requested page is ever built. */
     private const LEDGER_MIN = 4200;
     private const LEDGER_MAX = 9800;
@@ -106,39 +101,12 @@ final class Bank
         return $out;
     }
 
-    // --- civil-date arithmetic (no date()/gmdate): days <-> Y-M-D, Hinnant's algorithm ---
-
-    private function daysFromCivil(int $y, int $m, int $d): int
-    {
-        $y -= ($m <= 2) ? 1 : 0;
-        $era = intdiv(($y >= 0 ? $y : $y - 399), 400);
-        $yoe = $y - $era * 400;
-        $doy = intdiv(153 * ($m + ($m > 2 ? -3 : 9)) + 2, 5) + $d - 1;
-        $doe = $yoe * 365 + intdiv($yoe, 4) - intdiv($yoe, 100) + $doy;
-        return $era * 146097 + $doe - 719468;
-    }
-
-    /** @return array{0:int,1:int,2:int} [year, month, day] */
-    private function civilFromDays(int $z): array
-    {
-        $z += 719468;
-        $era = intdiv(($z >= 0 ? $z : $z - 146096), 146097);
-        $doe = $z - $era * 146097;
-        $yoe = intdiv($doe - intdiv($doe, 1460) + intdiv($doe, 36524) - intdiv($doe, 146096), 365);
-        $y = $yoe + $era * 400;
-        $doy = $doe - (365 * $yoe + intdiv($yoe, 4) - intdiv($yoe, 100));
-        $mp = intdiv(5 * $doy + 2, 153);
-        $d = $doy - intdiv(153 * $mp + 2, 5) + 1;
-        $m = $mp + ($mp < 10 ? 3 : -9);
-        $y += ($m <= 2) ? 1 : 0;
-        return [$y, $m, $d];
-    }
+    // --- civil-date arithmetic (the one shared frozen "now"; no date()/gmdate) ---
 
     /** The frozen calendar day minus $back days, as YYYY-MM-DD (deterministic, never date()). */
     private function dateMinus(int $back): string
     {
-        $c = $this->civilFromDays($this->daysFromCivil(self::FROZEN_Y, self::FROZEN_M, self::FROZEN_D) - $back);
-        return sprintf('%04d-%02d-%02d', $c[0], $c[1], $c[2]);
+        return FrozenClock::ymdFromDays(FrozenClock::nowDays() - $back);
     }
 
     // --- accounts ---
@@ -147,7 +115,7 @@ final class Bank
      * The company bank accounts (2-5), Reserve always first and holding the fat drainable balance.
      * All USD so dashboard cash on hand is a clean Σ of balances.
      *
-     * @return list<array{id:string,slug:string,name:string,type:string,bank:string,currency:string,balance:int,accountMasked:string,accountLast4:string,routing:string,iban:string,bic:string,branch:string,status:string,opened:string}>
+     * @return list<array{id:string,slug:string,name:string,type:string,bank:string,currency:string,balance:int,accountMasked:string,accountLast4:string,routing:string,iban:string,bic:string,branch:string,status:string,openedDaysAgo:int,opened:string}>
      */
     public function accounts(): array
     {
@@ -169,7 +137,8 @@ final class Bank
         return $out;
     }
 
-    private function buildAccount(string $slug, string $name, string $type, int $balance): array
+    /** @param int $balanceDollars whole-dollar balance; stored (and returned) as integer cents. */
+    private function buildAccount(string $slug, string $name, string $type, int $balanceDollars): array
     {
         $last4 = $this->digits(4, $slug . '|acctno');
         // Routing: 9 digits with Federal Reserve prefix "00" (never assigned) -> structurally invalid.
@@ -179,6 +148,10 @@ final class Bank
         // BIC: unassigned bank code "ZZZZ", location "0X" -> resolves to no institution.
         $bic = 'ZZZZUS0' . chr(65 + ($this->h($slug . '|bic') % 26));
 
+        // How long the account has been open, in days — the ledger clamps its depth to this so the
+        // visible transaction history can never predate the account's own open date.
+        $openedDaysAgo = $this->intIn(730, 3200, $slug . '|opened');
+
         return [
             'id' => 'acct-' . $slug,
             'slug' => $slug,
@@ -186,7 +159,7 @@ final class Bank
             'type' => $type,
             'bank' => $this->pick(self::BANKS, $slug . '|bank'),
             'currency' => 'USD',
-            'balance' => $balance,
+            'balance' => $balanceDollars * 100,          // integer cents (finance-family convention)
             'accountMasked' => '••••••' . $last4,
             'accountLast4' => $last4,
             'routing' => $routing,
@@ -197,7 +170,8 @@ final class Bank
                 $slug . '|br'
             ),
             'status' => 'Active',
-            'opened' => $this->dateMinus($this->intIn(730, 3200, $slug . '|opened')),
+            'openedDaysAgo' => $openedDaysAgo,
+            'opened' => $this->dateMinus($openedDaysAgo),
         ];
     }
 
@@ -250,35 +224,55 @@ final class Bank
 
     // --- transaction ledger (running balance reconciles by construction) ---
 
-    /** Advertised ledger depth for an account (big seeded constant; only a page is ever built). */
+    /** Transactions posted per calendar day for an account (a few, never exactly one — real ledgers cluster). */
+    private function txPerDay(string $slug): int
+    {
+        return $this->intIn(1, 4, $slug . '|txperday');
+    }
+
+    /**
+     * Advertised ledger depth for an account. A big seeded constant, but CLAMPED so the oldest row can
+     * never predate the account's open date: with a few transactions packed per day, the deepest the
+     * history can reach back is (days-open x tx/day) rows. Only the requested page is ever built.
+     */
     public function ledgerCount(string $accountId): int
     {
-        return $this->intIn(self::LEDGER_MIN, self::LEDGER_MAX, $accountId . '|ledgercount');
+        $acct = $this->account($accountId);
+        $band = $this->intIn(self::LEDGER_MIN, self::LEDGER_MAX, $accountId . '|ledgercount');
+        $capacity = $acct['openedDaysAgo'] * $this->txPerDay($acct['slug']);
+        if ($capacity < 1) {
+            $capacity = 1;
+        }
+        return $band < $capacity ? $band : $capacity;
     }
 
     /**
      * The balance the ledger shows AFTER the transaction at global index $g (0 = newest = today).
      * Anchored at the account's current balance and kept within a bounded band around it, so every
-     * displayed balance is positive and near the live figure — and the per-row amount is derived FROM
-     * these balances (below), which makes the running-balance column reconcile exactly.
+     * displayed balance is positive and near the live figure. The wobble carries the row parity in its
+     * low bit, so two adjacent rows can never share a balance — which makes the per-row amount (derived
+     * as the difference of neighbouring balances) always non-zero, i.e. never a $0 ledger row.
      */
     private function balanceAt(array $acct, int $g): int
     {
         if ($g <= 0) {
             return $acct['balance'];
         }
-        $band = intdiv($acct['balance'], 6);
+        $band = intdiv($acct['balance'], 12);
         if ($band < 1) {
             $band = 1;
         }
-        $wobble = ($this->h($acct['slug'] . '|bal|' . $g) % (2 * $band + 1)) - $band;
+        $mag = $this->h($acct['slug'] . '|bal|' . $g) % $band;            // [0, band-1]
+        $signed = ($this->h($acct['slug'] . '|sgn|' . $g) % 2) === 1 ? $mag : -$mag;
+        $wobble = $signed * 2 + ($g % 2);                                  // parity in the low bit
         return $acct['balance'] + $wobble;
     }
 
     /**
      * A page of ledger rows, newest first. amountSigned = balanceAt(g) - balanceAt(g+1), so
      * balanceAt(g) == balanceAt(g+1) + amountSigned by construction — the running balance reconciles
-     * both down the page and across page boundaries. Dates walk monotonically back from the frozen day.
+     * both down the page and across page boundaries, and is never $0. Dates walk monotonically back from
+     * the frozen day, several rows per day, so the oldest row never predates the account open date.
      *
      * @return list<array{date:string,ref:string,description:string,amountSigned:int,balance:int}>
      */
@@ -292,6 +286,7 @@ final class Bank
             $limit = 0;
         }
         $total = $this->ledgerCount($accountId);
+        $perDay = $this->txPerDay($acct['slug']);
         $out = [];
         for ($i = 0; $i < $limit; $i++) {
             $g = $offset + $i;
@@ -302,7 +297,7 @@ final class Bank
             $balOlder = $this->balanceAt($acct, $g + 1);
             $amount = $balHere - $balOlder;
             $out[] = [
-                'date' => $this->dateMinus($g),
+                'date' => $this->dateMinus(intdiv($g, $perDay)),
                 'ref' => $this->ledgerRef($acct['slug'], $g),
                 'description' => $this->ledgerDesc($acct['slug'], $g, $amount),
                 'amountSigned' => $amount,
@@ -312,10 +307,14 @@ final class Bank
         return $out;
     }
 
-    /** A source-document reference for a ledger row (display text; a fabricated, non-resolving id). */
+    /**
+     * A bank-native payment-instrument reference for a ledger row (display text; fabricated, non-resolving).
+     * Deliberately NOT an INV-/PO- reference: a bank ledger cites the payment instrument, not a supplier
+     * invoice number, so these can never collide with (and contradict) the Finance/Vendors invoice+PO spaces.
+     */
     private function ledgerRef(string $slug, int $g): string
     {
-        $kinds = ['INV', 'PO', 'WIRE', 'DEP', 'ACH', 'FEE'];
+        $kinds = ['WIRE', 'ACH', 'DEP', 'CHK', 'POS', 'FEE', 'TFR'];
         $k = $kinds[$this->h($slug . '|refk|' . $g) % count($kinds)];
         return $k . '-2026-' . sprintf('%06d', $this->intIn(1, 899999, $slug . '|refn|' . $g));
     }
@@ -380,7 +379,7 @@ final class Bank
     {
         $programs = ['Purchasing', 'Travel & Expense', 'Executive'];
         $last4 = $this->digits(4, 'card|last4|' . $i);
-        $limit = $this->intIn(2, 50, 'card|limit|' . $i) * 1000;
+        $limit = $this->intIn(2, 50, 'card|limit|' . $i) * 1000 * 100;   // integer cents
         $spent = $this->h('card|spent|' . $i) % ($limit + 1);
         $holder = $person !== null ? $person['name'] : 'Cardholder ' . ($i + 1);
         $holderId = $person !== null ? $person['id'] : 'emp-' . (1001 + $i);
@@ -421,18 +420,20 @@ final class Bank
 
     /**
      * The "reveal" a card returns: a full-length PAN that is deterministically INVALID — BIN "0000"
-     * (no issuer) and the 16 digits fail the Luhn check — so nothing downstream can validate or use it.
-     * Never a real or checksum-valid card number.
+     * (no issuer) and the 16 digits fail the Luhn check — yet whose last four MATCH the masked last4 the
+     * console showed everywhere else, so the reveal never contradicts the mask. Never a real or
+     * checksum-valid card number.
      */
     public function cardReveal(string $id): string
     {
         $card = $this->card($id);
-        $body = $this->digits(12, 'card|reveal|' . $id);
-        $pan = '0000' . $body;                 // BIN 0000 = unassigned
+        // BIN 0000 (unassigned) + 8 fabricated middle digits + the card's own shown last4.
+        $pan = '0000' . $this->digits(8, 'card|reveal|' . $id) . $card['last4'];
         if ($this->luhnValid($pan)) {
-            // Flip the last digit so the number can never pass a Luhn check.
-            $last = (int) substr($pan, -1);
-            $pan = substr($pan, 0, 15) . (string) (($last + 1) % 10);
+            // Nudge one MIDDLE digit (index 7 is a non-doubled Luhn position) by +1 so the number can
+            // never pass a Luhn check — this leaves BIN 0000 and the trailing last4 untouched.
+            $d = (int) $pan[7];
+            $pan = substr($pan, 0, 7) . (string) (($d + 1) % 10) . substr($pan, 8);
         }
         return trim(chunk_split($pan, 4, ' '));
     }

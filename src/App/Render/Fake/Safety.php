@@ -29,7 +29,7 @@ namespace Funnypot\App\Render\Fake;
 final class Safety
 {
     /** Frozen "now" for ages/timestamps so a static reload is not a tell. Matches Building/Org. */
-    public const DEPLOY_EPOCH = 1756000000;
+    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
 
     /** SLC detector devices across the loops — a long inert address list (spec §C.4). */
     public const DETECTOR_TOTAL = 512;

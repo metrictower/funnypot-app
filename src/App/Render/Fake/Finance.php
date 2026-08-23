@@ -32,8 +32,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Finance
 {
-    /** Frozen "now" for dates/ages so a static reload is not a tell. ~2026-08-24; FY label is 2026. */
-    public const DEPLOY_EPOCH = 1787536000;
+    /** Frozen "now" for dates/ages so a static reload is not a tell — the one shared clock (2026-08-24). */
+    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
 
     private const FY = '2026';
 
@@ -50,11 +50,15 @@ final class Finance
     /** @var Org */
     private $org;
 
+    /** @var Vendors the one vendor book; Finance's vendor/remit/invoice data is a view over it. */
+    private $vendors;
+
     private function __construct(int $seed, string $domain)
     {
         $this->seed = $seed;
         $this->domain = $domain;
         $this->org = Org::fromSeed($seed, $domain);
+        $this->vendors = Vendors::fromSeed($seed, $domain);
     }
 
     public static function fromSeed(int $seed, string $domain = ''): self
@@ -87,36 +91,10 @@ final class Finance
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** YYYY-MM-DD for an absolute epoch, by integer arithmetic only (civil-from-days; no date()/gmdate). */
+    /** YYYY-MM-DD for an absolute epoch, from the one shared clock (integer arithmetic; no date()). */
     private function ymd(int $epoch): string
     {
-        $days = intdiv($epoch, 86400);
-        $z = $days + 719468;
-        $era = intdiv($z >= 0 ? $z : $z - 146096, 146097);
-        $doe = $z - $era * 146097;
-        $yoe = intdiv($doe - intdiv($doe, 1460) + intdiv($doe, 36524) - intdiv($doe, 146096), 365);
-        $y = $yoe + $era * 400;
-        $doy = $doe - (365 * $yoe + intdiv($yoe, 4) - intdiv($yoe, 100));
-        $mp = intdiv(5 * $doy + 2, 153);
-        $d = $doy - intdiv(153 * $mp + 2, 5) + 1;
-        $m = $mp < 10 ? $mp + 3 : $mp - 9;
-        if ($m <= 2) {
-            $y += 1;
-        }
-        return sprintf('%04d-%02d-%02d', $y, $m, $d);
-    }
-
-    /** Seeded "N ago" off DEPLOY_EPOCH — deterministic, never time()/date(). */
-    private function ageAgo(string $salt): string
-    {
-        $sec = $this->intIn(120, 15552000, $salt);          // 2 min .. ~180 days
-        if ($sec < 5400) {
-            return (int) round($sec / 60) . ' min ago';
-        }
-        if ($sec < 172800) {
-            return (int) round($sec / 3600) . ' h ago';
-        }
-        return (int) round($sec / 86400) . ' d ago';
+        return FrozenClock::ymd($epoch);
     }
 
     /** '$1,234.56' from integer cents — the one display formatter (sums stay in cents, exact). */
@@ -155,8 +133,16 @@ final class Finance
     public function secondApprover(): array
     {
         $roster = $this->org->people($this->org->headcount());
-        $p = $roster[$this->h('cfo') % count($roster)];
-        return ['name' => $p['name'], 'email' => $p['email'], 'title' => 'Chief Financial Officer'];
+        // Pick the senior signer by BAND (first executive/M5), the same rule Payroll uses, and carry that
+        // person's ACTUAL directory title — so the four-eyes wall never names a title HR contradicts.
+        $p = $roster[0];
+        foreach ($roster as $candidate) {
+            if ($candidate['band'] === 'M5') {
+                $p = $candidate;
+                break;
+            }
+        }
+        return ['name' => $p['name'], 'email' => $p['email'], 'title' => $p['title']];
     }
 
     /**
@@ -174,7 +160,9 @@ final class Finance
         $d4 = $this->intIn(1000, 90000, 'age-90') * 100;
         $ap = $current + $d1 + $d2 + $d3 + $d4;
         return [
-            'cashOnHand' => $this->intIn(900000, 24000000, 'cash') * 100,
+            // Cash on hand is NOT seeded here — it is the treasury total (Σ bank balances) so the finance
+            // dashboard and the bank landing show one and the same figure on the one host.
+            'cashOnHand' => Bank::fromSeed($this->seed, $this->domain)->summary()['cashOnHand'],
             'apOutstanding' => $ap,
             'arOutstanding' => $this->intIn(300000, 12000000, 'ar') * 100,
             'overdue' => $d2 + $d3 + $d4,
@@ -193,47 +181,34 @@ final class Finance
 
     public function vendorCount(): int
     {
-        return $this->intIn(24, 60, 'vendorcount');
+        return $this->vendors->vendorCount();
     }
 
     /**
-     * One vendor by 0-based index. Remit-to is masked at rest and non-validating (invalid-format account /
-     * sort / IBAN), so nothing an attacker copies out will validate against a real bank.
+     * One vendor by 0-based index — a VIEW over the one `Fake\Vendors` book, so a vendor named on the AP
+     * ledger (id, name, category, remit-to) resolves to the exact same record under /panel/vendors. Remit
+     * detail is masked at rest and non-validating (invalid-format account / sort / IBAN), so nothing an
+     * attacker copies out will validate against a real bank.
      *
      * @return array{id:string,name:string,category:string,contact:string,bankName:string,acctMasked:string,sortMasked:string,ibanMasked:string,ytdSpend:int}
      */
     public function vendorAt(int $i): array
     {
-        $stem = $this->pick(
-            ['Northwind', 'Apex', 'Meridian', 'Blue Harbor', 'Irongate', 'Cedar Ridge', 'Vanta', 'Orion',
-             'Copperfield', 'Sterling Park', 'Westfold', 'Kestrel', 'Halcyon', 'Brightline', 'Granite Bay'],
-            'v-stem|' . $i
-        );
-        $kind = $this->pick(
-            ['Supplies', 'Logistics', 'Facilities', 'Consulting', 'Software', 'Print & Media',
-             'Catering', 'Security Services', 'Maintenance', 'Staffing'],
-            'v-kind|' . $i
-        );
-        $suffix = $this->pick(['Ltd', 'LLC', 'Inc', 'Group', 'Partners', 'Co'], 'v-suf|' . $i);
-        $contactFore = $this->pick(['Sam', 'Alex', 'Jo', 'Robin', 'Casey', 'Drew', 'Lee', 'Morgan', 'Riley', 'Quinn'], 'v-cf|' . $i);
-        $contactSur = $this->pick(['Doyle', 'Hart', 'Ford', 'Beck', 'Cole', 'Frost', 'Nash', 'Reed', 'Vaughn', 'Marsh'], 'v-cs|' . $i);
-
-        // Masked, non-validating remit detail. Only the mask shows; the digits are fabricated and the
-        // IBAN carries no valid check-digit / length, so a copied value fails any real validator.
-        $acct4 = sprintf('%04d', $this->intIn(0, 9999, 'v-acct|' . $i));
-        $sort2 = sprintf('%02d', $this->intIn(0, 99, 'v-sort|' . $i));
-        $iban4 = sprintf('%04d', $this->intIn(0, 9999, 'v-iban|' . $i));
+        $id = 'vendor-' . sprintf('%04d', 1001 + $i);
+        $v = $this->vendors->vendor($id);
+        $remit = $this->vendors->remitToFor($id);
+        $contact = $this->vendors->contactFor($id);
 
         return [
-            'id' => 'ven-' . sprintf('%04d', 1000 + $i),
-            'name' => $stem . ' ' . $kind . ' ' . $suffix,
-            'category' => $kind,
-            'contact' => $contactFore . ' ' . $contactSur,
-            'bankName' => 'Escrow Settlement Account',     // generic, not a real bank
-            'acctMasked' => '••••' . $acct4,
-            'sortMasked' => '••-••-' . $sort2,
-            'ibanMasked' => 'XX•• •••• •••• •••• ' . $iban4,
-            'ytdSpend' => $this->intIn(20000, 4800000, 'v-ytd|' . $i) * 100,
+            'id' => $v['id'],
+            'name' => $v['name'],
+            'category' => $v['category'],
+            'contact' => $contact[0],
+            'bankName' => $remit['bank'],
+            'acctMasked' => $remit['accountMasked'],
+            'sortMasked' => $remit['sortMasked'],
+            'ibanMasked' => $remit['ibanMasked'],
+            'ytdSpend' => $v['spendYtd'],
         ];
     }
 
@@ -491,9 +466,12 @@ final class Finance
         ];
         $plantBankChange = ($this->h('bankanom') % 3) === 0;
         $out = [];
+        // Walk back from "now" by a CUMULATIVE per-row gap, so timestamps are strictly descending down
+        // the page (newest first) — never the non-monotonic order an independent per-row gap produced.
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'aud|' . $i;
-            $epoch = self::DEPLOY_EPOCH - ($i * $this->intIn(200, 5400, $salt . '|gap')) - $this->intIn(0, 59, $salt . '|j');
+            $epoch -= $this->intIn(200, 5400, $salt . '|gap');   // each gap > 0 => strictly descending
             $actor = $roster[$this->h($salt . '|who') % $n];
             $action = $actions[$this->h($salt . '|act') % count($actions)];
             $ref = sprintf('INV-%s-%06d', self::FY, self::INV_BASE + ($this->h($salt . '|ref') % $this->invoiceCount()));
@@ -516,14 +494,10 @@ final class Finance
 
     // --- small helpers ---
 
-    /** HH:MM:SS for an absolute epoch, by integer arithmetic only (no date()/gmdate). */
+    /** HH:MM:SS for an absolute epoch, from the one shared clock (integer arithmetic; no date()). */
     private function clock(int $epoch): string
     {
-        $s = $epoch % 86400;
-        if ($s < 0) {
-            $s += 86400;
-        }
-        return sprintf('%02d:%02d:%02d', intdiv($s, 3600), intdiv($s % 3600, 60), $s % 60);
+        return FrozenClock::clock($epoch);
     }
 
     /**

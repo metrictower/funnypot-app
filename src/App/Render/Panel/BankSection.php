@@ -499,12 +499,11 @@ final class BankSection extends AbstractPanelSection
         return isset($map[$verb]) ? $map[$verb] : ucfirst($verb);
     }
 
-    /** Whole-dollar money formatting; a negative reads as -$N. */
+    /** Integer-cents currency formatter — exact (no float drift), $1,234.56, matching the finance family. */
     private function money(int $cents): string
     {
-        if ($cents < 0) {
-            return '-$' . number_format(-$cents);
-        }
-        return '$' . number_format($cents);
+        $sign = $cents < 0 ? '-' : '';
+        $c = $cents < 0 ? -$cents : $cents;
+        return $sign . '$' . number_format(intdiv($c, 100)) . '.' . sprintf('%02d', $c % 100);
     }
 }

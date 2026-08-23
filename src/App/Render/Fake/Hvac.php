@@ -28,7 +28,7 @@ namespace Funnypot\App\Render\Fake;
 final class Hvac
 {
     /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Org. */
-    public const DEPLOY_EPOCH = 1756000000;
+    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
 
     /** BACnet/IP port every BMS controller answers on (matches Building's BMS controllers). */
     public const BACNET_PORT = 47808;

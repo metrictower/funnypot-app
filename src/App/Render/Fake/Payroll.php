@@ -27,9 +27,9 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Payroll
 {
-    /** Frozen "now": the latest (current) pay period. No date()/time() anywhere; matches the .csv naming. */
-    public const ANCHOR_YEAR = 2026;
-    public const ANCHOR_MONTH = 8;
+    /** Frozen "now": the latest (current) pay period, read from the one shared clock (no date()/time()). */
+    public const ANCHOR_YEAR = FrozenClock::YEAR;
+    public const ANCHOR_MONTH = FrozenClock::MONTH;
 
     /** How many monthly runs the register goes back (frozen, deterministic). */
     public const RUN_HISTORY = 20;

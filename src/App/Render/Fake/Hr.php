@@ -27,9 +27,9 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Hr
 {
-    /** Frozen "now" for start dates / tenure math — matches Payroll's anchor. No date()/time(). */
-    public const ANCHOR_YEAR = 2026;
-    public const ANCHOR_MONTH = 8;
+    /** Frozen "now" for start dates / tenure math — read from the one shared clock. No date()/time(). */
+    public const ANCHOR_YEAR = FrozenClock::YEAR;
+    public const ANCHOR_MONTH = FrozenClock::MONTH;
 
     /** @var int */
     private $seed;

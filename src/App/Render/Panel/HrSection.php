@@ -578,14 +578,6 @@ final class HrSection extends AbstractPanelSection
         $ps = $payroll->payslip($runId, $empId);
         $base = $navBase . '/hr/payroll/' . $ps['runId'];
 
-        $earnRows = '';
-        foreach ($ps['earnings'] as $e) {
-            $earnRows .= '<tr><td>' . $this->esc($e[0]) . '</td><td>' . $this->esc($this->money($e[1])) . '</td></tr>';
-        }
-        $dedRows = '';
-        foreach ($ps['deductions'] as $d) {
-            $dedRows .= '<tr><td>' . $this->esc($d[0]) . '</td><td>' . $this->esc($this->money($d[1])) . '</td></tr>';
-        }
         $table = '<table class="alte-table"><thead><tr><th>Item</th><th>Current</th><th>YTD</th></tr></thead><tbody>'
             . '<tr><th colspan="3" style="text-align:left">Earnings</th></tr>'
             . '<tr><td>Base salary</td><td>' . $this->esc($this->money($ps['gross'])) . '</td><td>' . $this->esc($this->money($ps['ytdGross'])) . '</td></tr>'
@@ -815,10 +807,14 @@ final class HrSection extends AbstractPanelSection
         return $prefix . '-' . strtoupper(substr(hash('sha256', $seed . '|hrcmd|' . $slot), 0, 6));
     }
 
-    /** Whole-unit currency, e.g. 123456 -> "$123,456". Amounts are ints, so no rounding drift. */
-    private function money(int $n): string
+    /**
+     * Currency display, $1,234.56 — the one convention across the finance-family modules. Payroll amounts
+     * are whole dollars, so the cents read .00; the fixed two-decimal form keeps the format consistent
+     * with Finance/Bank/Vendors (no module shows a bare $1,234 next to another's $1,234.56).
+     */
+    private function money(int $dollars): string
     {
-        return '$' . number_format($n);
+        return '$' . number_format($dollars, 2);
     }
 
     private function statusPill(string $status): string

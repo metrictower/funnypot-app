@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Panel;
 
+use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\VendorsSection;
 use Funnypot\App\Render\PanelRoute;
@@ -259,6 +260,38 @@ final class VendorsSectionTest extends TestCase
             $n = \Funnypot\App\Render\Fake\Org::fromSeed($seed)->headcount();
             $expected = (int) round($n * 0.6) + 20;
             self::assertSame($expected, Vendors::fromSeed($seed)->vendorCount(), "seed $seed count scales off N");
+        }
+    }
+
+    // --- P6: due date follows the invoice date + terms; daysPastDue is "now − due" ---
+
+    public function test_invoice_due_and_days_past_due_are_consistent(): void
+    {
+        $nowDays = FrozenClock::nowDays();
+        for ($seed = 0; $seed < 3; $seed++) {
+            $vendors = Vendors::fromSeed($seed, 'example.test');
+            for ($k = 0; $k < 12; $k++) {
+                $id = 'vendor-' . sprintf('%04d', 1001 + $k);
+                foreach ($vendors->invoicesFor($id) as $inv) {
+                    // Due date is never before the invoice date.
+                    self::assertGreaterThanOrEqual($inv['date'], $inv['due'], "seed $seed $id due >= date");
+                    // daysPastDue equals the frozen "now" minus the due date, measured in whole days.
+                    $dueParts = explode('-', $inv['due']);
+                    $dueDays = FrozenClock::daysFromCivil((int) $dueParts[0], (int) $dueParts[1], (int) $dueParts[2]);
+                    self::assertSame($nowDays - $dueDays, $inv['daysPastDue'], "seed $seed $id daysPastDue = now − due");
+                }
+            }
+        }
+    }
+
+    // --- M4: the bank-change honeytoken is a true 0-2 budget, never a buffet ---
+
+    public function test_bank_change_flag_is_budgeted_zero_to_two(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $s = Vendors::fromSeed($seed, 'example.test')->summary();
+            self::assertLessThanOrEqual(2, $s['bankChanges'], "seed $seed at most 2 flagged vendors");
+            self::assertGreaterThanOrEqual(0, $s['bankChanges']);
         }
     }
 }

@@ -304,7 +304,7 @@ final class FinanceSection extends AbstractPanelSection
                     ['Routed to', $second['name'] . ' (' . $second['title'] . ')'],
                     ['Request', $ref . ' · awaiting second approver'],
                 ],
-                'The payment request was recorded and routed to the CFO for secondary authorization. No funds have moved and no bank system was contacted; the invoice balance is unchanged until a second authorized approver releases it.'
+                'The payment request was recorded and routed for secondary authorization. No funds have moved and no bank system was contacted; the invoice balance is unchanged until a second authorized approver releases it.'
             );
             return $this->breadcrumbHtml($crumbs) . $body;
         }
@@ -338,13 +338,15 @@ final class FinanceSection extends AbstractPanelSection
             . $this->controlResultCard(ucfirst($verb) . ' — ' . $inv['number'], $detail);
     }
 
-    /** Resolve the vendor record behind an invoice (for the remit-to panel), by matching vendor id. */
+    /** Resolve the vendor record behind an invoice (for the remit-to panel) directly from its id. */
     private function vendorForInvoice(Finance $fin, array $inv): array
     {
-        for ($j = 0; $j < $fin->vendorCount(); $j++) {
-            $v = $fin->vendorAt($j);
-            if ($v['id'] === $inv['vendorId']) {
-                return $v;
+        // Vendor ids are 'vendor-NNNN' where NNNN = 1001 + index; recover the index without a linear scan.
+        $id = $inv['vendorId'];
+        if (strpos($id, 'vendor-') === 0 && ctype_digit(substr($id, 7))) {
+            $i = ((int) substr($id, 7)) - 1001;
+            if ($i >= 0 && $i < $fin->vendorCount()) {
+                return $fin->vendorAt($i);
             }
         }
         return $fin->vendorAt(0);

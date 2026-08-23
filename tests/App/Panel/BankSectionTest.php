@@ -278,4 +278,52 @@ final class BankSectionTest extends TestCase
             self::assertSame($bank->cardCount(), count($bank->cards()), "seed $seed fleet size");
         }
     }
+
+    // --- P1: the ledger never predates the account's open date ---
+
+    public function test_oldest_ledger_row_is_not_older_than_the_account_open_date(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $bank = Bank::fromSeed($seed);
+            foreach ($bank->accounts() as $a) {
+                $total = $bank->ledgerCount($a['id']);
+                self::assertGreaterThan(0, $total, "seed $seed {$a['id']} has ledger rows");
+                // The oldest row (highest global index) must not fall before the account opened.
+                $oldest = $bank->ledgerPage($a['id'], $total - 1, 1);
+                self::assertCount(1, $oldest);
+                self::assertGreaterThanOrEqual(
+                    $a['opened'],
+                    $oldest[0]['date'],
+                    "seed $seed {$a['id']} oldest ledger row {$oldest[0]['date']} >= opened {$a['opened']}"
+                );
+            }
+        }
+    }
+
+    // --- M5: no $0 ledger rows; several transactions may share a day ---
+
+    public function test_no_zero_amount_ledger_rows(): void
+    {
+        for ($seed = 0; $seed < 5; $seed++) {
+            $bank = Bank::fromSeed($seed);
+            foreach ($bank->accounts() as $a) {
+                foreach ($bank->ledgerPage($a['id'], 0, 200) as $r) {
+                    self::assertNotSame(0, $r['amountSigned'], "seed $seed {$a['id']} no \$0 row");
+                }
+            }
+        }
+    }
+
+    // --- P5: the card reveal ends in the same last four the mask showed ---
+
+    public function test_card_reveal_ends_with_masked_last4(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $bank = Bank::fromSeed($seed);
+            foreach ($bank->cards() as $c) {
+                $pan = str_replace(' ', '', $bank->cardReveal($c['id']));
+                self::assertStringEndsWith($c['last4'], $pan, "seed $seed card {$c['id']} reveal ends in last4");
+            }
+        }
+    }
 }

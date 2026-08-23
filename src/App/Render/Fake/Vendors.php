@@ -31,9 +31,6 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Vendors
 {
-    /** Frozen "now" for ages/dates so a static reload is not a tell. Matches Building/Org/Access. */
-    public const DEPLOY_EPOCH = 1756000000;
-
     /** @var int */
     private $seed;
 
@@ -81,22 +78,12 @@ final class Vendors
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** Seeded "N ago" string off DEPLOY_EPOCH — deterministic, never time()/date(). */
-    private function ageAgo(string $salt): string
+    /** Terms string -> net days (Due on receipt = 0); drives due-date arithmetic off the invoice date. */
+    private function termsDays(string $vendorId): int
     {
-        $sec = $this->intIn(3600, 7776000, $salt);           // 1 h .. 90 days
-        if ($sec < 172800) {
-            return (int) round($sec / 3600) . ' h ago';
-        }
-        return (int) round($sec / 86400) . ' d ago';
-    }
-
-    /** A plausible 2026 year-to-date date string (through the frozen August "now"), integer-derived. */
-    private function ymd(string $salt): string
-    {
-        $month = $this->intIn(1, 8, $salt . '|m');
-        $day = $this->intIn(1, 28, $salt . '|d');
-        return sprintf('2026-%02d-%02d', $month, $day);
+        $map = ['Net 15' => 15, 'Net 30' => 30, 'Net 45' => 45, 'Net 60' => 60, 'Due on receipt' => 0];
+        $terms = $this->pick(['Net 15', 'Net 30', 'Net 45', 'Net 60', 'Due on receipt'], 'terms|' . $vendorId);
+        return $map[$terms];
     }
 
     // --- magnitude (scales off the one Org headcount so nothing contradicts) ---
@@ -240,12 +227,25 @@ final class Vendors
     }
 
     /**
-     * The planted "vendor bank details recently changed" flag — the in-progress-fraud bait. Budgeted:
-     * at most a couple of vendors across the whole ledger carry it (keyed so it is stable per vendor).
+     * The planted "vendor bank details recently changed" flag — the in-progress-fraud bait. A true 0-2
+     * budget for the WHOLE ledger (not a per-vendor probability): the seed picks a count 0-2 and the one
+     * or two specific vendor indices that carry it, so the honeytoken never turns into a buffet. Synthetic
+     * (off-ledger) ids never carry it.
      */
     private function bankChangedFlag(string $id): bool
     {
-        return ($this->h('bankchg|' . $id) % 40) === 0;
+        $idx = $this->indexOfId($id);
+        if ($idx === null) {
+            return false;
+        }
+        $count = $this->h('bankchg-count') % 3;              // 0, 1 or 2 flagged vendors
+        if ($count >= 1 && $idx === $this->h('bankchg-1') % $this->vendorCount()) {
+            return true;
+        }
+        if ($count >= 2 && $idx === $this->h('bankchg-2') % $this->vendorCount()) {
+            return true;
+        }
+        return false;
     }
 
     // --- invoices (self-contained, reconciling) ---
@@ -270,7 +270,9 @@ final class Vendors
     private function invoiceAt(string $vendorId, int $k): array
     {
         $salt = $vendorId . '|inv|' . $k;
-        $num = 1000 + ($this->h($salt . '|num') % 900000);
+        // Vendor-side invoice numbers live in a HIGH band (>=100000) that never overlaps Finance's AP
+        // corpus (INV-2026-004001..), so one number can never resolve to two different invoices.
+        $num = 100000 + ($this->h($salt . '|num') % 800000);   // 100000..899999
         $routeId = 'inv-2026-' . sprintf('%06d', $num);
         $display = 'INV-2026-' . sprintf('%06d', $num);
 
@@ -300,31 +302,36 @@ final class Vendors
         $tax = intdiv($subtotal * $rate, 100);               // exact integer cents
         $total = $subtotal + $tax;
 
-        // Payment state — paid + balance always equals total.
+        // Dates close: invoice date is within ~200 days of the frozen "now"; the due date is the invoice
+        // date plus the vendor's own payment terms (so due >= date always); daysPastDue is "now − due"
+        // measured off the same clock (negative when the invoice is not yet due).
+        $ageDays = $this->h($salt . '|age') % 201;            // 0..200 days ago
+        $dateEpoch = FrozenClock::EPOCH - $ageDays * 86400;
+        $dueEpoch = $dateEpoch + $this->termsDays($vendorId) * 86400;
+        $daysPastDue = FrozenClock::nowDays() - intdiv($dueEpoch, 86400);
+
+        // Payment state — paid + balance always equals total. Overdue only when unpaid AND past due.
         $roll = $this->h($salt . '|pay') % 100;
         if ($roll < 55) {
             $paid = $total;
             $balance = 0;
             $status = 'Paid';
-            $days = 0;
         } elseif ($roll < 70) {
             $pct = 10 + ($this->h($salt . '|ppct') % 80);    // 10..89 %
             $paid = intdiv($total * $pct, 100);
             $balance = $total - $paid;
             $status = 'Partial';
-            $days = $this->intIn(-15, 120, $salt . '|days');
         } else {
             $paid = 0;
             $balance = $total;
-            $days = $this->intIn(-20, 150, $salt . '|days');
-            $status = $days > 0 ? 'Overdue' : 'Open';
+            $status = $daysPastDue > 0 ? 'Overdue' : 'Open';
         }
 
         return [
             'routeId' => $routeId,
             'display' => $display,
-            'date' => $this->ymd($salt . '|date'),
-            'due' => $this->ymd($salt . '|due'),
+            'date' => FrozenClock::ymd($dateEpoch),
+            'due' => FrozenClock::ymd($dueEpoch),
             'po' => 'PO-2026-' . sprintf('%05d', 100 + ($this->h($salt . '|po') % 89000)),
             'lines' => $lines,
             'subtotalCents' => $subtotal,
@@ -334,7 +341,7 @@ final class Vendors
             'paidCents' => $paid,
             'balanceCents' => $balance,
             'status' => $status,
-            'daysPastDue' => $days,
+            'daysPastDue' => $daysPastDue,
         ];
     }
 

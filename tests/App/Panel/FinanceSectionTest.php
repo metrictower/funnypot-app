@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Panel;
 
+use Funnypot\App\Render\Fake\Bank;
 use Funnypot\App\Render\Fake\Finance;
+use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Org;
+use Funnypot\App\Render\Fake\Payroll;
+use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\FinanceSection;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\App\Render\VisualPersona;
@@ -175,8 +179,9 @@ final class FinanceSectionTest extends TestCase
     {
         $html = $this->render('/admin/finance/ap/inv-2026-004001');
         self::assertStringContainsString('••••', $html, 'account masked');
-        // The IBAN carries an invalid country stub so a copied value validates against nothing.
-        self::assertStringContainsString('XX••', $html, 'IBAN masked + invalid-format');
+        // Remit-to is the shared Fake\Vendors record: the IBAN carries the always-invalid "00" check
+        // digits (ISO 13616 forbids 00/01), so a copied value validates against nothing.
+        self::assertMatchesRegularExpression('/[A-Z]{2}00 •••• •••• •••• ••\d{2}/', $html, 'IBAN masked + invalid check digits');
     }
 
     public function test_every_email_is_at_the_one_persona_domain(): void
@@ -279,6 +284,109 @@ final class FinanceSectionTest extends TestCase
                 $names[] = $p['name'];
             }
             self::assertContains($second['name'], $names, "seed $seed CFO is in the roster");
+        }
+    }
+
+    // --- P2: the finance cash tile equals the treasury total (one cash figure on one host) ---
+
+    public function test_finance_cash_on_hand_equals_bank_treasury_total(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $fin = Finance::fromSeed($seed, 'example.test')->dashboard();
+            $bank = Bank::fromSeed($seed, 'example.test')->summary();
+            self::assertSame($bank['cashOnHand'], $fin['cashOnHand'], "seed $seed finance cash == bank total");
+        }
+    }
+
+    // --- P3: one vendor book, and invoice-number ranges that never collide ---
+
+    public function test_finance_vendor_resolves_on_the_vendors_module(): void
+    {
+        for ($seed = 0; $seed < 4; $seed++) {
+            $fin = Finance::fromSeed($seed, 'example.test');
+            $vendors = Vendors::fromSeed($seed, 'example.test');
+            // A vendor named on an AP invoice must resolve to the same record under /panel/vendors.
+            for ($i = 0; $i < 15; $i++) {
+                $inv = $fin->invoiceAt($i);
+                $v = $vendors->vendor($inv['vendorId']);
+                self::assertSame($inv['vendorId'], $v['id'], "seed $seed inv $i vendor id resolves");
+                self::assertSame($inv['vendorName'], $v['name'], "seed $seed inv $i vendor name agrees");
+            }
+        }
+    }
+
+    public function test_finance_and_vendor_invoice_numbers_never_collide(): void
+    {
+        for ($seed = 0; $seed < 3; $seed++) {
+            $fin = Finance::fromSeed($seed, 'example.test');
+            $vendors = Vendors::fromSeed($seed, 'example.test');
+            // Finance AP numbers live below 100000; vendor-side numbers at/above it — disjoint ranges.
+            for ($i = 0; $i < 20; $i++) {
+                $num = (int) substr($fin->invoiceAt($i)['number'], -6);
+                self::assertLessThan(100000, $num, "seed $seed finance invoice $i below the vendor band");
+            }
+            for ($k = 0; $k < 12; $k++) {
+                foreach ($vendors->invoicesFor('vendor-' . sprintf('%04d', 1001 + $k)) as $inv) {
+                    $num = (int) substr($inv['display'], -6);
+                    self::assertGreaterThanOrEqual(100000, $num, "seed $seed vendor invoice in the vendor band");
+                }
+            }
+        }
+    }
+
+    // --- P4: the audit scroll is strictly newest-first ---
+
+    public function test_audit_log_timestamps_are_monotonic(): void
+    {
+        for ($seed = 0; $seed < 5; $seed++) {
+            $lines = Finance::fromSeed($seed, 'example.test')->auditLog(220);
+            $prev = null;
+            foreach ($lines as $line) {
+                $stamp = substr($line, 0, 19);               // "YYYY-MM-DD HH:MM:SS" — ISO, lexicographic
+                if ($prev !== null) {
+                    self::assertLessThanOrEqual($prev, $stamp, "seed $seed audit rows descend");
+                }
+                $prev = $stamp;
+            }
+        }
+    }
+
+    // --- P7: the four-eyes approver carries their real HR title ---
+
+    public function test_second_approver_title_matches_hr_directory(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $second = Finance::fromSeed($seed, 'example.test')->secondApprover();
+            $org = Org::fromSeed($seed, 'example.test');
+            $title = null;
+            foreach ($org->people($org->headcount()) as $p) {
+                if ($p['name'] === $second['name']) {
+                    $title = $p['title'];
+                    break;
+                }
+            }
+            self::assertNotNull($title, "seed $seed approver is in the directory");
+            self::assertSame($title, $second['title'], "seed $seed approver title == HR title");
+            self::assertNotSame('Chief Financial Officer', $second['title'], "seed $seed no hard-coded CFO title unless HR says so");
+            // Same senior signer the payroll four-eyes wall waits on (cross-module coherence).
+            self::assertSame(Payroll::fromSeed($seed, 'example.test')->secondApprover()['name'], $second['name'], "seed $seed same signer as payroll");
+        }
+    }
+
+    // --- M6: every finance-family module reads one frozen "today" ---
+
+    public function test_modules_agree_on_one_frozen_today(): void
+    {
+        $today = FrozenClock::todayYmd();
+        for ($seed = 0; $seed < 4; $seed++) {
+            // Finance "as of" and the newest bank ledger row must both read the one frozen day.
+            self::assertSame($today, Finance::fromSeed($seed, 'example.test')->asOf(), "seed $seed finance asOf");
+            $newest = Bank::fromSeed($seed, 'example.test')->ledgerPage('acct-reserve', 0, 1);
+            self::assertSame($today, $newest[0]['date'], "seed $seed bank newest ledger date");
+            // Payroll's current period anchors to the same year/month.
+            $run = Payroll::fromSeed($seed, 'example.test')->runs()[0];
+            self::assertSame(FrozenClock::YEAR, $run['year'], "seed $seed payroll year");
+            self::assertSame(FrozenClock::MONTH, $run['monthNumber'], "seed $seed payroll month");
         }
     }
 }
