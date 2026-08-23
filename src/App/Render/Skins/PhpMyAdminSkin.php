@@ -40,7 +40,7 @@ final class PhpMyAdminSkin extends AbstractSkin
         return 'phpmyadmin';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
         $company = $this->esc($persona->company());
         $domain = $this->esc($persona->domain());

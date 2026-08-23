@@ -22,10 +22,10 @@ final class PageShellRenderer
         try {
             $escapedPath = Esc::text(substr($ctx->path, 0, 200));
             $slots = $slots->resolveMarkers($persona);
-            return $this->skins->select($ctx->path)->render($slots, $persona, $escapedPath);
+            return $this->skins->select($ctx->path)->render($slots, $persona, $escapedPath, $ctx->path);
         } catch (Throwable $e) {
             // Defensive floor: an empty-slot render of the default skin is always safe.
-            return (new GenericSkin())->render(PageSlots::fromArray([]), $persona, '');
+            return (new GenericSkin())->render(PageSlots::fromArray([]), $persona, '', $ctx->path);
         }
     }
 }

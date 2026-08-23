@@ -15,6 +15,10 @@ interface Skin
     /** Stable identifier for logging/selection — not shown to the visitor. */
     public function key(): string;
 
-    /** $escapedPath is pre-escaped by the caller — safe to place directly into a text/attribute sink. */
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string;
+    /**
+     * $escapedPath is pre-escaped by the caller — safe to place directly into a text/attribute sink.
+     * $path is the RAW request path (unescaped) — used only to derive safe sibling nav links via
+     * AbstractSkin::navBase(); never placed into output directly. Defaults to '' (root-level nav).
+     */
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string;
 }

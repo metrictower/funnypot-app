@@ -34,10 +34,11 @@ final class GenericSkin extends AbstractSkin
         return 'generic';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
         $p = $persona->classPrefix();
         $pal = $persona->palette();
+        $navBase = $this->navBase($path);
 
         // Structural picks: deterministic per persona seed (same deployment always renders the same
         // skeleton), independent per axis via distinct salts (so they don't move in lockstep with
@@ -67,7 +68,7 @@ final class GenericSkin extends AbstractSkin
             $body .= '<div class="' . $p . '-crumbs">Home</div>';
         }
 
-        $body .= $this->nav($p, $navWord, $navAsList, $slots->navItems());
+        $body .= $this->nav($p, $navWord, $navAsList, $slots->navItems(), $navBase);
 
         $body .= '<' . $wrapTag . ' class="' . $p . '-' . $boxWord . '">';
         $body .= $this->heading($slots->heading());
@@ -134,17 +135,17 @@ final class GenericSkin extends AbstractSkin
     }
 
     /** @param list<string> $items */
-    private function nav(string $p, string $word, bool $asList, array $items): string
+    private function nav(string $p, string $word, bool $asList, array $items, string $navBase = ''): string
     {
         if ($items === []) {
             return '';
         }
         if (!$asList) {
-            return '<nav class="' . $p . '-' . $word . '">' . $this->navHtml($items) . '</nav>';
+            return '<nav class="' . $p . '-' . $word . '">' . $this->navHtml($items, '', $navBase) . '</nav>';
         }
         $html = '<ul class="' . $p . '-' . $word . '-list">';
         foreach ($items as $item) {
-            $html .= '<li>' . $this->navHtml([$item]) . '</li>';
+            $html .= '<li>' . $this->navHtml([$item], '', $navBase) . '</li>';
         }
         $html .= '</ul>';
         return '<nav class="' . $p . '-' . $word . '">' . $html . '</nav>';

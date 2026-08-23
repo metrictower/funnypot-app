@@ -28,8 +28,9 @@ final class GrafanaSkin extends AbstractSkin
         return 'grafana';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
+        $navBase = $this->navBase($path);
         $company = $this->esc($persona->company());
         $title = $slots->heading() !== '' ? $slots->heading() : ($slots->appName() !== '' ? $slots->appName() : 'Dashboard');
         $titleEsc = $this->esc($title);
@@ -38,7 +39,7 @@ final class GrafanaSkin extends AbstractSkin
             . '<span class="gf-topnav-title">' . $titleEsc . '</span></div>';
 
         $html .= '<div class="gf-shell">';
-        $html .= $this->rail($slots->navItems());
+        $html .= $this->rail($slots->navItems(), $navBase);
 
         $html .= '<main class="gf-content">';
         $html .= '<h1 class="gf-dashboard-title">' . $titleEsc . '</h1>';
@@ -65,9 +66,9 @@ final class GrafanaSkin extends AbstractSkin
     }
 
     /** @param list<string> $items */
-    private function rail(array $items): string
+    private function rail(array $items, string $navBase = ''): string
     {
-        return '<nav class="gf-rail">' . $this->navHtml($items, 'gf-rail-item') . '</nav>';
+        return '<nav class="gf-rail">' . $this->navHtml($items, 'gf-rail-item', $navBase) . '</nav>';
     }
 
     /**

@@ -12,7 +12,7 @@ final class SkinSetTest extends TestCase
         $wp = new class implements Skin {
             public function matches(string $path): bool { return str_contains($path, '/wp-'); }
             public function key(): string { return 'wp'; }
-            public function render(PageSlots $s, VisualPersona $p, string $ep): string { return 'WP'; }
+            public function render(PageSlots $s, VisualPersona $p, string $ep, string $path = ''): string { return 'WP'; }
         };
         $set = new SkinSet([$wp], new GenericSkin());
         self::assertSame('wp', $set->select('/wp-login.php')->key());

@@ -83,12 +83,12 @@ abstract class AbstractSkin implements Skin
      * @param list<string> $items
      * @param string $linkClass trusted literal class name, or '' for no class attribute
      */
-    protected function navHtml(array $items, string $linkClass = ''): string
+    protected function navHtml(array $items, string $linkClass = '', string $navBase = ''): string
     {
         $classAttr = $linkClass !== '' ? ' class="' . $linkClass . '"' : '';
         $html = '';
         foreach ($items as $item) {
-            $href = $this->esc($this->navHref($item));
+            $href = $this->esc($this->navHref($item, $navBase));
             $html .= '<a' . $classAttr . ' href="' . $href . '">' . $this->esc($item) . '</a>';
         }
         return $html;
@@ -104,9 +104,33 @@ abstract class AbstractSkin implements Skin
      * alnum content to slug (still run through esc() by the caller as attribute
      * defense-in-depth, though the slug is already the real guard).
      */
-    private function navHref(string $label): string
+    private function navHref(string $label, string $navBase = ''): string
     {
         $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($label)), '-');
-        return $slug === '' ? '#' : '/' . $slug;
+        return $slug === '' ? '#' : $navBase . '/' . $slug;
+    }
+
+    /**
+     * The safe base for sibling nav links: the current request path's PARENT directory, each segment
+     * slugified to [a-z0-9-] exactly like a nav label. A nav link then stays under the same prefix the
+     * crawler is already on (/panel/dashboard -> base /panel -> /panel/logs) instead of jumping to a
+     * root path a different rule owns. Per-segment slugging keeps the base structurally safe even
+     * though the request path is attacker-controlled (no scheme, quote, //host or breakout survives).
+     * Returns '' for a root-level or empty path, so navHref falls back to a root slug (/logs).
+     */
+    protected function navBase(string $path): string
+    {
+        $segs = [];
+        foreach (explode('/', $path) as $seg) {
+            if ($seg === '') {
+                continue;
+            }
+            $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($seg)), '-');
+            if ($slug !== '') {
+                $segs[] = $slug;
+            }
+        }
+        array_pop($segs); // nav links are siblings of the current leaf, so drop it
+        return $segs === [] ? '' : '/' . implode('/', $segs);
     }
 }

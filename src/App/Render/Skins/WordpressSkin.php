@@ -28,7 +28,7 @@ final class WordpressSkin extends AbstractSkin
         return 'wordpress';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
         $siteRaw = $slots->appName() !== '' ? $slots->appName() : $persona->company();
         $site = $this->esc($siteRaw);

@@ -29,6 +29,9 @@ final class AdminLteSkin extends AbstractSkin
         return PathSegments::hasSegmentOrDotSuffix($path, 'admin')
             || PathSegments::hasSegmentOrDotSuffix($path, 'dashboard')
             || PathSegments::hasSegmentOrDotSuffix($path, 'manage')
+            || PathSegments::hasSegmentOrDotSuffix($path, 'panel')
+            || PathSegments::hasSegmentOrDotSuffix($path, 'console')
+            || PathSegments::hasSegmentOrDotSuffix($path, 'cp')
             || PathSegments::has($path, 'administrator');
     }
 
@@ -37,8 +40,9 @@ final class AdminLteSkin extends AbstractSkin
         return 'adminlte';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
     {
+        $navBase = $this->navBase($path);
         $company = $this->esc($persona->company());
         $appName = $this->esc($slots->appName());
         $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $slots->appName();
@@ -55,7 +59,7 @@ final class AdminLteSkin extends AbstractSkin
         $html .= '<aside class="alte-sidebar">';
         $html .= '<ul class="alte-nav-sidebar">';
         foreach ($slots->navItems() as $item) {
-            $html .= '<li class="alte-nav-item">' . $this->navHtml([$item], 'alte-nav-link') . '</li>';
+            $html .= '<li class="alte-nav-item">' . $this->navHtml([$item], 'alte-nav-link', $navBase) . '</li>';
         }
         $html .= '</ul>';
         $html .= '</aside>';
