@@ -20,6 +20,11 @@ use Funnypot\RequestContext;
  */
 final class AttackClassifier
 {
+    /** AI-inference-API reconnaissance (a client probing our fake ollama/OpenAI/Anthropic chat
+     *  endpoints). Labelled directly by the AI-API handler by path, not via the payload-regex
+     *  classify() below — hence no PATTERNS entry. */
+    public const AI_API_RECON = 'ai_api_recon';
+
     /** class => [regex, ...]; first class with any match wins. Ordered most-severe first. */
     private const PATTERNS = [
         'rce' => [
@@ -58,7 +63,7 @@ final class AttackClassifier
         ],
     ];
 
-    private const SEVERITY = ['rce' => 'critical', 'sqli' => 'high', 'lfi' => 'high', 'xss' => 'medium'];
+    private const SEVERITY = ['rce' => 'critical', 'sqli' => 'high', 'lfi' => 'high', 'xss' => 'medium', 'ai_api_recon' => 'medium'];
 
     /** The attack class present in the request, or null. */
     public function classify(RequestContext $r): ?string
