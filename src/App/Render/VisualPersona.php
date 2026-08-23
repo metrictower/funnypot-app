@@ -92,4 +92,31 @@ final class VisualPersona
         }
         return 'AKIA' . strtoupper(substr(hash('sha256', $this->seed . '|awskey|'), 0, 16));
     }
+
+    /**
+     * A deterministic fake person for $key (e.g. a table row id), scoped to this persona's seed.
+     *
+     * @return array{first:string,last:string,full:string,userName:string}
+     */
+    public function person(string $key): array
+    {
+        return FakePeople::person($this->seed, $key);
+    }
+
+    /** person($key)'s email at THIS persona's company domain, so a fake user table never
+     *  contradicts the company/domain shown elsewhere on the same host. */
+    public function personEmail(string $key): string
+    {
+        return FakePeople::email($this->person($key), $this->domain());
+    }
+
+    public function personJobTitle(string $key): string
+    {
+        return FakePeople::jobTitle($this->seed, $key);
+    }
+
+    public function personCity(string $key): string
+    {
+        return FakePeople::city($this->seed, $key);
+    }
 }

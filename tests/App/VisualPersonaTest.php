@@ -58,4 +58,46 @@ final class VisualPersonaTest extends TestCase
         // high-entropy password must, and it's enough to prove the accessor isn't a fixed constant.
         self::assertNotSame($x->dbPassword(), $y->dbPassword());
     }
+
+    public function test_person_is_deterministic_per_seed_and_key(): void
+    {
+        $a = VisualPersona::fromSeed(123);
+        $b = VisualPersona::fromSeed(123);
+        self::assertSame($a->person('row-0'), $b->person('row-0'));
+    }
+
+    public function test_person_diverges_by_key(): void
+    {
+        $p = VisualPersona::fromSeed(123);
+        self::assertNotSame($p->person('row-0'), $p->person('row-1'));
+    }
+
+    /** Coherence: personEmail must use THIS persona's company domain, not a fixed placeholder
+     *  like example.com — a fake user table must never contradict the company shown elsewhere. */
+    public function test_person_email_uses_persona_domain_not_example_com(): void
+    {
+        $p = VisualPersona::fromSeed(123);
+        $domain = $p->domain();
+
+        self::assertNotSame('example.com', $domain);
+        self::assertStringEndsWith('@' . $domain, $p->personEmail('row-0'));
+        self::assertSame($p->person('row-0')['userName'] . '@' . $domain, $p->personEmail('row-0'));
+    }
+
+    public function test_person_email_is_deterministic(): void
+    {
+        $a = VisualPersona::fromSeed(456);
+        $b = VisualPersona::fromSeed(456);
+        self::assertSame($a->personEmail('row-2'), $b->personEmail('row-2'));
+    }
+
+    public function test_person_job_title_and_city_are_deterministic_and_nonempty(): void
+    {
+        $a = VisualPersona::fromSeed(9);
+        $b = VisualPersona::fromSeed(9);
+        self::assertSame($a->personJobTitle('row-0'), $b->personJobTitle('row-0'));
+        self::assertSame($a->personCity('row-0'), $b->personCity('row-0'));
+        self::assertNotSame('', $a->personJobTitle('row-0'));
+        self::assertNotSame('', $a->personCity('row-0'));
+    }
 }
