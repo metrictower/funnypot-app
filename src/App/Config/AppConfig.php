@@ -62,6 +62,10 @@ final class AppConfig
         public bool $llmEnabled,
         /** Fake AI inference API — the chat-completion endpoints (opt-in; also needs the sidecar). */
         public bool $aiApiEnabled,
+        /** Require an auth credential on the fake chat API (off = serve keyless, like an open LLM box). */
+        public bool $aiStrictAuth,
+        /** Require a catalogued model on the fake chat API (off = echo any model name, for engagement). */
+        public bool $aiStrictModel,
         public string $llmUrl,
         public int $llmTimeoutMs,
         public int $llmNPredict,
@@ -134,6 +138,8 @@ final class AppConfig
             threatIntelDedupHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_DEDUP_HOURS', '24')),
             llmEnabled: in_array(strtolower((string) getenv('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
             aiApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
+            aiStrictAuth: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_AUTH')), ['1', 'on', 'true', 'yes'], true),
+            aiStrictModel: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_MODEL')), ['1', 'on', 'true', 'yes'], true),
             llmUrl: $str('FUNNYPOT_LLM_URL', 'http://funnypot-llm:8080/completion'),
             // A CPU 0.5B GBNF generation runs ~3-8s (slower on a small box); the timeout must clear
             // that or every fake times out into a plain 404. The concurrency cap bounds how many

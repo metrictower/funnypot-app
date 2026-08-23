@@ -74,7 +74,7 @@ final class AiChatHandlerTest extends TestCase
         return $p;
     }
 
-    private function make(callable $transport): AiChatHandler
+    private function make(callable $transport, bool $strictAuth = false, bool $strictModel = false): AiChatHandler
     {
         $this->store = new SqliteHitStore($this->dbPath('hits'));
         $this->abuse = new AbuseIpdb('testkey', $this->dbPath('intel'), ['10.0.0.1']);
@@ -91,6 +91,8 @@ final class AiChatHandlerTest extends TestCase
             $this->store,
             ModelCatalog::fromPackage(),
             $this->abuse,
+            $strictAuth,
+            $strictModel,
             4,
             0,
             static function (int $s, array $h, string $b) use ($cap): void {
@@ -190,9 +192,42 @@ final class AiChatHandlerTest extends TestCase
         self::assertStringContainsString('"done":true', $this->cap->body);   // fallback still framed
     }
 
-    public function test_openai_missing_auth_gets_401_invalid_api_key(): void
+    public function test_openai_keyless_request_is_served_by_default(): void
     {
+        // Default is open-box: a keyless client (OpenCode with no key) must be answered, not 401'd —
+        // 401-ing turns the scanner away and defeats engagement.
         $handler = $this->make(fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])]);
+
+        $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
+            'model' => self::OPENAI_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+        ]), self::IP);
+
+        self::assertSame(200, $this->cap->status);
+        self::assertStringContainsString('obviously wrong', $this->cap->body);
+        self::assertSame(1, $this->abuse->queueCount());   // still logged + reported
+    }
+
+    public function test_openai_unlisted_model_is_served_and_echoed_by_default(): void
+    {
+        // Default accepts any model name (open box); the requested id is echoed verbatim.
+        $handler = $this->make(fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])]);
+
+        $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
+            'model' => 'totally-made-up-model-9000',
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+        ], ['Authorization' => 'Bearer sk-test']), self::IP);
+
+        self::assertSame(200, $this->cap->status);
+        self::assertStringContainsString('totally-made-up-model-9000', $this->cap->body);
+    }
+
+    public function test_strict_auth_opt_in_gets_401_invalid_api_key(): void
+    {
+        $handler = $this->make(
+            fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])],
+            true,   // strictAuth
+        );
 
         $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
             'model' => self::OPENAI_MODEL,
@@ -203,9 +238,13 @@ final class AiChatHandlerTest extends TestCase
         self::assertStringContainsString('invalid_api_key', $this->cap->body);
     }
 
-    public function test_openai_unknown_model_gets_404_model_not_found(): void
+    public function test_strict_model_opt_in_gets_404_model_not_found(): void
     {
-        $handler = $this->make(fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])]);
+        $handler = $this->make(
+            fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])],
+            false,  // strictAuth
+            true,   // strictModel
+        );
 
         $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
             'model' => 'no-such-model-xyz',

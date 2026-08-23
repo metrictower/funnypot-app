@@ -162,6 +162,8 @@ if ($config->aiApiEnabled) {
         $store,
         ModelCatalog::fromPackage(),
         $abuse,
+        $config->aiStrictAuth,
+        $config->aiStrictModel,
         $config->llmMaxConcurrent,
     ));
 }

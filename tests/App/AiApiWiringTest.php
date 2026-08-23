@@ -43,6 +43,8 @@ final class AiApiWiringTest extends TestCase
         }
         $this->tmp = [];
         putenv('FUNNYPOT_AI_API');
+        putenv('FUNNYPOT_AI_STRICT_AUTH');
+        putenv('FUNNYPOT_AI_STRICT_MODEL');
     }
 
     private function tmpPath(string $n): string
@@ -98,6 +100,23 @@ final class AiApiWiringTest extends TestCase
         }
         putenv('FUNNYPOT_AI_API');   // unset
         self::assertFalse(AppConfig::fromEnv(sys_get_temp_dir())->aiApiEnabled, 'unset should disable');
+    }
+
+    public function test_strict_auth_and_model_flags_default_off(): void
+    {
+        putenv('FUNNYPOT_AI_STRICT_AUTH');   // unset
+        putenv('FUNNYPOT_AI_STRICT_MODEL');  // unset
+        $config = AppConfig::fromEnv(sys_get_temp_dir());
+        self::assertFalse($config->aiStrictAuth, 'strict auth is opt-in (open box by default)');
+        self::assertFalse($config->aiStrictModel, 'strict model is opt-in (any model by default)');
+
+        putenv('FUNNYPOT_AI_STRICT_AUTH=1');
+        putenv('FUNNYPOT_AI_STRICT_MODEL=yes');
+        $strict = AppConfig::fromEnv(sys_get_temp_dir());
+        self::assertTrue($strict->aiStrictAuth);
+        self::assertTrue($strict->aiStrictModel);
+        putenv('FUNNYPOT_AI_STRICT_AUTH');
+        putenv('FUNNYPOT_AI_STRICT_MODEL');
     }
 
     /** @param int $calls counter incremented on each serve() */

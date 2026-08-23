@@ -48,6 +48,11 @@ class AiChatHandler
         private HitStore $store,
         private ModelCatalog $catalog,
         private ?AbuseIpdb $abuse = null,
+        // Default OFF: we impersonate an OPEN LLM box (LiteLLM/vLLM/LM Studio/ollama-openai-compat),
+        // which serves keyless and echoes any model name. 401/404-ing a keyless or unlisted-model
+        // request turns a scanner away and defeats engagement, so strictness is opt-in only.
+        private bool $strictAuth = false,
+        private bool $strictModel = false,
         private int $maxConcurrent = 4,
         private int $delayMs = 20,
         private $emitBuffered = null,
@@ -75,17 +80,20 @@ class AiChatHandler
                 return;
             }
 
-            if ($dialect->needsAuth() && !$req->hasAuth) {
+            // Auth/model are served by default (open-box behaviour). Only the opt-in strict flags turn
+            // a keyless or unlisted-model request into an error; either way the hit is logged (with
+            // hasAuth + model) and reported, since the recon intel is the point.
+            if ($this->strictAuth && $dialect->needsAuth() && !$req->hasAuth) {
                 $this->emitTuple($dialect->error('auth', $req));
-                $this->logHit($ctx, $ip);
+                $this->logHit($ctx, $ip, $req);
                 $this->report($ctx, $ip);
 
                 return;
             }
 
-            if (!$this->catalog->has($req->model)) {
+            if ($this->strictModel && !$this->catalog->has($req->model)) {
                 $this->emitTuple($dialect->error('model', $req));
-                $this->logHit($ctx, $ip);
+                $this->logHit($ctx, $ip, $req);
                 $this->report($ctx, $ip);
 
                 return;
@@ -101,7 +109,7 @@ class AiChatHandler
                 $this->emitTuple($dialect->bufferedOk($text, $req));
             }
 
-            $this->logHit($ctx, $ip);
+            $this->logHit($ctx, $ip, $req);
             $this->report($ctx, $ip);
         } catch (Throwable $e) {
             // Never a 500. If nothing was emitted, frame a plain fallback in this dialect's buffered
@@ -201,10 +209,11 @@ class AiChatHandler
         return new StreamEmitter(null, $this->delayMs);
     }
 
-    private function logHit(RequestContext $ctx, string $ip): void
+    private function logHit(RequestContext $ctx, string $ip, ?ChatRequest $req = null): void
     {
         // Same store method HoneypotController::handle() uses, so AI probes show in the feed + count
-        // toward the per-IP velocity gate.
+        // toward the per-IP velocity gate. The requested model + whether a key was sent are the recon
+        // intel, recorded on the entry (they ride the JSON-lines export even without dedicated columns).
         $this->store->append([
             'ts' => gmdate('c'),
             'ip' => $ip,
@@ -215,6 +224,8 @@ class AiChatHandler
             'severity' => AttackClassifier::severityFor(AttackClassifier::AI_API_RECON),
             'templates' => ['payload-' . AttackClassifier::AI_API_RECON],
             'served' => true,
+            'model' => $req !== null ? substr($req->model, 0, 120) : '',
+            'hasAuth' => $req !== null && $req->hasAuth,
             'body' => $ctx->rawBody !== null ? substr($ctx->rawBody, 0, 300) : null,
         ]);
     }
