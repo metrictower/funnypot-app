@@ -51,6 +51,9 @@ final class VisualPersona
         return $out;
     }
 
+    /** The persona seed — so a skin can build a coherent ServerProfile (same host identity) from it. */
+    public function seed(): int { return $this->seed; }
+
     public function classPrefix(): string { return $this->classPrefix; }
     /** @return array{bg:string,fg:string,accent:string,muted:string,border:string} */
     public function palette(): array { return $this->palette; }

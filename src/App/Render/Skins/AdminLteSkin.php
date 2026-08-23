@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
+use Funnypot\App\Render\Fake\ServerProfile;
 use Funnypot\App\Render\PageSlots;
 use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
@@ -83,6 +84,56 @@ final class AdminLteSkin extends AbstractSkin
         }
         $html .= '</div>'; // alte-card-body
         $html .= '</div>'; // alte-card
+
+        // Deterministic server-panel enrichment: stat cards, hardware, backups (bait) and a bottomless
+        // loot table. Always-on for this "server control panel" skin, seeded off the persona so the host
+        // identity stays coherent with the rest of the page. Frozen per deploy (bucket 0) so the cached
+        // page stays byte-identical. All values inert; backup links route to the decoy-archive handler.
+        $sp = ServerProfile::fromSeed($persona->seed());
+        $cpu = $sp->cpu();
+        $mem = $sp->memory();
+        $stg = $sp->storage();
+        $osx = $sp->os();
+        $chs = $sp->chassis();
+        $live = $sp->liveStats(0);
+        $upd = $sp->pendingUpdates();
+
+        $html .= $this->statCardsHtml([
+            ['label' => 'CPU load', 'value' => $live['cpuPct'] . '%', 'sub' => $cpu['cores'] . ' cores / ' . $cpu['threads'] . ' threads'],
+            ['label' => 'Memory', 'value' => $live['memUsedGib'] . ' / ' . $mem['totalGib'] . ' GiB'],
+            ['label' => 'Load average', 'value' => $live['load1'] . ', ' . $live['load5'] . ', ' . $live['load15']],
+            ['label' => 'Uptime', 'value' => $sp->uptimeDays() . ' days'],
+            ['label' => 'Data volume', 'value' => $stg['usedPct'] . '% of ' . $stg['usableTb'] . ' TB', 'sub' => 'RAID-6'],
+            ['label' => 'Pending updates', 'value' => (string) $upd['total'], 'sub' => $upd['security'] . ' security'],
+        ], 'alte-stats', 'alte-st');
+
+        $html .= '<div class="alte-card"><div class="alte-card-header">System Information</div><div class="alte-card-body">';
+        $html .= $this->kvTableHtml([
+            ['CPU', $cpu['sockets'] . '× ' . $cpu['model'] . ' (' . $cpu['cores'] . 'C/' . $cpu['threads'] . 'T)'],
+            ['Memory', $mem['totalGib'] . ' GiB — ' . $mem['dimmCount'] . '× ' . $mem['dimmSizeGb'] . ' GB ' . $mem['dimmPart'] . ' @ ' . $mem['speed'] . ' MT/s'],
+            ['Storage', '2× ' . $stg['bootModel'] . ' NVMe RAID-1 · ' . $stg['dataDisks'] . '× ' . $stg['dataDiskTb'] . ' TB ' . $stg['dataModel'] . ' on ' . $stg['controller'] . ' (~' . $stg['usableTb'] . ' TB, ' . $stg['usedPct'] . '% full)'],
+            ['OS', $osx['distro'] . ' — ' . $osx['kernel']],
+            ['Chassis', $chs['vendor'] . ' ' . $chs['product'] . ' · BIOS ' . $chs['biosVendor'] . ' ' . $chs['biosVer']],
+            ['Service tag', $chs['serviceTag'] . ' · UUID ' . $chs['uuid']],
+            ['Network', 'bond0 (LACP) 20000 Mb/s · ' . $sp->primaryIp() . '/24'],
+        ], ' class="alte-kv"');
+        $html .= '</div></div>';
+
+        $bkRows = [];
+        foreach ($sp->backups() as $b) {
+            $bkRows[] = ['file' => $b['name'], 'cells' => [$b['size'], $b['age'], 'Download']];
+        }
+        $html .= '<div class="alte-card"><div class="alte-card-header">Backups</div><div class="alte-card-body">';
+        $html .= $this->downloadTableHtml(['File', 'Size', 'Created', ''], $bkRows, $navBase, '/backups', ' class="alte-table"', 'alte-dl');
+        $html .= '</div></div>';
+
+        $loot = $sp->lootRowCount('users');
+        $lootRows = $sp->lootUsers($persona->domain());
+        $html .= '<div class="alte-card"><div class="alte-card-header">users</div><div class="alte-card-body">';
+        $html .= $this->tableHtml(['id', 'username', 'email', 'role', 'password_hash'], $lootRows, ' class="alte-table"');
+        $html .= '<div class="alte-pager">Showing 1&ndash;' . count($lootRows) . ' of ' . number_format($loot) . ' rows</div>';
+        $html .= '</div></div>';
+
         $html .= '</section></div>'; // alte-content-wrapper
 
         $html .= '</div>'; // alte-wrapper
@@ -123,6 +174,18 @@ final class AdminLteSkin extends AbstractSkin
             . '.alte-intro{color:#5b636a}'
             . '.alte-table{border-collapse:collapse;width:100%;margin-top:8px}'
             . '.alte-table th,.alte-table td{border:1px solid #d7dbdf;padding:6px 10px;text-align:left}'
-            . '.alte-flash{margin-top:12px;padding:8px 12px;background:#eaf2f6;border-left:4px solid #3b7ea1}';
+            . '.alte-flash{margin-top:12px;padding:8px 12px;background:#eaf2f6;border-left:4px solid #3b7ea1}'
+            . '.alte-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}'
+            . '.alte-st{background:#fff;border:1px solid #d7dbdf;border-radius:4px;padding:14px 16px}'
+            . '.alte-st-v{font-size:1.5em;font-weight:bold;color:#2c3136}'
+            . '.alte-st-l{color:#6c757d;font-size:.82em;margin-top:2px}'
+            . '.alte-st-sub{color:#9aa1a8;font-size:.74em;margin-top:4px}'
+            . '.alte-kv{border-collapse:collapse;width:100%}'
+            . '.alte-kv th{width:150px;text-align:left;color:#6c757d;font-weight:600;vertical-align:top;'
+            . 'padding:6px 10px;border-bottom:1px solid #eef1f3}'
+            . '.alte-kv td{padding:6px 10px;border-bottom:1px solid #eef1f3}'
+            . '.alte-dl{color:#3b7ea1;text-decoration:none;font-family:monospace}'
+            . '.alte-dl:hover{text-decoration:underline}'
+            . '.alte-pager{padding:10px 4px;color:#6c757d;font-size:.84em}';
     }
 }

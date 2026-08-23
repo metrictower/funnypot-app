@@ -133,4 +133,81 @@ abstract class AbstractSkin implements Skin
         array_pop($segs); // nav links are siblings of the current leaf, so drop it
         return $segs === [] ? '' : '/' . implode('/', $segs);
     }
+
+    /**
+     * A row of stat cards (label + big value + optional sub-line). Values are escaped here; the
+     * wrapper/card class names are trusted skin literals.
+     *
+     * @param list<array{label:string,value:string,sub?:string}> $cards
+     */
+    protected function statCardsHtml(array $cards, string $wrapClass, string $cardClass): string
+    {
+        if ($cards === []) {
+            return '';
+        }
+        $html = '<div class="' . $wrapClass . '">';
+        foreach ($cards as $c) {
+            $sub = isset($c['sub']) && $c['sub'] !== ''
+                ? '<div class="' . $cardClass . '-sub">' . $this->esc($c['sub']) . '</div>'
+                : '';
+            $html .= '<div class="' . $cardClass . '">'
+                . '<div class="' . $cardClass . '-v">' . $this->esc($c['value']) . '</div>'
+                . '<div class="' . $cardClass . '-l">' . $this->esc($c['label']) . '</div>'
+                . $sub . '</div>';
+        }
+        return $html . '</div>';
+    }
+
+    /**
+     * A two-column key/value table (system-info style). Every key and value is escaped.
+     *
+     * @param list<array{0:string,1:string}> $pairs
+     */
+    protected function kvTableHtml(array $pairs, string $tableAttrs = ''): string
+    {
+        if ($pairs === []) {
+            return '';
+        }
+        $html = '<table' . $tableAttrs . '><tbody>';
+        foreach ($pairs as $p) {
+            $html .= '<tr><th>' . $this->esc($p[0]) . '</th><td>' . $this->esc($p[1]) . '</td></tr>';
+        }
+        return $html . '</tbody></table>';
+    }
+
+    /**
+     * A downloads table where each row's first field is a filename rendered as a link to a sibling path
+     * that PRESERVES the file extension (so an archive name routes to the decoy-archive handler). The
+     * filename must be skin/generator-authored trusted vocab matching [A-Za-z0-9._-]; anything else
+     * renders as plain text (never a link), so no model/attacker value can shape the href. $navBase +
+     * $subPath are trusted (navBase is per-segment slugged; subPath a skin literal). Remaining cells
+     * are escaped text.
+     *
+     * @param list<string> $cols
+     * @param list<array{file:string,cells:list<string>}> $rows
+     */
+    protected function downloadTableHtml(array $cols, array $rows, string $navBase, string $subPath, string $tableAttrs = '', string $linkClass = ''): string
+    {
+        $classAttr = $linkClass !== '' ? ' class="' . $linkClass . '"' : '';
+        $html = '<table' . $tableAttrs . '><thead><tr>';
+        foreach ($cols as $c) {
+            $html .= '<th>' . $this->esc($c) . '</th>';
+        }
+        $html .= '</tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $file = $r['file'];
+            if (preg_match('/^[A-Za-z0-9._-]+$/', $file) === 1) {
+                $href = $this->esc($navBase . $subPath . '/' . $file);
+                $first = '<a' . $classAttr . ' href="' . $href . '">' . $this->esc($file) . '</a>';
+            } else {
+                $first = $this->esc($file);
+            }
+            $html .= '<tr><td>' . $first . '</td>';
+            foreach ($r['cells'] as $cell) {
+                $html .= '<td>' . $this->esc($cell) . '</td>';
+            }
+            $html .= '</tr>';
+        }
+        return $html . '</tbody></table>';
+    }
 }
