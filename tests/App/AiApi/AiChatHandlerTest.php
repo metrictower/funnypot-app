@@ -387,4 +387,53 @@ final class AiChatHandlerTest extends TestCase
         // it is still a helpful-persona prompt wrapping the mangled text
         self::assertStringContainsString('You are a helpful assistant.', $prompt);
     }
+
+    public function test_unswappable_question_serves_static_fallback_not_a_correct_answer(): void
+    {
+        // "what is 2+2" has no swappable content word, so the corruption is a no-op. The helpful model
+        // would answer it CORRECTLY ("4") — the one thing a nonsense endpoint must never do. It must
+        // serve static nonsense with no sidecar call instead.
+        $calls = 0;
+        $handler = $this->make(function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => '4'])];
+        });
+
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is 2+2']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertSame(0, $calls, 'the model (which would answer "4") must never be consulted');
+        self::assertSame(200, $this->cap->status);
+        $expected = (new NonsenseFallback())->text(
+            new ChatRequest('ollama-chat', self::OLLAMA_MODEL, 'what is 2+2', false, false, false)
+        );
+        self::assertStringContainsString($expected, $this->cap->body);
+    }
+
+    public function test_exploit_substring_in_the_answer_degrades_to_fallback(): void
+    {
+        // A model reply carrying an exploit-shaped substring must be rejected (parity with the page
+        // sanitizer) and degrade to the static fallback, not be served to the attacker.
+        $handler = $this->make(fn (): array => [
+            'status' => 200,
+            'body' => (string) json_encode(['content' => "To fix it just run shell_exec('id') on the box."]),
+        ]);
+
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertSame(200, $this->cap->status);
+        self::assertStringNotContainsString('shell_exec', $this->cap->body);
+        $expected = (new NonsenseFallback())->text(
+            new ChatRequest('ollama-chat', self::OLLAMA_MODEL, 'what is the capital of France', false, false, false)
+        );
+        self::assertStringContainsString($expected, $this->cap->body);
+    }
 }

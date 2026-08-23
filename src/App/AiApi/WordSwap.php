@@ -74,17 +74,34 @@ final class WordSwap
 
     private function isContentWord(string $token): bool
     {
-        $core = $this->coreOf($token);
+        $split = $this->split($token);
+        if ($split === null) {
+            return false;
+        }
+        $core = $split[1];
 
-        return $core !== null
-            && strlen($core) >= self::MIN_CONTENT_LEN
+        // A content word is long enough AND carries at least two letters — this catches digit/hyphen
+        // technical terms (log4shell, cve-2021-44228) the model could otherwise explain verbatim,
+        // while pure-number tokens ("2", "2018") and short function words stay intact for grammar.
+        return strlen($core) >= self::MIN_CONTENT_LEN
+            && preg_match_all('/[a-zA-Z]/', $core) >= 2
             && !in_array(strtolower($core), self::STOPWORDS, true);
     }
 
-    /** The single alphabetic run of a token (punctuation stripped), or null if it isn't one clean word. */
-    private function coreOf(string $token): ?string
+    /**
+     * Split a token into [leading-punctuation, alphanumeric core, trailing-punctuation]. The core runs
+     * from the first alphanumeric char to the last, so internal digits/hyphens ("log4shell") stay part
+     * of one word. Null when the token has no alphanumeric core (whitespace / pure punctuation).
+     *
+     * @return array{0:string,1:string,2:string}|null
+     */
+    private function split(string $token): ?array
     {
-        return preg_match('/^[^a-zA-Z]*([a-zA-Z]+)[^a-zA-Z]*$/', $token, $m) === 1 ? $m[1] : null;
+        if (preg_match('/^([^0-9A-Za-z]*)([0-9A-Za-z](?:.*[0-9A-Za-z])?)([^0-9A-Za-z]*)$/', $token, $m) === 1) {
+            return [$m[1], $m[2], $m[3]];
+        }
+
+        return null;
     }
 
     /**
@@ -95,10 +112,11 @@ final class WordSwap
      */
     private function swapToken(string $token, Closure $rand): string
     {
-        if (preg_match('/^([^a-zA-Z]*)([a-zA-Z]+)([^a-zA-Z]*)$/', $token, $m) !== 1) {
-            return $token; // not a clean single word (hyphenated / apostrophised) — leave it
+        $split = $this->split($token);
+        if ($split === null) {
+            return $token;
         }
-        [, $pre, $core, $post] = $m;
+        [$pre, $core, $post] = $split;
         $word = $this->pickAbsurd($core, $rand);
 
         if (ctype_upper($core)) {

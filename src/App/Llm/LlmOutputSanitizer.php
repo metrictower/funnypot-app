@@ -151,6 +151,22 @@ final class LlmOutputSanitizer
         return true;
     }
 
+    /** True if the text carries any exploit-shaped substring (the shared BAD_SUBSTRINGS denylist —
+     *  `#!/bin/`, `system(`, `shell_exec(`, `eval(`, `-----begin`, `../../`, ...). Exposed WITHOUT the
+     *  size floor so a short body (e.g. a one-line chat reply) can be gated on the same denylist that
+     *  the full prelude applies. */
+    public function hasExploitSubstring(string $s): bool
+    {
+        $low = strtolower($s);
+        foreach (self::BAD_SUBSTRINGS as $bad) {
+            if (strpos($low, $bad) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** Shared validation run before any kind-specific check: realistic size band, valid UTF-8, no
      *  control bytes, no exploit-code substrings, no self-disclosure. Used by both sanitize() and
      *  sanitizeToArray() so the two paths can never drift out of sync. */

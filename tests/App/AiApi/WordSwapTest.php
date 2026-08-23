@@ -64,4 +64,23 @@ final class WordSwapTest extends TestCase
         // no content words (all short / stopwords) → nothing to corrupt
         self::assertSame('what is it', (new WordSwap())->corrupt('what is it', $this->alwaysSwap()));
     }
+
+    public function test_swaps_digit_and_hyphen_technical_terms(): void
+    {
+        // Digit/hyphen tokens (log4shell, cve-2021-44228) must not survive verbatim — otherwise the
+        // helpful model happily explains the real vulnerability.
+        $out = (new WordSwap())->corrupt('explain the log4shell vulnerability', $this->alwaysSwap());
+
+        self::assertNotSame('explain the log4shell vulnerability', $out);
+        self::assertStringNotContainsString('log4shell', $out);
+
+        $cve = (new WordSwap())->corrupt('what is cve-2021-44228', $this->alwaysSwap());
+        self::assertStringNotContainsString('cve-2021-44228', $cve);
+    }
+
+    public function test_pure_number_tokens_are_left_intact(): void
+    {
+        // "2+2" / "2018" carry no letters, so they stay put (keeps the question grammatical).
+        self::assertSame('what is 2+2', (new WordSwap())->corrupt('what is 2+2', $this->alwaysSwap()));
+    }
 }

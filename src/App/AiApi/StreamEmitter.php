@@ -42,6 +42,9 @@ final class StreamEmitter
             return;
         }
 
+        // Real AI APIs send no X-Powered-By; strip the app's global persona header here too, so the
+        // streaming path matches the buffered path even if the front-controller skip ever changes.
+        header_remove('X-Powered-By');
         while (ob_get_level() > 0) {
             ob_end_flush();
         }

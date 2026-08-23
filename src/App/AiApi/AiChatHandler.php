@@ -164,6 +164,11 @@ class AiChatHandler
             // straight — the nonsense lives in the question, not in an instruction to be wrong. Random
             // seed per request so the same question does not always get the identical reply.
             $mangled = $this->wordSwap->corrupt($req->userText);
+            // Nothing swappable (e.g. "what is 2+2", "hi") → the helpful model would answer CORRECTLY,
+            // which is the one thing a nonsense endpoint must never do. Serve static nonsense instead.
+            if ($mangled === $req->userText) {
+                return $this->fallback->text($req);
+            }
             $raw = $this->llm->generate($this->prompt->build($mangled), '', [
                 'temperature' => $this->temp,
                 'min_p' => $this->minP,
@@ -196,7 +201,10 @@ class AiChatHandler
     {
         $text = mb_strcut(trim($raw), 0, self::MAX_ANSWER_BYTES);
         $text = rtrim((string) preg_replace('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', '', $text));
-        if ($text === '' || !$this->sanitizer->pageBodyOk($text)) {
+        // Reject self-disclosure / active HTML (pageBodyOk) AND any exploit-shaped substring — the
+        // model could emit a real shell/PHP snippet in an otherwise prose answer. Both gates skip the
+        // 32-byte size floor so a short confidently-wrong reply still passes.
+        if ($text === '' || $this->sanitizer->hasExploitSubstring($text) || !$this->sanitizer->pageBodyOk($text)) {
             return null;
         }
 
