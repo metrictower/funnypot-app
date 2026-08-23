@@ -12,12 +12,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/metrictower/funnypot-core.git",
-                "reference": "728b92ff6db1809069c38fd1ebbea2896cfa8f20"
+                "reference": "197e216dbc80d88239c2a1e9fa5bcd6ac5238b95"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/728b92ff6db1809069c38fd1ebbea2896cfa8f20",
-                "reference": "728b92ff6db1809069c38fd1ebbea2896cfa8f20",
+                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/197e216dbc80d88239c2a1e9fa5bcd6ac5238b95",
+                "reference": "197e216dbc80d88239c2a1e9fa5bcd6ac5238b95",
                 "shasum": ""
             },
             "require": {
@@ -67,7 +67,7 @@
                 "source": "https://github.com/metrictower/funnypot-core/tree/main",
                 "issues": "https://github.com/metrictower/funnypot-core/issues"
             },
-            "time": "2026-08-23T11:17:44+00:00"
+            "time": "2026-08-23T18:34:08+00:00"
         }
     ],
     "packages-dev": [
