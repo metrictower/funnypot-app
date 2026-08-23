@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
+use Funnypot\App\Render\Fake\FakeInfra;
 use Funnypot\App\Render\PageSlots;
 use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
@@ -51,6 +52,35 @@ final class GrafanaSkin extends AbstractSkin
         }
 
         $html .= $this->panelGrid($slots->tableCols(), $slots->tableRows());
+
+        // Deterministic observability enrichment: headline metrics, a Prometheus targets table (with
+        // ~12% down carrying RFC1918 "connection refused" errors) and a node fleet — all inert, seeded
+        // off the persona, frozen per deploy. An internal-map rabbit hole for a scanner.
+        $infra = FakeInfra::fromSeed($persona->seed());
+        $m = $infra->metrics();
+        $html .= $this->statCardsHtml([
+            ['label' => 'Request rate', 'value' => $m['reqRate']],
+            ['label' => 'Error rate', 'value' => $m['errRate']],
+            ['label' => 'p95 latency', 'value' => $m['p95']],
+            ['label' => 'CPU', 'value' => $m['cpuPct']],
+            ['label' => 'Memory', 'value' => $m['memPct']],
+        ], 'gf-stats', 'gf-st');
+
+        $trows = [];
+        foreach ($infra->targets() as $t) {
+            $trows[] = [$t['job'], $t['instance'], $t['state'], $t['lastScrape'], $t['error']];
+        }
+        $html .= '<div class="gf-panel"><div class="gf-panel-header">Targets</div>'
+            . $this->tableHtml(['Job', 'Instance', 'State', 'Last scrape', 'Error'], $trows, ' class="gf-panel-table"')
+            . '</div>';
+
+        $frows = [];
+        foreach ($infra->fleet() as $f) {
+            $frows[] = [$f['host'], $f['role'], $f['cpu'], $f['mem'], $f['status']];
+        }
+        $html .= '<div class="gf-panel"><div class="gf-panel-header">Nodes</div>'
+            . $this->tableHtml(['Host', 'Role', 'CPU', 'Mem', 'Status'], $frows, ' class="gf-panel-table"')
+            . '</div>';
 
         $html .= '</main>';
         $html .= '</div>';
@@ -110,6 +140,11 @@ final class GrafanaSkin extends AbstractSkin
             . '.gf-panel{background:#1e2027;border:1px solid #2a2c33;border-radius:4px;padding:12px}'
             . '.gf-panel-header{font-size:.85em;color:#9ea2ab;margin-bottom:8px;text-transform:uppercase}'
             . '.gf-panel-table{border-collapse:collapse;width:100%;font-size:.9em}'
-            . '.gf-panel-table th,.gf-panel-table td{border:1px solid #2a2c33;padding:5px 8px;text-align:left}';
+            . '.gf-panel-table th,.gf-panel-table td{border:1px solid #2a2c33;padding:5px 8px;text-align:left}'
+            . '.gf-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}'
+            . '.gf-st{background:#1e2027;border:1px solid #2a2c33;border-radius:4px;padding:12px 14px}'
+            . '.gf-st-v{font-size:1.4em;font-weight:bold;color:#d3d5d8}'
+            . '.gf-st-l{color:#9ea2ab;font-size:.78em;margin-top:2px}'
+            . '.gf-st-sub{color:#6f737b;font-size:.72em;margin-top:3px}';
     }
 }
