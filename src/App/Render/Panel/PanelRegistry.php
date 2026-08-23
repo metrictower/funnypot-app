@@ -37,6 +37,10 @@ final class PanelRegistry
             'processes' => new ProcessesSection(),
             'logs' => new LogsSection(),
             'files' => new FilesSection(),
+            'access' => new AccessSection(),
+            'fire' => new FireSection(),
+            'cctv' => new CctvSection(),
+            'hvac' => new HvacSection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -48,6 +52,10 @@ final class PanelRegistry
             'ps' => 'processes',
             'log' => 'logs',
             'filemanager' => 'files', 'file' => 'files',
+            'doors' => 'access', 'badges' => 'access', 'acs' => 'access',
+            'security' => 'fire', 'safety' => 'fire', 'alarms' => 'fire', 'life-safety' => 'fire',
+            'cameras' => 'cctv', 'camera' => 'cctv', 'nvr' => 'cctv', 'video' => 'cctv',
+            'climate' => 'hvac', 'bms' => 'hvac', 'building' => 'hvac',
         ];
         $this->fallback = $dashboard;
     }

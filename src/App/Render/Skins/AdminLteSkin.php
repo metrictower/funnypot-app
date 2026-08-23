@@ -52,6 +52,14 @@ final class AdminLteSkin extends AbstractSkin
             ['Logs', 'logs'],
             ['Files', 'files'],
         ],
+        'Building · Smart Office' => [
+            ['HVAC', 'hvac'],
+            ['Access', 'access'],
+        ],
+        'Security & Safety' => [
+            ['Fire & Life-Safety', 'fire'],
+            ['CCTV', 'cctv'],
+        ],
     ];
 
     /** Module slug -> page <title>; unmapped modules fall to the Dashboard title. */
@@ -64,6 +72,10 @@ final class AdminLteSkin extends AbstractSkin
         'processes' => 'Processes', 'ps' => 'Processes',
         'logs' => 'Logs', 'log' => 'Logs',
         'files' => 'File Manager', 'filemanager' => 'File Manager',
+        'access' => 'Access Control', 'doors' => 'Access Control', 'badges' => 'Access Control',
+        'fire' => 'Fire & Life-Safety', 'safety' => 'Fire & Life-Safety', 'life-safety' => 'Fire & Life-Safety',
+        'cctv' => 'CCTV & Video', 'cameras' => 'CCTV & Video', 'nvr' => 'CCTV & Video',
+        'hvac' => 'HVAC & Climate', 'climate' => 'HVAC & Climate', 'bms' => 'HVAC & Climate',
     ];
 
     /** @var PanelRegistry */
