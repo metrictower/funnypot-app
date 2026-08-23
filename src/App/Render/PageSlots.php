@@ -9,9 +9,9 @@ namespace Funnypot\App\Render;
  */
 final class PageSlots
 {
-    /** Placeholders the model may emit instead of a real secret; resolved to a persona-coherent fake
-     *  before any skin renders — the model never invents the actual value. */
-    public const MARKERS = ['APITOKEN', 'EMAIL', 'AWSKEY'];
+    /** Placeholders the model may emit instead of a real secret or a real person; resolved to a
+     *  persona-coherent fake before any skin renders — the model never invents the actual value. */
+    public const MARKERS = ['APITOKEN', 'EMAIL', 'AWSKEY', 'NAME', 'USERNAME'];
 
     private function __construct(
         private string $appName,
@@ -83,17 +83,34 @@ final class PageSlots
     }
 
     /** A value equal (after trim) to a MARKERS entry becomes a persona-coherent fake; anything else
-     *  passes through unchanged. $salt keeps distinct slots/cells from resolving to the same fake. */
+     *  passes through unchanged. $key keeps distinct slots/cells from resolving to the same fake —
+     *  in a single (non-row) context it also doubles as the person key, so within one slot NAME/
+     *  USERNAME/EMAIL never contradict each other because callers are expected to reuse one $salt
+     *  per logical field group; markRows() is the context that actually varies the person per row. */
     private static function mark(string $v, VisualPersona $persona, string $salt): string
     {
         $trimmed = trim($v);
         if (!in_array($trimmed, self::MARKERS, true)) {
             return $v;
         }
-        return match ($trimmed) {
-            'APITOKEN' => $persona->fakeToken($salt),
-            'EMAIL' => $persona->adminEmail(),
+        return self::resolveMarker($trimmed, $persona, $salt);
+    }
+
+    /** Resolves one already-validated marker to its persona-coherent fake value, keyed by $key.
+     *  Shared by mark() (single-context, keyed by the caller's salt) and markRows() (row-context,
+     *  keyed by the row for NAME/USERNAME/EMAIL so they describe one coherent person, and by the
+     *  cell for APITOKEN so tokens stay distinct within a row). The default arm keeps this total
+     *  even if MARKERS ever grows a case this match doesn't yet cover — the LLM tier must never
+     *  throw, only upgrade a 404. */
+    private static function resolveMarker(string $marker, VisualPersona $persona, string $key): string
+    {
+        return match ($marker) {
+            'APITOKEN' => $persona->fakeToken($key),
+            'EMAIL' => $persona->personEmail($key),
             'AWSKEY' => $persona->awsKey(),
+            'NAME' => $persona->person($key)['full'],
+            'USERNAME' => $persona->person($key)['userName'],
+            default => '',
         };
     }
 
@@ -107,14 +124,30 @@ final class PageSlots
         return $out;
     }
 
-    /** @param list<list<string>> $rows @return list<list<string>> */
+    /**
+     * Row-coherent: every row gets ONE person key ("row{$r}"), so a row's NAME/USERNAME/EMAIL all
+     * describe the same fake person (personEmail() derives from person(), so the email local-part
+     * matches the name/username in that same row) — different rows use different keys, so different
+     * rows are different people and EMAIL varies per row instead of repeating one persona-wide
+     * adminEmail(). APITOKEN keeps a per-cell key so tokens stay distinct within a row; AWSKEY
+     * ignores the key entirely (one persona-wide fake key, same as before).
+     *
+     * @param list<list<string>> $rows @return list<list<string>>
+     */
     private static function markRows(array $rows, VisualPersona $persona): array
     {
         $out = [];
         foreach ($rows as $r => $row) {
+            $rowKey = "row{$r}";
             $newRow = [];
             foreach ($row as $c => $cell) {
-                $newRow[] = self::mark($cell, $persona, "r{$r}c{$c}");
+                $trimmed = trim($cell);
+                if (!in_array($trimmed, self::MARKERS, true)) {
+                    $newRow[] = $cell;
+                    continue;
+                }
+                $key = $trimmed === 'APITOKEN' ? "r{$r}c{$c}" : $rowKey;
+                $newRow[] = self::resolveMarker($trimmed, $persona, $key);
             }
             $out[] = $newRow;
         }

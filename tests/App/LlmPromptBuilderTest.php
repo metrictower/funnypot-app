@@ -101,6 +101,8 @@ final class LlmPromptBuilderTest extends TestCase
         self::assertStringContainsString('app_name', $p);
         self::assertStringContainsString('Velthora', $p);
         self::assertStringContainsString('APITOKEN', $p);         // marker convention documented
+        self::assertStringContainsString('NAME', $p);              // person-name marker documented
+        self::assertStringContainsString('USERNAME', $p);          // person-login marker documented
         self::assertStringNotContainsString('<!doctype', $p);     // not asking for HTML anymore
     }
 
