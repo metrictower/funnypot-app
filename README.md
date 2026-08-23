@@ -125,7 +125,8 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 |---|---|
 | **Nuclei inversion** | About 6,300 templates compiled into route personas; a scanner's own matcher is satisfied by an inert fake. |
 | **Attack-class emulators** (31) | Reflect LFI, SQLi, command injection, SSTI, XXE, shellshock, Struts OGNL, open redirect, reflected XSS and IMDS on any path, with canned inert markers (`root:x:0:0…`, `uid=0(root)…`). |
-| **Product and route decoys** (26) | Believable `.git/config`, `.env`, `xmlrpc`, `wp-config`, `phpinfo`, `.htpasswd`, `server-status`, `package.json`, SSH keys, SQL dumps, phpMyAdmin, Tomcat manager and more. |
+| **Product and route decoys** (26) | Believable `.git/config`, `.env`, `xmlrpc`, `wp-config`, `phpinfo`, `.htpasswd`, `server-status`, `package.json`, SSH keys, SQL dumps, phpMyAdmin, Tomcat manager and more. Data-bearing decoys are filled by shared seeded generators, so people and records are coherent per deployment, not repeated `jdoe`/`example.com` rows. |
+| **LLM fake pages** (long-tail fallback) | On a template / CRS / nuclei miss, a probe-gated model fills a small JSON slot-set that a trusted PHP shell renders into a full styled page — WordPress, phpMyAdmin, Grafana, AdminLTE or a generic admin look — with seeded, coherent fake people and records. It only ever *upgrades* a plain 404; the HTTP status and content-type stay app-chosen, and every value is escaped by construction. |
 | **Pure-PHP SSH-2.0 server** | Real curve25519-sha256 key exchange, ed25519 host key, aes256-ctr and hmac-sha2-256 transport. No libssh, no OpenSSH. Accept-all auth drops the attacker into a fake shell with decoy files. |
 | **TCP protocol emulators** (18) | ssh, telnet, redis, ftp, smtp, memcached, pop3, imap, finger, vnc, rsync, clamav, zookeeper, mysql, postgres, mongodb, modbus, ethernet-ip. Every command logged, nothing run. |
 | **Emulation catalog** | Auto-registering list of every capability; a sparse JSON file, or the dashboard, toggles each on or off. |
@@ -176,6 +177,9 @@ funnypot is built so it can only ever mislead an attacker, never help one.
   CRLF and NUL safe.
 - **Coherent personas.** One believable host per attacker, deterministically seeded, not an impossible
   "vulnerable to everything" fingerprint a real analyst would spot.
+- **The LLM only upgrades a 404.** The optional page-realism model can only turn a plain 404 into a richer
+  believable page; any model fault degrades back to that 404, never to a 500 (a 500 is itself a tell). It
+  never chooses the HTTP status or content-type.
 - **Inert fakes only.** `example.com` hosts, RFC-5737 IPs, obviously-fake keys and hashes. Never a real
   or working secret.
 
