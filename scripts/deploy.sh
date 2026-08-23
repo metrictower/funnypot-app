@@ -30,18 +30,20 @@ LE_DOMAIN="${LE_DOMAIN:-}"
 # `set -u` so an unset value is not a fatal unbound-variable error; empty keeps admin disabled.
 ADMIN_PASSWORD="${FUNNYPOT_ADMIN_PASSWORD:-}"
 
-# LLM fake-response sidecar (funnypot-llm). Opt-in: FUNNYPOT_LLM_ON=1. The model is memory/CPU-heavy,
-# so on a small box the sidecar runs with a hard memory cap + a limited thread count, and funnypot
-# degrades to a plain 404 whenever it is slow or down — the honeypot is never blocked on it. With
-# LLM_ON left at 0 the whole block is skipped and the deploy is unchanged.
-LLM_ON="${FUNNYPOT_LLM_ON:-0}"
+# LLM fake-response sidecar (funnypot-llm). ON by default, with the prod tuning baked in below — so a
+# bare `bash scripts/deploy.sh` ships + wires the sidecar with no flags to remember. The model is
+# memory/CPU-heavy, so it runs with a hard memory cap + a limited thread count, and funnypot degrades
+# to a plain 404 whenever it is slow or down — the honeypot is never blocked on it. Set
+# FUNNYPOT_LLM_ON=0 to skip the sidecar entirely; every value below is still overridable via its
+# FUNNYPOT_LLM_* env var.
+LLM_ON="${FUNNYPOT_LLM_ON:-1}"
 LLM_REPO="${FUNNYPOT_LLM_REPO:-$REPO_ROOT/../funnypot-llm}"
-LLM_MEM="${FUNNYPOT_LLM_MEM:-700m}"
+LLM_MEM="${FUNNYPOT_LLM_MEM:-1500m}"
 LLM_MEM_SWAP="${FUNNYPOT_LLM_MEM_SWAP:-1800m}"
-LLM_THREADS="${FUNNYPOT_LLM_THREADS:-1}"
-LLM_PARALLEL="${FUNNYPOT_LLM_PARALLEL:-1}"
+LLM_THREADS="${FUNNYPOT_LLM_THREADS:-2}"
+LLM_PARALLEL="${FUNNYPOT_LLM_PARALLEL:-2}"
 LLM_MAX_CONCURRENT="${FUNNYPOT_LLM_MAX_CONCURRENT:-1}"
-LLM_TIMEOUT_MS="${FUNNYPOT_LLM_TIMEOUT_MS:-20000}"
+LLM_TIMEOUT_MS="${FUNNYPOT_LLM_TIMEOUT_MS:-13000}"
 LLM_NET="funnypot-net"
 
 if [ -z "$HOST" ] || [ -z "$KEY" ]; then
@@ -119,7 +121,7 @@ if [ "$LLM_ON" = "1" ]; then
     FUNNYPOT_LLM_FLAGS="-e FUNNYPOT_LLM=1 -e FUNNYPOT_LLM_URL=http://funnypot-llm:8080/completion -e FUNNYPOT_LLM_MAX_CONCURRENT=$LLM_MAX_CONCURRENT -e FUNNYPOT_LLM_TIMEOUT_MS=$LLM_TIMEOUT_MS"
     # Operator testing knobs (empty = app defaults 5/15, no allowlist): raise the per-IP velocity gate
     # or exempt a test IP/CIDR so it can generate unlimited fakes without self-pinning to plain-404.
-    FUNNYPOT_LLM_FLAGS="$FUNNYPOT_LLM_FLAGS -e FUNNYPOT_LLM_GATE_ALLOW=${FUNNYPOT_LLM_GATE_ALLOW:-} -e FUNNYPOT_LLM_VELOCITY_PER_60S=${FUNNYPOT_LLM_VELOCITY_PER_60S:-} -e FUNNYPOT_LLM_VELOCITY_PER_10M=${FUNNYPOT_LLM_VELOCITY_PER_10M:-}"
+    FUNNYPOT_LLM_FLAGS="$FUNNYPOT_LLM_FLAGS -e FUNNYPOT_LLM_GATE_ALLOW=${FUNNYPOT_LLM_GATE_ALLOW:-} -e FUNNYPOT_LLM_VELOCITY_PER_60S=${FUNNYPOT_LLM_VELOCITY_PER_60S:-30} -e FUNNYPOT_LLM_VELOCITY_PER_10M=${FUNNYPOT_LLM_VELOCITY_PER_10M:-100}"
     LLM_SETUP="sudo docker network inspect $LLM_NET >/dev/null 2>&1 || sudo docker network create $LLM_NET ; sudo docker rm -f funnypot-llm 2>/dev/null || true ; sudo docker run -d --name funnypot-llm --restart unless-stopped --network $LLM_NET -m $LLM_MEM --memory-swap $LLM_MEM_SWAP -e THREADS=$LLM_THREADS -e PARALLEL=$LLM_PARALLEL -e CTX_SIZE=2048 funnypot-llm"
 fi
 # \$HOME etc. expand on the REMOTE; \$PFLAGS / \$LLM_SETUP / the LLM flags expand locally.
