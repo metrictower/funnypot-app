@@ -29,10 +29,12 @@ final class AiChatPromptBuilder
     }
 
     /** Neutralises literal ChatML control tokens in the attacker-controlled chat text, so a client
-     *  can never forge a fake system/assistant turn and escape its own user-turn wrapper. */
+     *  can never forge a fake system/assistant turn and escape its own user-turn wrapper. Unlike
+     *  LlmPromptBuilder::clean() this does NOT ASCII-strip: chat text is legitimately multi-byte, so
+     *  the cap uses mb_strcut to keep whole UTF-8 codepoints (a byte-split tail breaks json_encode). */
     private function sanitize(string $text): string
     {
-        $text = substr($text, 0, self::MAX_USER_TEXT);
+        $text = mb_strcut($text, 0, self::MAX_USER_TEXT);
 
         return str_replace(['<|im_start|>', '<|im_end|>'], ['(im_start)', '(im_end)'], $text);
     }
