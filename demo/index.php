@@ -19,6 +19,8 @@ use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\AiApi\AiChatHandler;
 use Funnypot\App\AiApi\AiChatPromptBuilder;
 use Funnypot\App\AiApi\NonsenseFallback;
+use Funnypot\App\AiApi\WordSwap;
+use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
@@ -152,6 +154,8 @@ if ($config->aiApiEnabled) {
         new AiChatPromptBuilder(),
         new LlmOutputSanitizer(),
         new NonsenseFallback(),
+        new WordSwap(),
+        new WrongLanguageCode(),
         new ProbeGate(
             new ProbeClassifier(),
             new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),

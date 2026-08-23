@@ -40,10 +40,17 @@ final class NonsenseFallback
 
     private const CODE_PATTERN = '/\b(code|python|script|function|bash|sql|program|write.*(a|me).*(script|code))\b/i';
 
+    /** Shared code-request detector: true when the text reads as a request for code/a program. Used by
+     *  the handler to route code requests to a static wrong-language snippet, and here to pick the set. */
+    public static function isCodeRequest(string $text): bool
+    {
+        return preg_match(self::CODE_PATTERN, $text) === 1;
+    }
+
     /** Non-empty; deterministic for the same $req->userText (same index every call). */
     public function text(ChatRequest $req): string
     {
-        $set = preg_match(self::CODE_PATTERN, $req->userText) === 1 ? self::CODE : self::GENERIC;
+        $set = self::isCodeRequest($req->userText) ? self::CODE : self::GENERIC;
         $index = crc32($req->userText) % count($set);
 
         return $set[$index];

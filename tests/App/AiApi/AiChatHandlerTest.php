@@ -13,6 +13,8 @@ use Funnypot\App\AiApi\Dialect\OllamaDialect;
 use Funnypot\App\AiApi\Dialect\OpenAiDialect;
 use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\StreamEmitter;
+use Funnypot\App\AiApi\WordSwap;
+use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeClassifier;
@@ -92,6 +94,8 @@ final class AiChatHandlerTest extends TestCase
             new AiChatPromptBuilder(),
             new LlmOutputSanitizer(),
             new NonsenseFallback(),
+            new WordSwap(),
+            new WrongLanguageCode(),
             new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $this->store),
             new LlmFakeCache($this->dbPath('cache')),
             $this->store,
@@ -331,5 +335,56 @@ final class AiChatHandlerTest extends TestCase
         // Per-request random seed: not the page-gen fixed 42, and different across two calls.
         self::assertNotSame(42, $payloads[0]['seed']);
         self::assertNotSame($payloads[0]['seed'], $payloads[1]['seed']);
+    }
+
+    public function test_code_request_serves_a_static_snippet_without_calling_the_model(): void
+    {
+        $calls = 0;
+        $handler = $this->make(function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])];
+        });
+
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'write me a python script to sort a list']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertSame(0, $calls, 'a code request must be answered statically, no sidecar call');
+        self::assertSame(200, $this->cap->status);
+        self::assertStringContainsString('```', $this->cap->body);              // fenced wrong-language snippet
+        self::assertStringContainsString("here's that in", $this->cap->body);
+        // still logged + reported as recon
+        self::assertNotEmpty($this->store->delta(0)['rows']);
+        self::assertSame(1, $this->abuse->queueCount());
+    }
+
+    public function test_non_code_request_sends_the_word_swapped_text_to_the_model(): void
+    {
+        $prompt = null;
+        $handler = $this->make(function (string $url, string $body) use (&$prompt): array {
+            $prompt = (json_decode($body, true))['prompt'] ?? '';
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'a confident answer'])];
+        });
+
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertIsString($prompt);
+        // the model sees the CORRUPTED question, not the original (>=1 content word is always swapped,
+        // so the original phrase can never survive intact)
+        self::assertStringNotContainsString('capital of France', $prompt);
+        self::assertNotSame(
+            (new AiChatPromptBuilder())->build('what is the capital of France'),
+            $prompt
+        );
+        // it is still a helpful-persona prompt wrapping the mangled text
+        self::assertStringContainsString('You are a helpful assistant.', $prompt);
     }
 }

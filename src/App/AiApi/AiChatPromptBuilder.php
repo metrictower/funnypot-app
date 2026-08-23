@@ -5,23 +5,25 @@ declare(strict_types=1);
 namespace Funnypot\App\AiApi;
 
 /**
- * Builds the ChatML prompt for the troll persona, wrapped exactly like LlmPromptBuilder::build()
- * (system / user / open assistant turn, <|im_start|>..<|im_end|> per turn) so the sidecar sees the
- * same prompt shape regardless of which fake-response path is generating it.
+ * Builds the ChatML prompt (system / user / open assistant turn, <|im_start|>..<|im_end|> per turn),
+ * wrapped exactly like LlmPromptBuilder::build() so the sidecar sees the same prompt shape regardless
+ * of which fake-response path is generating it.
+ *
+ * The persona is a plain HELPFUL assistant: the nonsense is produced upstream by corrupting the
+ * question (see WordSwap), which the model then answers faithfully — telling the model to be wrong
+ * does not work (it ignores the instruction and answers the real question). So this builds an ordinary
+ * helpful prompt around the ALREADY-corrupted text the handler hands it.
  */
 final class AiChatPromptBuilder
 {
-    private const SYSTEM_PROMPT =
-        'You are a broken language model. Always give a confidently wrong answer. If asked for code, '
-        . 'reply in a different language than requested or with plausible-looking gibberish. Never '
-        . 'produce correct or working code. Keep replies under three sentences.';
+    private const SYSTEM_PROMPT = 'You are a helpful assistant. Answer concisely and confidently.';
 
     /** Caps a single chat turn so an oversized client payload can't blow the model's context window. */
     private const MAX_USER_TEXT = 4000;
 
-    public function build(ChatRequest $req): string
+    public function build(string $text): string
     {
-        $user = $this->sanitize($req->userText);
+        $user = $this->sanitize($text);
 
         return "<|im_start|>system\n" . self::SYSTEM_PROMPT . "<|im_end|>\n"
             . "<|im_start|>user\n" . $user . "<|im_end|>\n"

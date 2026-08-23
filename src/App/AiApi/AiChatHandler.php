@@ -43,6 +43,8 @@ class AiChatHandler
         private AiChatPromptBuilder $prompt,
         private LlmOutputSanitizer $sanitizer,
         private NonsenseFallback $fallback,
+        private WordSwap $wordSwap,
+        private WrongLanguageCode $wrongCode,
         private ProbeGate $gate,
         private LlmFakeCache $cache,
         private HitStore $store,
@@ -53,10 +55,11 @@ class AiChatHandler
         // request turns a scanner away and defeats engagement, so strictness is opt-in only.
         private bool $strictAuth = false,
         private bool $strictModel = false,
-        // Chat-only sampling. High temperature + min_p 0 + a per-request random seed is what turns the
-        // low-temp sidecar's (otherwise correct) output into believable nonsense. Page generation is a
-        // different LLM path and is unaffected by these.
-        private float $temp = 1.5,
+        // Chat-only sampling. The corrupted question already supplies the nonsense, so temperature is
+        // kept moderate for a COHERENT answer to it (too high just garbles the reply); min_p 0 + a
+        // per-request random seed keep replies varied. Page generation is a different LLM path,
+        // unaffected by these.
+        private float $temp = 0.8,
         private float $minP = 0.0,
         private float $topP = 1.0,
         private int $maxConcurrent = 4,
@@ -137,8 +140,14 @@ class AiChatHandler
      */
     private function resolveText(ChatRequest $req, RequestContext $ctx, string $ip): string
     {
+        // Code requests get a static wrong-language snippet — no model call, no gate. (serve() still
+        // logs + reports it; the recon intel is the point.)
+        if (NonsenseFallback::isCodeRequest($req->userText)) {
+            return $this->wrongCode->snippet($req->userText);
+        }
+
         // Gate A (per-IP velocity + bulk pin) and Gate B (path plausibility) — default-deny, same gate
-        // the 404-upgrade path uses. A bulk scanner gets the fallback with no sidecar call.
+        // the 404-upgrade path uses. A bulk scanner gets the generic fallback with no sidecar call.
         if (($this->gate->decide($ctx->method, $ctx->path, $ip)['generate'] ?? false) !== true) {
             return $this->fallback->text($req);
         }
@@ -151,8 +160,11 @@ class AiChatHandler
         }
 
         try {
-            // Random seed per request so the same question does not always get the identical reply.
-            $raw = $this->llm->generate($this->prompt->build($req), '', [
+            // Corrupt the question (swap content words for absurd nouns) and have the model answer THAT
+            // straight — the nonsense lives in the question, not in an instruction to be wrong. Random
+            // seed per request so the same question does not always get the identical reply.
+            $mangled = $this->wordSwap->corrupt($req->userText);
+            $raw = $this->llm->generate($this->prompt->build($mangled), '', [
                 'temperature' => $this->temp,
                 'min_p' => $this->minP,
                 'top_p' => $this->topP,
