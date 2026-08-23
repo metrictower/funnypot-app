@@ -210,4 +210,22 @@ abstract class AbstractSkin implements Skin
         }
         return $html . '</tbody></table>';
     }
+
+    /**
+     * A scroll-back pane of raw log lines, each escaped, joined with newlines inside a <pre> so a long
+     * buffer reads as a real log tail. The wrapper class is a trusted skin literal.
+     *
+     * @param list<string> $lines
+     */
+    protected function preScrollHtml(array $lines, string $class): string
+    {
+        if ($lines === []) {
+            return '';
+        }
+        $out = '';
+        foreach ($lines as $l) {
+            $out .= $this->esc($l) . "\n";
+        }
+        return '<pre class="' . $class . '">' . $out . '</pre>';
+    }
 }

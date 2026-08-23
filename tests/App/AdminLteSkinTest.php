@@ -53,6 +53,34 @@ final class AdminLteSkinTest extends TestCase
         self::assertStringContainsString('@' . $persona->domain(), $html); // loot coherent with host identity
     }
 
+    /**
+     * Each sidebar link leads to a different bait section, chosen from the path's last segment; stat
+     * cards ride on every view. The needles are section-specific (not sidebar labels).
+     *
+     * @dataProvider panelViews
+     */
+    public function test_path_selects_the_matching_section(string $path, string $needle): void
+    {
+        $html = (new AdminLteSkin())->render(PageSlots::fromArray([]), VisualPersona::fromSeed(42), $path, $path);
+        self::assertStringContainsString($needle, $html);
+        self::assertStringContainsString('alte-stats', $html); // stat cards on every view
+    }
+
+    /** @return array<string,array{0:string,1:string}> */
+    public static function panelViews(): array
+    {
+        return [
+            'logs' => ['/panel/logs', 'auth.log'],
+            'cron' => ['/panel/cron', 'Scheduled Tasks'],
+            'processes' => ['/panel/processes', 'Miner detected'],
+            'api-keys' => ['/panel/api-keys', '.env'],
+            'files' => ['/panel/files', 'file manager'],
+            'system' => ['/panel/system-info', 'Service tag'],
+            'backups' => ['/panel/backups', 'Keep last 7'],
+            'users' => ['/panel/users', 'password_hash'],
+        ];
+    }
+
     public function test_key_is_adminlte(): void
     {
         self::assertSame('adminlte', (new AdminLteSkin())->key());
