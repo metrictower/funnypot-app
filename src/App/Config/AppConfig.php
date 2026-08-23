@@ -60,6 +60,8 @@ final class AppConfig
         public int $threatIntelDedupHours,
         // LLM-generated fake responses (opt-in; the funnypot-llm sidecar).
         public bool $llmEnabled,
+        /** Fake AI inference API — the chat-completion endpoints (opt-in; also needs the sidecar). */
+        public bool $aiApiEnabled,
         public string $llmUrl,
         public int $llmTimeoutMs,
         public int $llmNPredict,
@@ -131,6 +133,7 @@ final class AppConfig
             threatIntelDailyCap: max(1, (int) $str('FUNNYPOT_THREATINTEL_DAILY_CAP', '1000')),
             threatIntelDedupHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_DEDUP_HOURS', '24')),
             llmEnabled: in_array(strtolower((string) getenv('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
+            aiApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
             llmUrl: $str('FUNNYPOT_LLM_URL', 'http://funnypot-llm:8080/completion'),
             // A CPU 0.5B GBNF generation runs ~3-8s (slower on a small box); the timeout must clear
             // that or every fake times out into a plain 404. The concurrency cap bounds how many

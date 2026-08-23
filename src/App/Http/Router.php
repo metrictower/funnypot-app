@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Http;
 
+use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\RequestContext;
 
@@ -20,6 +21,7 @@ final class Router
         private HoneypotController $honeypot,
         private DashboardController $dashboard,
         private CorporateController $corporate,
+        private ?AiApiRouter $aiApi = null,
     ) {
     }
 
@@ -42,6 +44,14 @@ final class Router
     {
         $method = $ctx->method;
         $path = $ctx->path;
+
+        // Fake AI inference API (POST chat endpoints). Ahead of the honeypot catch-all so a real
+        // OpenAI/ollama client gets a proper stream; unmatched paths fall through unchanged.
+        if ($method === 'POST' && $this->aiApi !== null && $this->aiApi->matches($path)) {
+            $this->aiApi->handle($ctx, $clientIp);
+
+            return;
+        }
         $dash = rtrim($this->config->dashboardPath, '/');   // e.g. /__fp
         $p = rtrim($path, '/');
         if ($p === '') {
@@ -103,6 +113,14 @@ final class Router
     {
         $method = $ctx->method;
         $path = $ctx->path;
+
+        // Fake AI inference API (POST chat endpoints). Ahead of the honeypot catch-all so a real
+        // OpenAI/ollama client gets a proper stream; unmatched paths fall through unchanged.
+        if ($method === 'POST' && $this->aiApi !== null && $this->aiApi->matches($path)) {
+            $this->aiApi->handle($ctx, $clientIp);
+
+            return;
+        }
 
         // Bait robots.txt.
         if ($method === 'GET' && $path === '/robots.txt') {

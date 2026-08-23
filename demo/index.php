@@ -14,6 +14,11 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 require __DIR__ . '/lib/geo.php';
 
+use Funnypot\Ai\ModelCatalog;
+use Funnypot\App\AiApi\AiApiRouter;
+use Funnypot\App\AiApi\AiChatHandler;
+use Funnypot\App\AiApi\AiChatPromptBuilder;
+use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
@@ -52,12 +57,15 @@ $config = AppConfig::fromEnv(__DIR__);
 $store = new SqliteHitStore($config->dbPath, $config->logPath);
 $geo = new Geo($config->geoDbPath);
 
-// Coherent chrome: one consistent X-Powered-By on every response (nginx owns Server), so header
-// recon can't catch a version mismatch between the fake bodies and the server banner.
-header('X-Powered-By: ' . $config->poweredBy);
-
 $context = RequestContext::fromGlobals();
 $clientIp = HoneypotController::clientIp($config->trustedProxies);
+
+// Coherent chrome: one consistent X-Powered-By on every response (nginx owns Server), so header
+// recon can't catch a version mismatch between the fake bodies and the server banner. Skipped on the
+// fake AI-API surface — a real inference server sends no X-Powered-By (the AI handler also strips it).
+if (!AiApiRouter::isAiSurface($context->path)) {
+    header('X-Powered-By: ' . $config->poweredBy);
+}
 
 // Anti-fingerprint tripwire: plant a signed bait cookie and classify what comes back — a client
 // that returns it tampered is a high-signal probe. Off unless FUNNYPOT_HONEYTOKEN_KEY is set.
@@ -131,7 +139,34 @@ if ($config->llmEnabled) {
     );
 }
 
+// Fake AI inference API — the chat-completion endpoints (opt-in, needs the sidecar). Independent of
+// the 404-upgrade LLM feature so it can run alone: it builds its own client/breaker/gate but shares
+// the hit store, the inflight cache (one global concurrency cap) and the AbuseIPDB reporter. Every
+// fault degrades to a deterministic troll fallback at 200, so it only ever answers. The router owns
+// the dialects, so nothing more to construct here.
+$aiApi = null;
+if ($config->aiApiEnabled) {
+    $aiBreaker = new CircuitBreaker($config->llmCacheDb, $config->llmBreakerThreshold, $config->llmBreakerCooldownS);
+    $aiApi = new AiApiRouter(new AiChatHandler(
+        new LlmClient($config->llmUrl, $config->llmTimeoutMs, $config->llmNPredict, $aiBreaker),
+        new AiChatPromptBuilder(),
+        new LlmOutputSanitizer(),
+        new NonsenseFallback(),
+        new ProbeGate(
+            new ProbeClassifier(),
+            new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),
+            $store,
+            allowIps: $config->llmGateAllowIps,
+        ),
+        $llmCache,
+        $store,
+        ModelCatalog::fromPackage(),
+        $abuse,
+        $config->llmMaxConcurrent,
+    ));
+}
+
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier());
 $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
-(new Router($config, $honeypot, $dashboard, $corporate))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $aiApi))->dispatch($context, $clientIp, $tokenVerdict);
