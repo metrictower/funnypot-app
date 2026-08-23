@@ -286,7 +286,7 @@ final class AdminLteSkin extends AbstractSkin
                 $label = $f['isDir'] ? $this->esc($name . '/') : $this->esc($name);
                 // Only downloadable files become links (they keep their extension -> decoy-archive handler);
                 // dirs and text lures render as plain text.
-                if ($f['isDownload'] && preg_match('/^[A-Za-z0-9._-]+$/', $name) === 1) {
+                if ($f['isDownload'] && preg_match('/^[A-Za-z0-9._-]+$/', $name) === 1 && strpos($name, '..') === false) {
                     $label = '<a class="alte-dl" href="' . $this->esc($navBase . '/files/download/' . $name) . '">' . $this->esc($name) . '</a>';
                 }
                 $rows .= '<tr><td>' . $label . '</td><td>' . $this->esc($f['size']) . '</td><td>' . $this->esc($f['modified'])

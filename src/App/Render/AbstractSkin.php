@@ -196,7 +196,9 @@ abstract class AbstractSkin implements Skin
         $html .= '</tr></thead><tbody>';
         foreach ($rows as $r) {
             $file = $r['file'];
-            if (preg_match('/^[A-Za-z0-9._-]+$/', $file) === 1) {
+            // Safe archive name: allowlisted chars AND no '..' run, so the href can only ever be a
+            // sibling download path, never a traversal — even if a less-trusted name ever reaches here.
+            if (preg_match('/^[A-Za-z0-9._-]+$/', $file) === 1 && strpos($file, '..') === false) {
                 $href = $this->esc($navBase . $subPath . '/' . $file);
                 $first = '<a' . $classAttr . ' href="' . $href . '">' . $this->esc($file) . '</a>';
             } else {
