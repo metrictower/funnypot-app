@@ -41,6 +41,8 @@ final class AttackClassifierTest extends TestCase
             ['xss handler', 'name=<img src=x onerror=alert(1)>', 'xss'],
             ['lfi passwd', 'file=../../../../etc/passwd', 'lfi'],
             ['lfi encoded', 'file=%2e%2e%2f%2e%2e%2fetc%2fpasswd', 'lfi'],
+            ['lfi double-encoded', 'file=%252e%252e%252f%252e%252e%252fetc%252fpasswd', 'lfi'],
+            ['sqli double-encoded', 'id=1%2520UNION%2520SELECT%2520a%2520FROM%2520users', 'sqli'],
             ['lfi php filter', 'p=php://filter/convert.base64-encode/resource=index', 'lfi'],
             ['rce semicolon', 'host=127.0.0.1;id', 'rce'],
             ['rce pipe', 'x=1|whoami', 'rce'],
@@ -50,6 +52,7 @@ final class AttackClassifierTest extends TestCase
             ['benign query', 'page=2&sort=name', null],
             ['benign search', 'q=quarterly sales report 2026', null],
             ['benign single dotdot', 'path=../images/logo.png', null],
+            ['benign double-encoded text', 'name=%2547%2543', null],
         ];
     }
 

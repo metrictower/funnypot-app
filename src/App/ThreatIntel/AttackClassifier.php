@@ -64,7 +64,14 @@ final class AttackClassifier
     public function classify(RequestContext $r): ?string
     {
         $raw = $r->path . ' ' . $r->query . ' ' . (string) ($r->rawBody ?? '');
-        $surface = strtolower($raw . ' ' . rawurldecode($raw));
+        // A second decode pass recovers double-encoded WAF-evasion payloads (%252e -> %2e -> .),
+        // added only when an encoded octet survived the first pass so benign input is left as-is.
+        $once = rawurldecode($raw);
+        $surface = $raw . ' ' . $once;
+        if (preg_match('~%[0-9A-Fa-f]{2}~', $once) === 1) {
+            $surface .= ' ' . rawurldecode($once);
+        }
+        $surface = strtolower($surface);
 
         foreach (self::PATTERNS as $class => $patterns) {
             foreach ($patterns as $pattern) {
