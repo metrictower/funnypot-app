@@ -41,6 +41,10 @@ final class PanelRegistry
             'fire' => new FireSection(),
             'cctv' => new CctvSection(),
             'hvac' => new HvacSection(),
+            'hr' => new HrSection(),
+            'finance' => new FinanceSection(),
+            'bank' => new BankSection(),
+            'vendors' => new VendorsSection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -56,6 +60,10 @@ final class PanelRegistry
             'security' => 'fire', 'safety' => 'fire', 'alarms' => 'fire', 'life-safety' => 'fire',
             'cameras' => 'cctv', 'camera' => 'cctv', 'nvr' => 'cctv', 'video' => 'cctv',
             'climate' => 'hvac', 'bms' => 'hvac', 'building' => 'hvac',
+            'employees' => 'hr', 'people' => 'hr', 'staff' => 'hr',
+            'invoices' => 'finance', 'ap' => 'finance', 'accounts-payable' => 'finance',
+            'treasury' => 'bank', 'banking' => 'bank',
+            'suppliers' => 'vendors', 'payments' => 'vendors',
         ];
         $this->fallback = $dashboard;
     }

@@ -60,6 +60,12 @@ final class AdminLteSkin extends AbstractSkin
             ['Fire & Life-Safety', 'fire'],
             ['CCTV', 'cctv'],
         ],
+        'HR & Finance' => [
+            ['Employees', 'hr'],
+            ['Finance', 'finance'],
+            ['Bank', 'bank'],
+            ['Vendors', 'vendors'],
+        ],
     ];
 
     /** Module slug -> page <title>; unmapped modules fall to the Dashboard title. */
@@ -76,6 +82,10 @@ final class AdminLteSkin extends AbstractSkin
         'fire' => 'Fire & Life-Safety', 'safety' => 'Fire & Life-Safety', 'life-safety' => 'Fire & Life-Safety',
         'cctv' => 'CCTV & Video', 'cameras' => 'CCTV & Video', 'nvr' => 'CCTV & Video',
         'hvac' => 'HVAC & Climate', 'climate' => 'HVAC & Climate', 'bms' => 'HVAC & Climate',
+        'hr' => 'Employees', 'employees' => 'Employees', 'people' => 'Employees', 'staff' => 'Employees',
+        'finance' => 'Finance', 'invoices' => 'Finance', 'ap' => 'Finance', 'accounts-payable' => 'Finance',
+        'bank' => 'Bank', 'treasury' => 'Bank', 'banking' => 'Bank',
+        'vendors' => 'Vendors', 'suppliers' => 'Vendors', 'payments' => 'Vendors',
     ];
 
     /** @var PanelRegistry */
