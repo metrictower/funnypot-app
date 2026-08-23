@@ -53,6 +53,17 @@ final class SkinSetTest extends TestCase
             'admin users -> adminlte' => ['/admin/users', 'adminlte'],
             'dashboard -> adminlte' => ['/dashboard', 'adminlte'],
             'manage users -> adminlte' => ['/manage/users', 'adminlte'],
+            // Extension-suffixed admin-panel files: a dot immediately after the token still counts
+            // as the token's own segment (admin.php is "admin" plus a file extension), unlike a dash
+            // or more letters right after it (admin-notes, administer — see misroutedPaths()).
+            'admin.php -> adminlte' => ['/admin.php', 'adminlte'],
+            'admin.aspx -> adminlte' => ['/admin.aspx', 'adminlte'],
+            'dashboard.php -> adminlte' => ['/dashboard.php', 'adminlte'],
+            'manage.php -> adminlte' => ['/manage.php', 'adminlte'],
+            // Joomla's admin path — a common scanner target — is its own exact-segment token since
+            // the dot-suffix rule above doesn't cover it (no dot right after "admin").
+            'administrator -> adminlte' => ['/administrator/', 'adminlte'],
+            'administrator index.php -> adminlte' => ['/administrator/index.php', 'adminlte'],
             'unrelated -> generic' => ['/hr/portal', 'generic'],
         ];
     }
@@ -88,6 +99,10 @@ final class SkinSetTest extends TestCase
             // '/downloads/' never actually contained the literal '/d/' substring, but confirm the
             // anchored top-level check still correctly refuses it.
             'downloads is not a dashboard uid -> generic' => ['/downloads/', 'generic'],
+            // The dot-suffix admission (admin.php, ...) must not reopen the substring bug: a dash or
+            // more letters right after the token is still not a boundary.
+            'admin-notes bare segment -> generic' => ['/admin-notes', 'generic'],
+            'badminton contains admin as a substring, not a segment -> generic' => ['/badminton', 'generic'],
         ];
     }
 

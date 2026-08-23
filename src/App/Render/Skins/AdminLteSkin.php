@@ -19,10 +19,17 @@ final class AdminLteSkin extends AbstractSkin
     public function matches(string $path): bool
     {
         // This is the broadest resemblance matcher of the four, so it anchors the tightest: each
-        // token must BE a whole path segment, not merely appear inside one (e.g. "admin-notes" and
-        // "administer" are not "admin"). That's what keeps this skin from swallowing paths it has no
-        // real business claiming, on top of being registered last in the SkinSet.
-        return PathSegments::has($path, 'admin') || PathSegments::has($path, 'dashboard') || PathSegments::has($path, 'manage');
+        // token must BE a whole path segment — or that segment plus a file extension (admin.php,
+        // admin.aspx, dashboard.php, manage.php) — not merely appear inside one (e.g. "admin-notes"
+        // and "administer" are not "admin"). "administrator" (Joomla's admin path, a common scanner
+        // target) gets its own exact-segment token since the dot-suffix rule doesn't reach it — there
+        // is no dot right after "admin" in "administrator". That's what keeps this skin from
+        // swallowing paths it has no real business claiming, on top of being registered last in the
+        // SkinSet.
+        return PathSegments::hasSegmentOrDotSuffix($path, 'admin')
+            || PathSegments::hasSegmentOrDotSuffix($path, 'dashboard')
+            || PathSegments::hasSegmentOrDotSuffix($path, 'manage')
+            || PathSegments::has($path, 'administrator');
     }
 
     public function key(): string
