@@ -4,6 +4,7 @@ namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
+use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -17,7 +18,9 @@ final class WordpressSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
-        return str_contains($path, '/wp-');
+        // "wp-" is a segment PREFIX, not a whole segment on its own — the real files it needs to
+        // catch (wp-login.php, wp-admin, wp-content, wp-json, ...) all carry more than the bare token.
+        return PathSegments::hasPrefixed($path, 'wp-');
     }
 
     public function key(): string

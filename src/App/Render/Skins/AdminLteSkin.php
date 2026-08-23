@@ -4,6 +4,7 @@ namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
+use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -17,7 +18,11 @@ final class AdminLteSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
-        return str_contains($path, '/admin') || str_contains($path, '/dashboard') || str_contains($path, '/manage');
+        // This is the broadest resemblance matcher of the four, so it anchors the tightest: each
+        // token must BE a whole path segment, not merely appear inside one (e.g. "admin-notes" and
+        // "administer" are not "admin"). That's what keeps this skin from swallowing paths it has no
+        // real business claiming, on top of being registered last in the SkinSet.
+        return PathSegments::has($path, 'admin') || PathSegments::has($path, 'dashboard') || PathSegments::has($path, 'manage');
     }
 
     public function key(): string

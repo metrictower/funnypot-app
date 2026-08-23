@@ -4,6 +4,7 @@ namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
+use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -15,7 +16,11 @@ final class GrafanaSkin extends AbstractSkin
 {
     public function matches(string $path): bool
     {
-        return str_contains($path, '/grafana') || str_contains($path, '/d/');
+        // "grafana" anchors as a whole segment anywhere (e.g. mounted under a subpath). "/d/<uid>"
+        // is Grafana's own dashboard-by-uid route shape, but that shape is only meaningful as the
+        // path's own leading two segments — a bare "d" segment buried later in an unrelated path
+        // (e.g. "/admin/d/xyz") is not a dashboard link, it's a coincidence.
+        return PathSegments::has($path, 'grafana') || PathSegments::startsWithSegmentThenMore($path, 'd');
     }
 
     public function key(): string

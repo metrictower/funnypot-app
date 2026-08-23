@@ -4,6 +4,7 @@ namespace Funnypot\App\Render\Skins;
 
 use Funnypot\App\Render\AbstractSkin;
 use Funnypot\App\Render\PageSlots;
+use Funnypot\App\Render\PathSegments;
 use Funnypot\App\Render\VisualPersona;
 
 /**
@@ -26,7 +27,12 @@ final class PhpMyAdminSkin extends AbstractSkin
 
     public function matches(string $path): bool
     {
-        return str_contains($path, '/phpmyadmin') || str_contains($path, '/pma') || str_contains($path, '/PMA');
+        // Each token is a whole path segment on its own (unlike WordPress's "wp-" prefix family), so
+        // an exact per-segment match is the right anchor — no legitimate phpMyAdmin path buries these
+        // as part of a longer segment name.
+        return PathSegments::has($path, 'phpmyadmin')
+            || PathSegments::has($path, 'pma')
+            || PathSegments::has($path, 'PMA');
     }
 
     public function key(): string
