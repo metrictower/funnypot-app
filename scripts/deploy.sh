@@ -124,6 +124,12 @@ if [ "$LLM_ON" = "1" ]; then
     FUNNYPOT_LLM_FLAGS="$FUNNYPOT_LLM_FLAGS -e FUNNYPOT_LLM_GATE_ALLOW=${FUNNYPOT_LLM_GATE_ALLOW:-} -e FUNNYPOT_LLM_VELOCITY_PER_60S=${FUNNYPOT_LLM_VELOCITY_PER_60S:-30} -e FUNNYPOT_LLM_VELOCITY_PER_10M=${FUNNYPOT_LLM_VELOCITY_PER_10M:-100}"
     LLM_SETUP="sudo docker network inspect $LLM_NET >/dev/null 2>&1 || sudo docker network create $LLM_NET ; sudo docker rm -f funnypot-llm 2>/dev/null || true ; sudo docker run -d --name funnypot-llm --restart unless-stopped --network $LLM_NET -m $LLM_MEM --memory-swap $LLM_MEM_SWAP -e THREADS=$LLM_THREADS -e PARALLEL=$LLM_PARALLEL -e CTX_SIZE=2048 funnypot-llm"
 fi
+
+# Fake AI-API chat tier (Ollama/OpenAI/Anthropic). On by default; reuses the sidecar via
+# FUNNYPOT_LLM_URL when LLM_ON=1, else streams the static nonsense fallback. Chat sampling is
+# independent of the HTML page-gen LLM temperature; strict auth/model are opt-in (default: serve
+# every request to maximise engagement).
+FUNNYPOT_AI_FLAGS="-e FUNNYPOT_AI_API=${FUNNYPOT_AI_API:-1} -e FUNNYPOT_AI_TEMP=${FUNNYPOT_AI_TEMP:-0.8} -e FUNNYPOT_AI_MIN_P=${FUNNYPOT_AI_MIN_P:-0.0} -e FUNNYPOT_AI_TOP_P=${FUNNYPOT_AI_TOP_P:-1.0} -e FUNNYPOT_AI_STRICT_AUTH=${FUNNYPOT_AI_STRICT_AUTH:-} -e FUNNYPOT_AI_STRICT_MODEL=${FUNNYPOT_AI_STRICT_MODEL:-}"
 # \$HOME etc. expand on the REMOTE; \$PFLAGS / \$LLM_SETUP / the LLM flags expand locally.
 # shellcheck disable=SC2029
 ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
@@ -134,7 +140,7 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
     sudo mkdir -p /etc/letsencrypt
     $LLM_SETUP
     sudo docker rm -f funnypot 2>/dev/null || true
-    sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS \
+    sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS \
         -e FUNNYPOT_STYLE=${FUNNYPOT_STYLE:-realistic} \
         -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
         -e FUNNYPOT_ADMIN_PASSWORD='$ADMIN_PASSWORD' \
