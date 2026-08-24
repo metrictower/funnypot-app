@@ -137,6 +137,43 @@ engine. The SSH server, the TCP protocol emulators and the dashboard live in thi
 
 ---
 
+## The deep admin panel
+
+On an admin-shaped path (`/admin`, `/panel/…`, `/dashboard`, `/manage`, `/console`, `/cp`, `/wp-admin`,
+`/phpmyadmin`, `/grafana`, …) the LLM tier serves a **deep, explorable fake corporate office panel** — the
+marquee lure, built for *hours* of exploration. It renders **deterministically from a seeded skin, with no
+model call**, so it is always available (never blocked on the sidecar) and byte-identical per deploy.
+
+**What's in it.** A "control-everything" building + business dashboard, roughly 26 modules behind a grouped
+sidebar: HR (org chart, directory, payroll), Finance (AP/invoices), **Bank & Treasury**, HVAC, CCTV,
+lighting/blinds, access control, fire & life-safety, environment sensors, energy/metering, IT assets
+(CMDB), IT services (helpdesk, printers, licences), network/VPN/VoIP, facilities (floorplan, rooms, work
+orders), appliances/AV/elevators, plus a global search and activity feed. Every screen is deep — lists
+paginate, entities have detail pages and sub-tabs, controls have leaves.
+
+**The bank greed-lure** (`/admin/bank`) is the top-tier time-sink: a wire flow that passes a fake SMS-2FA,
+shows "submitted", then reads as **reversed for compliance** in the ledger; an approver 2FA-"bypass"
+illusion that still needs a second approver; corporate cards with **Luhn-valid** PANs on sandbox BINs;
+an ETH **"cold wallet" reserve** showing a few *real, on-chain-verifiable* addresses (the hook — real
+balances an attacker can confirm but never spend) surrounded by **masked fake** addresses/tx-hashes; a
+downloadable `wallet.json` keystore whose key material is nonsense; and an ETH **staking** view whose
+unstake always fails and whose rewards feed shows live "Nh ago" ages.
+
+**Invariants.** Everything is **100% inert** — no real SMS/transfer/broadcast/exec, no external call on the
+request path, nothing persists; the scary money/control verbs never return "done", they land on a guarded
+soft-deny or a complete-then-reverse. Every page is a **pure function of the deploy seed + URL** (a reload
+is byte-identical), **escape-by-construction**, and **fingerprint-safe**. Panels are **exempt from the
+per-IP velocity/bulk-scan gate** so a human can explore freely without self-pinning to 404s (renders are
+cheap + cached). The one exception to "cached/frozen" is the staking rewards feed, which renders a live
+relative age and is deliberately cache-exempt. Data is seeded + coherent (one persona/company per deploy),
+arithmetic reconciles (cash-on-hand = Σ balances, ledgers, payroll), and cross-module facts agree — kept
+honest by an ongoing realism-hardening pass so the fakery holds up under an attacker's scrutiny.
+
+Architecture: `PanelRoute` (a positional path parser) + `PanelRegistry` (one class per module) + the
+`AdminLteSkin` chrome + ~26 seeded `Fake\*` generators, all under `src/App/Render/`.
+
+---
+
 ## Response styles
 
 Set with the `FUNNYPOT_STYLE` environment variable (the demo defaults to `realistic`):
