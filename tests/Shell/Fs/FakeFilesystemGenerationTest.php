@@ -53,6 +53,23 @@ final class FakeFilesystemGenerationTest extends TestCase
         $this->fs()->list('/srv/app/nonexistent-zzz/deeper');
     }
 
+    public function test_pathological_path_is_rejected_not_fatal(): void
+    {
+        $fs = $this->fs();
+        // 20k segments / 40KB path must be refused cheaply (no deep recursion, no OOM) — never a fatal.
+        $deep = '/' . str_repeat('a/', 20000);
+        self::assertFalse($fs->exists($deep));
+        $threw = false;
+        try {
+            $fs->list($deep);
+        } catch (PathNotFound $e) {
+            $threw = true;
+        }
+        self::assertTrue($threw, 'over-deep path should throw PathNotFound, not fatal');
+        // very long single segment too
+        self::assertFalse($fs->exists('/' . str_repeat('x', 8000)));
+    }
+
     public function test_depth_cap_bottoms_out(): void
     {
         $fs = $this->fs();

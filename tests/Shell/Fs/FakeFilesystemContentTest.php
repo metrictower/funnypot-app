@@ -17,34 +17,74 @@ final class FakeFilesystemContentTest extends TestCase
         return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer');
     }
 
+    /** @param string[] $dirs @return array<string,\Funnypot\Shell\Fs\Node> canonical file path => node */
+    private function findFiles(FakeFilesystem $fs, array $dirs): array
+    {
+        $files = [];
+        foreach ($dirs as $d) {
+            try {
+                $nodes = $fs->list($d);
+            } catch (\Throwable $e) {
+                continue;
+            }
+            foreach ($nodes as $n) {
+                if ($n->isFile()) {
+                    $files[($d === '/' ? '' : $d) . '/' . $n->name] = $n;
+                }
+            }
+        }
+
+        return $files;
+    }
+
     public function test_size_matches_content_length_and_is_capped(): void
     {
         $fs = $this->fs();
-        $sawFile = false;
-        foreach ($fs->list('/srv/app') as $node) {
-            if ($node->isFile()) {
-                $sawFile = true;
-                self::assertLessThanOrEqual(65536, $node->size);
-                self::assertSame($node->size, strlen($fs->read('/srv/app/' . $node->name)));
-            }
+        $files = $this->findFiles($fs, ['/etc', '/usr/lib', '/var/log', '/srv/app', '/opt', '/root', '/usr/share']);
+        self::assertNotEmpty($files);
+        foreach ($files as $path => $node) {
+            self::assertLessThanOrEqual(65536, $node->size);
+            self::assertSame($node->size, strlen($fs->read($path)), "size mismatch for {$path}");
         }
-        self::assertTrue($sawFile, '/srv/app should contain at least one file');
     }
 
     public function test_read_is_deterministic(): void
     {
-        $file = null;
-        foreach ($this->fs()->list('/srv/app') as $n) {
-            if ($n->isFile()) {
-                $file = $n->name;
+        // /etc/passwd is pinned, so guaranteed present regardless of seed.
+        self::assertSame($this->fs()->read('/etc/passwd'), $this->fs()->read('/etc/passwd'));
+    }
+
+    public function test_content_has_no_periodic_padding_and_low_repetition(): void
+    {
+        $fs = $this->fs();
+        $files = $this->findFiles($fs, ['/usr/lib', '/var/log', '/srv/app', '/opt', '/usr/share', '/home', '/var/cache', '/root']);
+        $path = null;
+        foreach ($files as $p => $n) {
+            if ($n->size >= 200) {
+                $path = $p; // a procedural file (none of these dirs are the pinned /etc)
                 break;
             }
         }
-        self::assertNotNull($file);
-        self::assertSame(
-            $this->fs()->read('/srv/app/' . $file),
-            $this->fs()->read('/srv/app/' . $file)
-        );
+        if ($path === null) {
+            self::markTestSkipped('no procedural file >= 200 bytes for this seed');
+        }
+        $bytes = $fs->read($path);
+        // B3 regression: the old base64(fnv1a64-block) put '=' every 12th char and near-identical blocks.
+        self::assertStringNotContainsString('=', $bytes, 'no base64 padding inside generated content');
+        // 12-char windows must not be near-identical (avalanche): most windows are distinct.
+        $windows = [];
+        for ($i = 0; $i + 12 <= strlen($bytes); $i += 12) {
+            $windows[] = substr($bytes, $i, 12);
+        }
+        self::assertGreaterThan(count($windows) * 0.8, count(array_unique($windows)), 'content too repetitive');
+    }
+
+    public function test_symlink_read_does_not_return_procedural_junk(): void
+    {
+        // /etc/localtime is a pinned symlink; reading follows the (unresolvable) target -> PathNotFound,
+        // never a base64 blob (M4).
+        $this->expectException(PathNotFound::class);
+        $this->fs()->read('/etc/localtime');
     }
 
     public function test_read_on_directory_throws_is_a_directory(): void

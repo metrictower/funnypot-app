@@ -201,7 +201,8 @@ final class FingerprintSafetyTest extends TestCase
     /** @return array<string,array{0:string}> role => provider row (FP-0036 fake-filesystem engine). */
     public static function fakeFilesystemRoles(): array
     {
-        return ['developer' => ['developer'], 'finance' => ['finance'], 'ops' => ['ops']];
+        return ['developer' => ['developer'], 'finance' => ['finance'], 'hr' => ['hr'],
+            'sales' => ['sales'], 'ops' => ['ops'], 'generic' => ['generic']];
     }
 
     /**

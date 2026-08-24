@@ -33,8 +33,20 @@ final class HostSecret
         if (!is_dir($storageDir)) {
             @mkdir($storageDir, 0700, true);
         }
-        @file_put_contents($path, $secret, LOCK_EX);
+        $ok = @file_put_contents($path, $secret, LOCK_EX);
         @chmod($path, 0600);
+
+        // A concurrent first-boot writer may have won the race; adopt whatever is now on disk so all
+        // processes converge on ONE secret (a per-process-fresh secret would reshuffle host identity).
+        $onDisk = @file_get_contents($path);
+        if (is_string($onDisk) && $onDisk !== '') {
+            return $onDisk;
+        }
+        if ($ok === false) {
+            // Never silent: an unpersistable secret means identity won't survive a restart — a tell.
+            error_log('funnypot: FS host secret could not be persisted to ' . $path
+                . ' — set FUNNYPOT_FS_SECRET or fix the data-volume permissions');
+        }
 
         return $secret;
     }
