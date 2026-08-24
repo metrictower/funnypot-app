@@ -257,7 +257,7 @@ final class ServerProfile
      * to the inert decoy-archive handler. Sizes/dates are the bait; the headline full backup is huge.
      *
      * Each row's filename date and its "X ago" label are both derived from the SAME seeded elapsed-
-     * seconds offset off FrozenClock::EPOCH, so they can never disagree or land in the future — the two
+     * seconds offset off FrozenClock::epoch(), so they can never disagree or land in the future — the two
      * facts describe the same instant instead of being computed independently (critique root-cause B).
      *
      * @return list<array{name:string,size:string,age:string}>
@@ -278,9 +278,10 @@ final class ServerProfile
             [28 * 86400, 34 * 86400],   // 28-34 days ago
             [35 * 86400, 42 * 86400],   // 35-42 days ago
         ];
+        $now = FrozenClock::epoch();
         foreach ($bands as $i => $band) {
             $ago = $this->intIn($band[0], $band[1], 'bkage' . $i);
-            $epoch = FrozenClock::EPOCH - $ago;
+            $epoch = $now - $ago;
             [$y, $mo, $d] = FrozenClock::civilFromDays(intdiv($epoch, 86400));
             $secOfDay = $epoch % 86400;
             $h = intdiv($secOfDay, 3600);

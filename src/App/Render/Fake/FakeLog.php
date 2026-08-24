@@ -174,7 +174,7 @@ final class FakeLog
         $host = $this->hostname();
         $baitOffset = $this->h('baitoff') % 300;   // guarantees ~1 bait per 300 lines
         // Walk the elapsed-seconds counter forward first so the total span is known, then anchor the
-        // LAST line to FrozenClock::EPOCH ("now") and derive every earlier line by walking back from
+        // LAST line to FrozenClock::epoch() ("now") and derive every earlier line by walking back from
         // it — the newest tail line is always recent, never a span unrelated to the frozen instant.
         $t = 0;
         $offsets = [];
@@ -183,9 +183,10 @@ final class FakeLog
             $offsets[] = $t;
         }
         $span = $t;
+        $now = FrozenClock::epoch();
         $out = [];
         for ($i = 0; $i < $lines; $i++) {
-            $ts = $this->tsSyslog(FrozenClock::EPOCH - ($span - $offsets[$i]));
+            $ts = $this->tsSyslog($now - ($span - $offsets[$i]));
             $pid = $this->intIn(2000, 32767, 'pid|' . $i);
             $port = $this->intIn(20000, 65000, 'port|' . $i);
             $ip = $this->privateIp('aip|' . $i);
@@ -259,7 +260,7 @@ final class FakeLog
             'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.0; +https://openai.com/gptbot',
         ];
         // Same backward-from-"now" anchoring as authLog(): walk elapsed seconds forward to find the
-        // span, then the last line lands on FrozenClock::EPOCH and every earlier line walks back from it.
+        // span, then the last line lands on FrozenClock::epoch() and every earlier line walks back from it.
         $t = 0;
         $offsets = [];
         for ($i = 0; $i < $lines; $i++) {
@@ -267,6 +268,7 @@ final class FakeLog
             $offsets[] = $t;
         }
         $span = $t;
+        $now = FrozenClock::epoch();
         $out = [];
         for ($i = 0; $i < $lines; $i++) {
             $ip = $this->privateIp('xip|' . $i);
@@ -278,7 +280,7 @@ final class FakeLog
             $out[] = sprintf(
                 '%s - - %s "%s %s HTTP/1.1" %d %s "-" "%s"',
                 $ip,
-                $this->tsClf(FrozenClock::EPOCH - ($span - $offsets[$i])),
+                $this->tsClf($now - ($span - $offsets[$i])),
                 $method,
                 $path,
                 $status,

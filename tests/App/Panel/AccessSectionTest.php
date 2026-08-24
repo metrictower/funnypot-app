@@ -89,7 +89,7 @@ final class AccessSectionTest extends TestCase
                     "seed $seed: badge event carries a full date"
                 );
                 $epoch = strtotime($e['time'] . ' UTC');
-                self::assertLessThanOrEqual(Access::DEPLOY_EPOCH, $epoch, "seed $seed: badge event must not be in the future");
+                self::assertLessThanOrEqual(Access::deployEpoch(), $epoch, "seed $seed: badge event must not be in the future");
             }
 
             foreach ($access->accessEventLog(60) as $line) {
@@ -99,7 +99,7 @@ final class AccessSectionTest extends TestCase
                     "seed $seed: access log line carries a full date: $line"
                 );
                 $epoch = strtotime(substr($line, 0, 19) . ' UTC');
-                self::assertLessThanOrEqual(Access::DEPLOY_EPOCH, $epoch, "seed $seed: access log entry must not be in the future: $line");
+                self::assertLessThanOrEqual(Access::deployEpoch(), $epoch, "seed $seed: access log entry must not be in the future: $line");
             }
         }
     }

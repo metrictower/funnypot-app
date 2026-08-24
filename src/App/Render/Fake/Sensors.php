@@ -20,7 +20,7 @@ namespace Funnypot\App\Render\Fake;
  *  - DETERMINISTIC per seed: every reading is hash(seed+id+field) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); a sensor's facts derive from its id alone, so sensor($id) is
  *    byte-identical to that sensor's row in sensors() and reproducible standalone. "last seen" is an
- *    offset off FrozenClock::EPOCH, never time().
+ *    offset off FrozenClock::epoch(), never time().
  *  - COHERENT: sensors derive from Building floors/rooms/zones; a sensor's controller is a real BMS
  *    controller id; numeric HA units match the device class (°C/%/ppm/µg·m⁻³/lx/W).
  *  - SAFE: point hosts are BMS controllers on RFC1918 10.0.50.x:47808 only. Invented ids only, never a
@@ -34,8 +34,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Sensors
 {
-    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. A const can't
+     *  call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** BACnet/IP port every BMS controller answers on (matches Building's BMS controllers). */
     public const BACNET_PORT = 47808;
@@ -315,7 +319,7 @@ final class Sensors
         $battery = $wired ? -1 : $this->intIn(8, 100, $id . '|batt');
 
         $offset = $this->intIn(4, 7200, $id . '|seen');            // 4 s .. 2 h since last poll
-        $lastSeenEpoch = self::DEPLOY_EPOCH - $offset;
+        $lastSeenEpoch = self::deployEpoch() - $offset;
 
         return [
             'id' => $id,
@@ -344,7 +348,7 @@ final class Sensors
             'lastSeenEpoch' => $lastSeenEpoch,
             'lastSeen' => $this->relAge($offset),
             'plantedLeak' => $plantedLeak,
-            'workOrder' => $plantedLeak ? 'WO-2026-' . sprintf('%06d', 4000 + ($this->h($id . '|wo') % 5000)) : '',
+            'workOrder' => $plantedLeak ? 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 4000 + ($this->h($id . '|wo') % 5000)) : '',
         ];
     }
 

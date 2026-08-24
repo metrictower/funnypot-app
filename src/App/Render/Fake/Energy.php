@@ -30,8 +30,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Energy
 {
-    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. A const can't
+     *  call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** Field-controller (breaker/board) OT subnet — RFC1918, distinct from the BMS 10.0.50.x fabric. */
     public const FC_SUBNET = '10.20.31.';
@@ -667,7 +671,7 @@ final class Energy
         if ($this->solarFaultCount() === 0) {
             return '';
         }
-        return 'WO-2026-' . sprintf('%06d', 5000 + ($this->h('solarwo') % 4000));
+        return 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 5000 + ($this->h('solarwo') % 4000));
     }
 
     // --- BESS (battery storage) ---

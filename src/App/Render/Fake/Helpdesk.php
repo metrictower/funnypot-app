@@ -26,7 +26,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Helpdesk
 {
-    private const FY = '2026';
+    /** Fiscal year embedded in ticket ids — the deploy year, so a later-year deploy mints later-year ids.
+     *  A const can't call FrozenClock::year(), so this is a runtime accessor. */
+    private static function fy(): string
+    {
+        return (string) FrozenClock::year();
+    }
 
     /** First ticket index -> ticket number, so an id maps back to a corpus index. */
     private const TKT_BASE = 100001;
@@ -153,7 +158,7 @@ final class Helpdesk
         $createdBack = $this->intIn(1, 540, 'tkt-cd|' . $i);
         $updatedBack = $this->intIn(0, $createdBack, 'tkt-ud|' . $i);
 
-        $number = sprintf('HD-%s-%06d', self::FY, self::TKT_BASE + $i);
+        $number = sprintf('HD-%s-%06d', self::fy(), self::TKT_BASE + $i);
         return [
             'index' => $i,
             'number' => $number,
@@ -183,7 +188,7 @@ final class Helpdesk
     public function ticketByIdSlug(string $slug): array
     {
         $slug = strtolower($slug);
-        $prefix = 'hd-' . strtolower(self::FY) . '-';
+        $prefix = 'hd-' . strtolower(self::fy()) . '-';
         if (strpos($slug, $prefix) === 0) {
             $num = substr($slug, strlen($prefix));
             if ($num !== '' && ctype_digit($num)) {

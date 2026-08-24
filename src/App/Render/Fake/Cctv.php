@@ -26,8 +26,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Cctv
 {
-    /** Frozen "now" base for burned timecodes / recording windows — the one shared clock. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" base for burned timecodes / recording windows — the one shared clock. A const
+     *  can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** @var int */
     private $seed;
@@ -66,13 +70,13 @@ final class Cctv
     }
 
     /**
-     * A "just now" instant for a burned timecode — a few seconds to a few minutes before DEPLOY_EPOCH, so
+     * A "just now" instant for a burned timecode — a few seconds to a few minutes before deployEpoch(), so
      * a live-view overlay reads as the panel's own clock, not a random hour that can land hours ahead of
      * the frozen "now" (spec E11 — no future timestamps).
      */
     private function liveTimecode(string $salt): string
     {
-        $epoch = self::DEPLOY_EPOCH - $this->intIn(0, 240, $salt . '|lag');
+        $epoch = self::deployEpoch() - $this->intIn(0, 240, $salt . '|lag');
         return FrozenClock::ymd($epoch) . ' ' . FrozenClock::clock($epoch);
     }
 
@@ -268,7 +272,7 @@ final class Cctv
 
     /**
      * Seeded recording clips for a camera, newest first. Row $i's start walks strictly backward from
-     * DEPLOY_EPOCH by the clip's own duration plus a seeded gap, the same anchoring events()/
+     * deployEpoch() by the clip's own duration plus a seeded gap, the same anchoring events()/
      * cameraEventsFor() use, so a clip never "starts" later than the frozen now and the reel reads as
      * one continuous back-catalogue rather than a wall clock stuck in the future (spec E11). Filenames
      * end `.mp4.zip` so a download routes to the decoy-archive handler (spec E8), and match
@@ -281,7 +285,7 @@ final class Cctv
         $count = $this->intIn(6, 14, 'recn|' . $camId);
         $triggers = ['Continuous', 'Motion', 'Motion', 'Alarm', 'Tamper', 'Line-cross'];
         $out = [];
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'rec|' . $camId . '|' . $i;
             $secs = $this->intIn(20, 1800, $salt . '|dur');
@@ -366,7 +370,7 @@ final class Cctv
 
     /**
      * Recent camera-plane events (newest first) — motion / tamper / signal-loss lines for the landing and
-     * per-camera log. Each row walks strictly backward from DEPLOY_EPOCH by a seeded positive gap, so the
+     * per-camera log. Each row walks strictly backward from deployEpoch() by a seeded positive gap, so the
      * date advances (never repeats or jumps) exactly when the walk crosses midnight, and row 0 is never
      * later than "now" (spec E11 — no future timestamps).
      *
@@ -380,7 +384,7 @@ final class Cctv
         $cams = $this->cameras();
         $kinds = ['MOTION', 'MOTION', 'LINE-CROSS', 'TAMPER', 'SIGNAL-LOSS', 'PTZ-PRESET', 'RECORD-START'];
         $out = [];
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'evt|' . $i;
             $cam = $cams[$this->h($salt . '|cam') % count($cams)];
@@ -394,7 +398,7 @@ final class Cctv
 
     /**
      * This camera's own recent event tail (newest first) — every line names THIS camera, so a per-camera
-     * events tab never shows another camera's id. Same strictly-backward walk off DEPLOY_EPOCH as events(),
+     * events tab never shows another camera's id. Same strictly-backward walk off deployEpoch() as events(),
      * keyed to (camId,index), so no row is ever in the future and the date advances only forward-in-time.
      *
      * @return list<string>
@@ -407,7 +411,7 @@ final class Cctv
         $cam = $this->camera($camId);
         $kinds = ['MOTION', 'MOTION', 'LINE-CROSS', 'TAMPER', 'SIGNAL-LOSS', 'PTZ-PRESET', 'RECORD-START'];
         $out = [];
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'camevt|' . $camId . '|' . $i;
             $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];

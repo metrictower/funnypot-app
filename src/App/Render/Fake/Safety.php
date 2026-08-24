@@ -15,7 +15,7 @@ namespace Funnypot\App\Render\Fake;
  *    Fake\Building topology) so the same server room is a suppression zone here, an HVAC CRAC zone, an
  *    access door and a camera elsewhere. Fixed special spaces (records vault, kitchen, parking) round it out.
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
- *    time()/date()/rand()/shuffle(); ages/timestamps derive from one frozen DEPLOY_EPOCH. Same seed ->
+ *    time()/date()/rand()/shuffle(); ages/timestamps derive from one frozen deployEpoch(). Same seed ->
  *    byte-identical panel (a shifting fire panel is itself a tell).
  *  - SAFE: FACP addressing is RFC1918 only (fire OT segment 10.0.80.x). Invented panel/loop ids only,
  *    never a scanner-signature string. Panel status is always NORMAL — no live alarm to "acknowledge".
@@ -28,8 +28,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Safety
 {
-    /** Frozen "now" for ages/timestamps so a static reload is not a tell. Matches Building/Org. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" for ages/timestamps so a static reload is not a tell. Matches Building/Org. A
+     *  const can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** SLC detector devices across the loops — a long inert address list (spec §C.4). */
     public const DETECTOR_TOTAL = 512;
@@ -69,7 +73,7 @@ final class Safety
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** Seeded "N ago" off DEPLOY_EPOCH — deterministic, never time()/date(). */
+    /** Seeded "N ago" off deployEpoch() — deterministic, never time()/date(). */
     private function ageAgo(string $salt): string
     {
         $sec = $this->intIn(60, 2592000, $salt);        // 1 min .. 30 days
@@ -416,7 +420,7 @@ final class Safety
 
     /**
      * A page of the incident buffer — benign life-safety operations (tests, isolations, cleared faults),
-     * never a live fire. Row $i's timestamp is a strictly-backward walk off DEPLOY_EPOCH (a seeded positive
+     * never a live fire. Row $i's timestamp is a strictly-backward walk off deployEpoch() (a seeded positive
      * gap subtracted per step, absolute-index-keyed so any page recomputes the same date+time for the same
      * row): newest-first, never in the future, and the printed date advances exactly when the walk crosses
      * midnight. Each incident is located in a real Building room (never an invented floor/room the topology
@@ -451,10 +455,10 @@ final class Safety
             $rooms[] = array('id' => 'room-g-01', 'name' => 'Core', 'floor' => 'G');
         }
 
-        // Strictly-descending epochs for every row up to this page, walked backward from DEPLOY_EPOCH so
+        // Strictly-descending epochs for every row up to this page, walked backward from deployEpoch() so
         // paging never repeats a date or reverses the clock, and row 0 is never later than "now".
         $end = $offset + $limit;
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         $epochs = array();
         for ($k = 0; $k < $end; $k++) {
             $epoch -= $this->intIn(60, 900, 'incgap|' . $k);
@@ -467,7 +471,7 @@ final class Safety
             $room = $rooms[$this->h('incroom|' . $i) % count($rooms)];
             $rowEpoch = $epochs[$i];
             $out[] = array(
-                'ref' => 'FIRE-2026-' . sprintf('%05d', self::INCIDENT_TOTAL - $i),
+                'ref' => 'FIRE-' . FrozenClock::year() . '-' . sprintf('%05d', self::INCIDENT_TOTAL - $i),
                 'time' => FrozenClock::ymd($rowEpoch) . ' ' . FrozenClock::clock($rowEpoch),
                 'type' => $types[$this->h('inctype|' . $i) % count($types)],
                 'location' => $room['name'] . ' (Floor ' . $room['floor'] . ')',

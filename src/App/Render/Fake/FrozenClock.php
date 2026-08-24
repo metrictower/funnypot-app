@@ -10,27 +10,45 @@ namespace Funnypot\App\Render\Fake;
  * a vendor due date against a finance audit stamp) finds one consistent clock, never a skew that
  * unmasks the page as generated.
  *
- * No time()/date()/gmdate() anywhere: "now" is a fixed epoch and every civil-date conversion is integer
- * arithmetic (Howard Hinnant's days<->y/m/d algorithm), so a static reload is byte-identical. Callers
- * anchor their own relative walks off EPOCH; this class only defines the instant and the conversions.
+ * No time()/date()/gmdate() anywhere: "now" is a frozen epoch (fixed for the life of one deploy — see
+ * epoch()) and every civil-date conversion is integer arithmetic (Howard Hinnant's days<->y/m/d
+ * algorithm), so a static reload is byte-identical. Callers anchor their own relative walks off
+ * epoch(); this class only defines the instant and the conversions.
  *
  * PHP 7.3-clean (plain static methods + intdiv/sprintf) so a fact can promote into a core template
  * unchanged when one needs it.
  */
 final class FrozenClock
 {
-    /** The canonical frozen instant: 2026-08-24 01:46:40 UTC. Every module's "now" resolves here. */
-    public const EPOCH = 1787536000;
+    /** The fallback frozen instant when no deploy epoch is set: 2026-08-24 01:46:40 UTC. */
+    public const EPOCH_FALLBACK = 1787536000;
 
-    /** The same instant as civil parts, for callers that want the calendar fields directly. */
+    /** Civil parts of EPOCH_FALLBACK, for callers that want the calendar fields directly. These
+     *  describe the fallback only — they do NOT track epoch(), since a class const can't call a
+     *  method; callers that need the deploy epoch's calendar fields must go through civilFromDays(). */
     public const YEAR = 2026;
     public const MONTH = 8;
     public const DAY = 24;
 
+    /**
+     * The frozen "now" every module resolves: FUNNYPOT_EPOCH from the environment (stamped once at
+     * container start by the deploy script) when it's a valid positive integer, else EPOCH_FALLBACK.
+     * Constant for the life of one process/deploy — a redeploy advances it, a reload within the same
+     * deploy does not, so the panel stays byte-identical between requests.
+     */
+    public static function epoch(): int
+    {
+        $env = getenv('FUNNYPOT_EPOCH');
+        if ($env !== false && ctype_digit($env) && (int) $env > 0) {
+            return (int) $env;
+        }
+        return self::EPOCH_FALLBACK;
+    }
+
     /** Whole days since the Unix epoch for the frozen instant (floor — drops the time-of-day). */
     public static function nowDays(): int
     {
-        return intdiv(self::EPOCH, 86400);
+        return intdiv(self::epoch(), 86400);
     }
 
     /** The frozen "today" as YYYY-MM-DD. */
@@ -77,6 +95,20 @@ final class FrozenClock
     public static function ymd(int $epoch): string
     {
         return self::ymdFromDays($epoch >= 0 ? intdiv($epoch, 86400) : -intdiv(-$epoch + 86399, 86400));
+    }
+
+    /** The civil year of the frozen "now" — tracks epoch(), unlike the YEAR const. Identifiers that embed
+     *  a year (work-order/invoice/ticket ids) must read this, not YEAR, so the id stays consistent with
+     *  every other date the deploy renders. */
+    public static function year(): int
+    {
+        return self::civilFromDays(self::nowDays())[0];
+    }
+
+    /** The civil month (1-12) of the frozen "now" — tracks epoch(), unlike the MONTH const. */
+    public static function month(): int
+    {
+        return self::civilFromDays(self::nowDays())[1];
     }
 
     /** HH:MM:SS for an absolute epoch. */

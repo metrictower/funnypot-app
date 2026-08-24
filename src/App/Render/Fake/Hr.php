@@ -27,10 +27,6 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Hr
 {
-    /** Frozen "now" for start dates / tenure math — read from the one shared clock. No date()/time(). */
-    public const ANCHOR_YEAR = FrozenClock::YEAR;
-    public const ANCHOR_MONTH = FrozenClock::MONTH;
-
     /** @var int */
     private $seed;
 
@@ -57,6 +53,20 @@ final class Hr
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
         return new self($seed, $personaDomain);
+    }
+
+    /**
+     * The current [year, month] for start-date/tenure math. A class const can't call FrozenClock::epoch(),
+     * and FrozenClock::YEAR/MONTH describe only the fallback instant — so this reads the deploy epoch's
+     * own calendar date at call time, keeping hire dates in step with every other epoch-aware module
+     * (Payroll included) under a set FUNNYPOT_EPOCH instead of pinning to the fallback.
+     *
+     * @return array{0:int,1:int}
+     */
+    private static function anchorYearMonth(): array
+    {
+        $c = FrozenClock::civilFromDays(FrozenClock::nowDays());
+        return [$c[0], $c[1]];
     }
 
     // --- deterministic seeded primitives ---
@@ -398,7 +408,8 @@ final class Hr
 
     private function startDate(int $tenureMonths, string $id): string
     {
-        $total = self::ANCHOR_YEAR * 12 + (self::ANCHOR_MONTH - 1) - $tenureMonths;
+        [$ay, $am] = self::anchorYearMonth();
+        $total = $ay * 12 + ($am - 1) - $tenureMonths;
         if ($total < 0) {
             $total = 0;
         }

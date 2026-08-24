@@ -14,7 +14,7 @@ namespace Funnypot\App\Render\Fake;
  * Design rules (deep-admin dashboard spec §C.3 + adversarial critique):
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); clock strings are formatted by integer arithmetic off one frozen
- *    DEPLOY_EPOCH, so a static reload is byte-identical and never a tell.
+ *    deployEpoch(), so a static reload is byte-identical and never a tell.
  *  - COHERENT: doors reconcile to Building topology + ACS controllers; cardholder magnitude derives from
  *    Org's count-ratio table (N + contractors), never an out-of-scale 50,000.
  *  - SAFE: all controller addressing RFC1918 (10.0.60.x); badge ids masked, PINs never exposed; every
@@ -28,8 +28,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Access
 {
-    /** Frozen "now" for ages/clock so a static reload is not a tell (spec E11). Matches Building/Org. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" for ages/clock so a static reload is not a tell (spec E11). Matches Building/Org. A
+     *  const can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** Access levels a badge can carry; MASTER is the planted all-doors bait (budgeted). */
     private const LEVELS = ['Employee', 'Contractor', 'Executive', 'Facilities', 'SERVER-ROOM', 'MASTER'];
@@ -80,7 +84,7 @@ final class Access
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** Seeded "N ago" string off DEPLOY_EPOCH — deterministic, never time()/date(). */
+    /** Seeded "N ago" string off deployEpoch() — deterministic, never time()/date(). */
     private function ageAgo(string $salt): string
     {
         $sec = $this->intIn(4, 172800, $salt);           // 4 s .. 2 days
@@ -397,7 +401,7 @@ final class Access
 
     /**
      * Recent transactions at one door, newest first. Row $i's time is a strictly-backward walk off
-     * DEPLOY_EPOCH (a seeded positive gap subtracted per step, cumulative — not an independent draw per
+     * deployEpoch() (a seeded positive gap subtracted per step, cumulative — not an independent draw per
      * row), so the scroll never jumps forward and row 0 is never later than "now" (spec E11). Badges are
      * masked; a high-security door skews toward more DENIED lines (schedule / access-level). Each row
      * prints the full civil date alongside the time — a door open long enough to cross local midnight must
@@ -410,7 +414,7 @@ final class Access
         $door = $this->door($doorId);
         $n = $this->org->headcount();
         $out = [];
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'evt|' . $doorId . '|' . $i;
             $epoch -= $this->intIn(70, 900, $salt . '|gap');
@@ -438,7 +442,7 @@ final class Access
     /**
      * The building-wide access-event scroll as preformatted lines (aligned columns), newest first, each
      * carrying its ACS controller's RFC1918 source. Row $i's time is a strictly-backward walk off
-     * DEPLOY_EPOCH (a seeded positive gap subtracted per step, cumulative — not an independent draw per
+     * deployEpoch() (a seeded positive gap subtracted per step, cumulative — not an independent draw per
      * row), so the scroll never jumps forward and row 0 is never later than "now" (spec E11). One
      * off-hours GRANTED to a server room is buried in when the budget allows — the thread the incident
      * view reconstructs; its slot is pulled back to the nearest earlier off-hours instant without breaking
@@ -454,7 +458,7 @@ final class Access
         $n = $this->org->headcount();
         $plantOffHours = ($this->h('offhours') % 3) === 0;
         $out = [];
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'log|' . $i;
             $epoch -= $this->intIn(40, 400, $salt . '|gap');

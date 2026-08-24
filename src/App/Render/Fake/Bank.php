@@ -411,7 +411,7 @@ final class Bank
     {
         $kinds = ['WIRE', 'ACH', 'DEP', 'CHK', 'POS', 'FEE', 'TFR'];
         $k = $kinds[$this->h($slug . '|refk|' . $g) % count($kinds)];
-        return $k . '-2026-' . sprintf('%06d', $this->intIn(1, 899999, $slug . '|refn|' . $g));
+        return $k . '-' . FrozenClock::year() . '-' . sprintf('%06d', $this->intIn(1, 899999, $slug . '|refn|' . $g));
     }
 
     private function ledgerDesc(string $slug, int $g, int $amount): string
@@ -582,7 +582,7 @@ final class Bank
      */
     public function wireRef(string $accountId, string $slot): string
     {
-        return 'WIRE-2026-' . strtoupper(substr(hash('sha256', $this->seed . '|wire|' . $accountId . '|' . $slot), 0, 6));
+        return 'WIRE-' . FrozenClock::year() . '-' . strtoupper(substr(hash('sha256', $this->seed . '|wire|' . $accountId . '|' . $slot), 0, 6));
     }
 
     /** The masked phone a wire/crypto-send 2FA step claims to have texted a code to. Never validated —
@@ -951,7 +951,7 @@ final class Bank
     /** The deterministic reference an unstake request is assigned — same idiom as wireRef(). */
     public function stakingUnstakeRef(string $slot): string
     {
-        return 'UNSTK-2026-' . strtoupper(substr(hash('sha256', $this->seed . '|unstake|' . $slot), 0, 6));
+        return 'UNSTK-' . FrozenClock::year() . '-' . strtoupper(substr(hash('sha256', $this->seed . '|unstake|' . $slot), 0, 6));
     }
 
     /** A large seeded exit-queue position — always deep enough to read as a genuine backlog. */

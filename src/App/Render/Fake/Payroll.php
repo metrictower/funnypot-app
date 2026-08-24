@@ -19,8 +19,8 @@ namespace Funnypot\App\Render\Fake;
  *    column by column; a run's totals = Σ that run's payslips. An attacker who adds it up finds it
  *    consistent, period by period.
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
- *    time()/date()/rand()/shuffle(); "now" is one frozen anchor period (ANCHOR_YEAR/ANCHOR_MONTH), so a
- *    static reload is byte-identical and never a tell.
+ *    time()/date()/rand()/shuffle(); "now" is one frozen anchor period (anchorYearMonth(), derived from
+ *    the deploy epoch), so a static reload is byte-identical and never a tell.
  *  - SAFE: no real bank/tax numbers live here (the HR profile masks those); this layer is money amounts
  *    only. No real employer, no scanner-signature string.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf/intdiv, no enums/promotion/str_contains) so a fact can
@@ -30,10 +30,6 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Payroll
 {
-    /** Frozen "now": the latest (current) pay period, read from the one shared clock (no date()/time()). */
-    public const ANCHOR_YEAR = FrozenClock::YEAR;
-    public const ANCHOR_MONTH = FrozenClock::MONTH;
-
     /** How many monthly runs the register goes back (frozen, deterministic). */
     public const RUN_HISTORY = 20;
 
@@ -59,6 +55,20 @@ final class Payroll
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
         return new self($seed, $personaDomain);
+    }
+
+    /**
+     * The current [year, month] for the anchor pay period. A class const can't call FrozenClock::epoch(),
+     * and FrozenClock::YEAR/MONTH describe only the fallback instant — so this reads the deploy epoch's
+     * own calendar date at call time, keeping the anchor period in step with every other epoch-aware
+     * module under a set FUNNYPOT_EPOCH instead of pinning to the fallback.
+     *
+     * @return array{0:int,1:int}
+     */
+    private static function anchorYearMonth(): array
+    {
+        $c = FrozenClock::civilFromDays(FrozenClock::nowDays());
+        return [$c[0], $c[1]];
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---
@@ -129,7 +139,8 @@ final class Payroll
      */
     private function monthsBackFor(int $y, int $mo): int
     {
-        $anchorTotal = self::ANCHOR_YEAR * 12 + (self::ANCHOR_MONTH - 1);
+        [$ay, $am] = self::anchorYearMonth();
+        $anchorTotal = $ay * 12 + ($am - 1);
         $total = $y * 12 + ($mo - 1);
         $k = $anchorTotal - $total;
         return $k < 0 ? 0 : $k;
@@ -229,7 +240,8 @@ final class Payroll
     /** The run id k whole months before the anchor, e.g. k=0 -> current period. */
     private function runIdBack(int $k): string
     {
-        $total = self::ANCHOR_YEAR * 12 + (self::ANCHOR_MONTH - 1) - $k;
+        [$ay, $am] = self::anchorYearMonth();
+        $total = $ay * 12 + ($am - 1) - $k;
         $y = intdiv($total, 12);
         $mo = ($total % 12) + 1;
         return sprintf('run-%04d-%02d', $y, $mo);
@@ -247,7 +259,8 @@ final class Payroll
         $y = $ym[0];
         $mo = $ym[1];
         $day = $this->intIn(24, 27, 'payday|' . $y . '-' . $mo);
-        $anchor = $y === self::ANCHOR_YEAR && $mo === self::ANCHOR_MONTH;
+        [$ay, $am] = self::anchorYearMonth();
+        $anchor = $y === $ay && $mo === $am;
         $totals = $this->runTotals($this->monthsBackFor($y, $mo));
         return array(
             'id' => sprintf('run-%04d-%02d', $y, $mo),
@@ -301,7 +314,7 @@ final class Payroll
                 return array((int) $m[1], $mo);
             }
         }
-        return array(self::ANCHOR_YEAR, self::ANCHOR_MONTH);
+        return self::anchorYearMonth();
     }
 
     // --- payslips ---

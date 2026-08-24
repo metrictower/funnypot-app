@@ -114,7 +114,7 @@ final class Network
     /** A frozen absolute epoch $salt-seconds before the frozen "now" (bounded 0..$maxSec). */
     private function epochAgo(string $salt, int $maxSec): int
     {
-        return FrozenClock::EPOCH - $this->intIn(30, $maxSec, $salt);
+        return FrozenClock::epoch() - $this->intIn(30, $maxSec, $salt);
     }
 
     // --- device estate ---
@@ -648,7 +648,7 @@ final class Network
         }
         $exts = $this->extensionRows();
         $lines = [];
-        $cursor = FrozenClock::EPOCH;
+        $cursor = FrozenClock::epoch();
         for ($i = 0; $i < $count; $i++) {
             $cursor -= $this->intIn(20, 900, 'cdrgap|' . $i);
             $stamp = FrozenClock::ymd($cursor) . ' ' . FrozenClock::clock($cursor);

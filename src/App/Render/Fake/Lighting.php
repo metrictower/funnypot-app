@@ -28,8 +28,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Lighting
 {
-    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Hvac. A const can't
+     *  call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** BACnet/IP port every BMS controller answers on (matches Building's BMS controllers). */
     public const BACNET_PORT = 47808;

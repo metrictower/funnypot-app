@@ -19,7 +19,7 @@ namespace Funnypot\App\Render\Fake;
  *  - DETERMINISTIC per seed: every value is hash(seed+id+field) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); an endpoint's facts derive from its id, so endpoint($id) is
  *    byte-identical to its row in endpoints() and reproducible standalone. Ages are offsets off
- *    FrozenClock::EPOCH.
+ *    FrozenClock::epoch().
  *  - SAFE: every host is RFC1918 (10.x) only — the whole point of a leaked internal endpoint is that it
  *    is internal. Credentials are masked, fabricated and non-validating (community strings, MQTT users,
  *    API keys); no OID is rendered as a dotted-numeric quad (that would read as an IP). No real

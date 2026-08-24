@@ -139,9 +139,10 @@ final class FakeLogTest extends TestCase
 
     public function test_auth_log_newest_line_is_anchored_to_frozen_now(): void
     {
-        // The offsets are built so the LAST line lands exactly on FrozenClock::EPOCH — a live "now"
-        // tail, not a span anchored to an unrelated random offset.
-        $expected = sprintf('%s %2d %s', self::months()[FrozenClock::MONTH - 1], FrozenClock::DAY, FrozenClock::clock(FrozenClock::EPOCH));
+        // The offsets are built so the LAST line lands exactly on FrozenClock::epoch() — a live "now"
+        // tail, not a span anchored to an unrelated random offset. No FUNNYPOT_EPOCH is set in the test
+        // process, so epoch() resolves to EPOCH_FALLBACK, matching the YEAR/MONTH/DAY constants below.
+        $expected = sprintf('%s %2d %s', self::months()[FrozenClock::MONTH - 1], FrozenClock::DAY, FrozenClock::clock(FrozenClock::EPOCH_FALLBACK));
         foreach ([1, 2, 4242, 987654321] as $seed) {
             $lines = FakeLog::fromSeed($seed)->authLog(500);
             self::assertStringStartsWith($expected, end($lines), "seed {$seed}: newest auth.log line must be frozen \"now\"");
@@ -150,7 +151,7 @@ final class FakeLogTest extends TestCase
 
     public function test_access_log_newest_line_is_anchored_to_frozen_now(): void
     {
-        $expected = sprintf('[%02d/%s/%04d:%s +0000]', FrozenClock::DAY, self::months()[FrozenClock::MONTH - 1], FrozenClock::YEAR, FrozenClock::clock(FrozenClock::EPOCH));
+        $expected = sprintf('[%02d/%s/%04d:%s +0000]', FrozenClock::DAY, self::months()[FrozenClock::MONTH - 1], FrozenClock::YEAR, FrozenClock::clock(FrozenClock::EPOCH_FALLBACK));
         foreach ([1, 2, 4242, 987654321] as $seed) {
             $lines = FakeLog::fromSeed($seed)->accessLog(200);
             self::assertStringContainsString($expected, end($lines), "seed {$seed}: newest access.log line must be frozen \"now\"");

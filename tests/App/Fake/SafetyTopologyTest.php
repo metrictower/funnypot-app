@@ -72,7 +72,7 @@ final class SafetyTopologyTest extends TestCase
                     "seed $seed: incident {$inc['ref']} time carries a date"
                 );
                 $epoch = strtotime($inc['time'] . ' UTC');
-                self::assertLessThanOrEqual(Safety::DEPLOY_EPOCH, $epoch, "seed $seed: incident must not be in the future: {$inc['ref']}");
+                self::assertLessThanOrEqual(Safety::deployEpoch(), $epoch, "seed $seed: incident must not be in the future: {$inc['ref']}");
                 if ($prevEpoch !== null) {
                     self::assertLessThan($prevEpoch, $epoch, "seed $seed: incidents must be strictly newest-first: {$inc['ref']}");
                 }

@@ -27,8 +27,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Hvac
 {
-    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Org. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Org. A const can't
+     *  call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** BACnet/IP port every BMS controller answers on (matches Building's BMS controllers). */
     public const BACNET_PORT = 47808;
@@ -403,7 +407,7 @@ final class Hvac
             'controller' => $controller,
             'controllerIp' => $this->controllerIp($controller),
             'anomaly' => $anom,
-            'workOrder' => $anom === '' ? '' : 'WO-2026-' . sprintf('%06d', 4000 + ($this->h($id . '|wo') % 5000)),
+            'workOrder' => $anom === '' ? '' : 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 4000 + ($this->h($id . '|wo') % 5000)),
         ];
     }
 

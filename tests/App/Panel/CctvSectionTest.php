@@ -123,7 +123,7 @@ final class CctvSectionTest extends TestCase
                     "seed $seed: recording start carries a full date"
                 );
                 $epoch = strtotime($r['start'] . ' UTC');
-                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: recording must not start in the future: {$r['start']}");
+                self::assertLessThanOrEqual(Cctv::deployEpoch(), $epoch, "seed $seed: recording must not start in the future: {$r['start']}");
                 if ($prevEpoch !== null) {
                     self::assertLessThan($prevEpoch, $epoch, "seed $seed: recordings must be strictly newest-first");
                 }
@@ -139,7 +139,7 @@ final class CctvSectionTest extends TestCase
         for ($seed = 0; $seed < 10; $seed++) {
             foreach (Cctv::fromSeed($seed)->cameras() as $c) {
                 $epoch = strtotime($c['timecode'] . ' UTC');
-                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: {$c['id']} timecode must not be in the future: {$c['timecode']}");
+                self::assertLessThanOrEqual(Cctv::deployEpoch(), $epoch, "seed $seed: {$c['id']} timecode must not be in the future: {$c['timecode']}");
             }
         }
     }
@@ -168,7 +168,7 @@ final class CctvSectionTest extends TestCase
                     "seed $seed: event line carries a date+time: $line"
                 );
                 $epoch = strtotime(substr($line, 0, 19) . ' UTC');
-                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: event must not be in the future: $line");
+                self::assertLessThanOrEqual(Cctv::deployEpoch(), $epoch, "seed $seed: event must not be in the future: $line");
                 if ($prevEpoch !== null) {
                     self::assertLessThan($prevEpoch, $epoch, "seed $seed: events must be strictly newest-first: $line");
                 }
@@ -186,7 +186,7 @@ final class CctvSectionTest extends TestCase
             $prevEpoch = null;
             foreach ($cctv->cameraEventsFor($camId, 40) as $line) {
                 $epoch = strtotime(substr($line, 0, 19) . ' UTC');
-                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: camera event must not be in the future: $line");
+                self::assertLessThanOrEqual(Cctv::deployEpoch(), $epoch, "seed $seed: camera event must not be in the future: $line");
                 if ($prevEpoch !== null) {
                     self::assertLessThan($prevEpoch, $epoch, "seed $seed: camera events must be strictly newest-first: $line");
                 }

@@ -35,8 +35,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Facilities
 {
-    /** Frozen "now" for ages/dates so a static reload is not a tell. Matches Building/Org/Access. */
-    const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" for ages/dates so a static reload is not a tell. Matches Building/Org/Access. A
+     *  const can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** All-time work-order backlog size the list paginates over (seeded per deploy, within scale). */
     const WORKORDER_TOTAL_MIN = 240;
@@ -85,7 +89,7 @@ final class Facilities
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** Seeded "N ago" string off DEPLOY_EPOCH — deterministic, never time()/date(). */
+    /** Seeded "N ago" string off deployEpoch() — deterministic, never time()/date(). */
     private function ageAgo(string $salt): string
     {
         $sec = $this->intIn(60, 172800, $salt);          // 1 min .. 2 days
@@ -477,14 +481,15 @@ final class Facilities
     }
 
     /**
-     * The work-order id at a list index — a fabricated `WO-2026-NNNNNN` stable per deploy. The number is
+     * The work-order id at a list index — a fabricated `WO-<year>-NNNNNN` stable per deploy (the year
+     * tracks FrozenClock::year(), so a later-year deploy mints later-year ids). The number is
      * an injective map of the index (stride 2237 is coprime to 6000, plus a per-seed offset), so no two
      * list rows collide onto one id while the sequence still varies across deploys (never a fingerprint).
      */
     private function workOrderIdAt(int $i): string
     {
         $offset = $this->h('woidbase') % 6000;
-        return 'WO-2026-' . sprintf('%06d', 4000 + ((($i * 2237) + $offset) % 6000));
+        return 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 4000 + ((($i * 2237) + $offset) % 6000));
     }
 
     /**
@@ -593,12 +598,12 @@ final class Facilities
     public function workOrderForRoom(string $roomId): array
     {
         for ($i = 0; $i < 4096; $i++) {
-            $cand = 'WO-2026-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId . '|' . $i) % 6000));
+            $cand = 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId . '|' . $i) % 6000));
             if ($this->derivedRoomId($cand) === $roomId) {
                 return $this->workOrder($cand);
             }
         }
-        return $this->workOrder('WO-2026-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId) % 6000)));
+        return $this->workOrder('WO-' . FrozenClock::year() . '-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId) % 6000)));
     }
 
     /** The room id workOrder() would derive for a canonical WO id — cheap, so the scan stays bounded. */
@@ -641,7 +646,7 @@ final class Facilities
 
     /**
      * Normalise a URL slug into a canonical `WO-YYYY-NNNNNN` id + a stable salt key. A genuine
-     * `wo-2026-004821` slug reconstructs exactly (so it matches the same order minted elsewhere);
+     * `wo-<year>-004821` slug reconstructs exactly (so it matches the same order minted elsewhere);
      * anything else derives a stable id from the slug hash. @return array{0:string,1:string} [id, key]
      */
     private function normalizeWoId(string $slug): array
@@ -651,7 +656,7 @@ final class Facilities
             $id = 'WO-' . $m[1] . '-' . sprintf('%06d', (int) $m[2]);
             return array($id, $id);
         }
-        $id = 'WO-2026-' . sprintf('%06d', $this->h('woslug|' . $lower) % 1000000);
+        $id = 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', $this->h('woslug|' . $lower) % 1000000);
         return array($id, $id);
     }
 

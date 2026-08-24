@@ -35,6 +35,7 @@ use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
 use Funnypot\App\Render\ArtifactVersion;
+use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\PageShellRenderer;
 use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
@@ -113,7 +114,11 @@ if ($config->llmEnabled) {
     // coherent identity as the html pages (cross-kind coherence, not just per-kind determinism).
     $visualPersona = VisualPersona::fromSeed($config->personaSeed);
     $pageSlotsGrammar = (string) @file_get_contents(dirname(__DIR__) . '/resources/llm/page-slots.gbnf');
-    $artifactVersion = ArtifactVersion::current(dirname(__DIR__) . '/resources/llm', dirname(__DIR__) . '/src/App/Render', $config->llmPromptVersion);
+    // Fold the deploy epoch into the cache key: FrozenClock::epoch() advances only across redeploys
+    // (FUNNYPOT_EPOCH is stamped once at container start), so a new deploy busts every cached panel
+    // page baked with the old "now" instead of serving dates that contradict the fresh HTTP Date header.
+    $artifactVersion = ArtifactVersion::current(dirname(__DIR__) . '/resources/llm', dirname(__DIR__) . '/src/App/Render', $config->llmPromptVersion)
+        . '-e' . FrozenClock::epoch();
     $llmFakes = new LlmFakeResponder(
         new ProbeGate(
             new ProbeClassifier(),

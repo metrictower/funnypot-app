@@ -15,7 +15,7 @@ namespace Funnypot\App\Render\Fake;
  *  - DETERMINISTIC per seed: every field is hash(seed+id+field) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); an asset's facts derive from its id alone, so asset($id) is
  *    byte-identical to that asset's row in assets() and reproducible standalone. Ages/dates are offsets
- *    off FrozenClock::EPOCH, never time().
+ *    off FrozenClock::epoch(), never time().
  *  - COHERENT: assignee is a real Org person (id + name + email at the one host domain); location is a
  *    real Building room (id + name + floor + zone); servers sit in a Server-Comms room and stay
  *    unassigned (owned by the IT function, not a person).
@@ -381,8 +381,9 @@ final class Cmdb
         $room = $pool[$this->h('room|' . $salt) % count($pool)];
 
         // Dates: purchased 1 month .. ~5 years ago; warranty runs 12/24/36 months from purchase.
+        $now = FrozenClock::epoch();
         $ageDays = $this->intIn(30, 1800, 'purchase|' . $salt);
-        $purchaseEpoch = FrozenClock::EPOCH - $ageDays * 86400;
+        $purchaseEpoch = $now - $ageDays * 86400;
         $warrantyMonths = (int) $this->pick(['12', '24', '36'], 'wmon|' . $salt);
         $warrantyEndEpoch = $purchaseEpoch + $warrantyMonths * 30 * 86400;
         $daysToExpiry = intdiv($warrantyEndEpoch, 86400) - FrozenClock::nowDays();
@@ -396,7 +397,7 @@ final class Cmdb
 
         // Last check-in: 3 s .. 45 d ago; the "state" reads from that age (stale = a pivot bait).
         $checkinSec = $this->intIn(3, 3888000, 'checkin|' . $salt);
-        $checkinEpoch = FrozenClock::EPOCH - $checkinSec;
+        $checkinEpoch = $now - $checkinSec;
         $state = $checkinSec > 1209600 ? 'stale' : 'active';    // >14 d without a check-in = stale
 
         // Encryption + patch-gap bait, both on a budget so most assets read clean.

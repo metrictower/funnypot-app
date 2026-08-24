@@ -271,10 +271,10 @@ final class Vendors
     {
         $salt = $vendorId . '|inv|' . $k;
         // Vendor-side invoice numbers live in a HIGH band (>=100000) that never overlaps Finance's AP
-        // corpus (INV-2026-004001..), so one number can never resolve to two different invoices.
+        // corpus (INV-<year>-004001..), so one number can never resolve to two different invoices.
         $num = 100000 + ($this->h($salt . '|num') % 800000);   // 100000..899999
-        $routeId = 'inv-2026-' . sprintf('%06d', $num);
-        $display = 'INV-2026-' . sprintf('%06d', $num);
+        $routeId = 'inv-' . FrozenClock::year() . '-' . sprintf('%06d', $num);
+        $display = 'INV-' . FrozenClock::year() . '-' . sprintf('%06d', $num);
 
         $lineCount = 1 + ($this->h($salt . '|lc') % 4);      // 1..4 lines
         $descVocab = [
@@ -306,7 +306,7 @@ final class Vendors
         // date plus the vendor's own payment terms (so due >= date always); daysPastDue is "now − due"
         // measured off the same clock (negative when the invoice is not yet due).
         $ageDays = $this->h($salt . '|age') % 201;            // 0..200 days ago
-        $dateEpoch = FrozenClock::EPOCH - $ageDays * 86400;
+        $dateEpoch = FrozenClock::epoch() - $ageDays * 86400;
         $dueEpoch = $dateEpoch + $this->termsDays($vendorId) * 86400;
         $daysPastDue = FrozenClock::nowDays() - intdiv($dueEpoch, 86400);
 
@@ -332,7 +332,7 @@ final class Vendors
             'display' => $display,
             'date' => FrozenClock::ymd($dateEpoch),
             'due' => FrozenClock::ymd($dueEpoch),
-            'po' => 'PO-2026-' . sprintf('%05d', 100 + ($this->h($salt . '|po') % 89000)),
+            'po' => 'PO-' . FrozenClock::year() . '-' . sprintf('%05d', 100 + ($this->h($salt . '|po') % 89000)),
             'lines' => $lines,
             'subtotalCents' => $subtotal,
             'taxRate' => $rate,

@@ -141,6 +141,7 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
     $LLM_SETUP
     sudo docker rm -f funnypot 2>/dev/null || true
     sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS \
+        -e FUNNYPOT_EPOCH=$(date +%s) \
         -e FUNNYPOT_STYLE=${FUNNYPOT_STYLE:-realistic} \
         -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
         -e FUNNYPOT_ADMIN_PASSWORD='$ADMIN_PASSWORD' \

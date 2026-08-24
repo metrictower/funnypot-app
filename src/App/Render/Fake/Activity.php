@@ -17,7 +17,7 @@ namespace Funnypot\App\Render\Fake;
  *
  * Design rules (deep-admin dashboard spec §B / §C.0 + adversarial critique):
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
- *    time()/date()/rand()/shuffle(); all clock strings come from one frozen FrozenClock::EPOCH by integer
+ *    time()/date()/rand()/shuffle(); all clock strings come from one frozen FrozenClock::epoch() by integer
  *    arithmetic, so a static reload is byte-identical and never a tell.
  *  - MONOTONIC: event i sits at EPOCH - i*STEP - jitter with jitter in [0, STEP-1], so timestamps are
  *    strictly descending in i by construction (and any type-filtered subsequence stays strictly descending).
@@ -32,8 +32,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Activity
 {
-    /** Frozen "now" every event ages from — shared with Building/Org/Access so the clocks agree. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" every event ages from — shared with Building/Org/Access so the clocks agree. A
+     *  const can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** Nominal seconds between adjacent events; the per-event jitter stays inside [0, STEP-1] so the
      *  gap between two events is always at least 1 s (strictly monotonic) and at most 2*STEP-1. */
@@ -258,7 +262,7 @@ final class Activity
     private function epochAt(int $i): int
     {
         $jitter = $this->h('jit|' . $i) % self::STEP;   // [0, STEP-1]
-        return self::DEPLOY_EPOCH - ($i * self::STEP) - $jitter;
+        return self::deployEpoch() - ($i * self::STEP) - $jitter;
     }
 
     /** The type of master event $i, drawn from the fixed weight table. */
@@ -317,7 +321,7 @@ final class Activity
             'i' => $i,
             'epoch' => $epoch,
             'datetime' => FrozenClock::ymd($epoch) . ' ' . FrozenClock::clock($epoch),
-            'ago' => $this->ago(self::DEPLOY_EPOCH - $epoch),
+            'ago' => $this->ago(self::deployEpoch() - $epoch),
             'type' => $type,
             'typeLabel' => $this->typeLabel($type),
             'severity' => $d['severity'],
@@ -419,7 +423,7 @@ final class Activity
              'blocked drain', 'door closer worn', 'condensate overflow'],
             'wfault|' . $i
         );
-        $wo = 'WO-2026-' . sprintf('%06d', 1000 + ($this->h('wo|' . $i) % 8000));
+        $wo = 'WO-' . FrozenClock::year() . '-' . sprintf('%06d', 1000 + ($this->h('wo|' . $i) % 8000));
         $stage = $this->pick(['raised', 'assigned', 'awaiting parts', 'awaiting contractor'], 'wstage|' . $i);
         $summary = 'Work order ' . $wo . ' ' . $stage . ': ' . $fault . ' in ' . $room['name']
             . ' (raised by ' . $person['name'] . ')';
@@ -440,7 +444,7 @@ final class Activity
              'Sentinel Security', 'Cedar Cleaning Co.', 'Orion AV', 'Granary Supplies'],
             'avend|' . $i
         );
-        $inv = 'INV-2026-' . sprintf('%06d', 1000 + ($this->h('inv|' . $i) % 9000));
+        $inv = 'INV-' . FrozenClock::year() . '-' . sprintf('%06d', 1000 + ($this->h('inv|' . $i) % 9000));
         $amount = number_format($this->intIn(240, 84000, 'amt|' . $i));
         $summary = 'Invoice ' . $inv . ' from ' . $vendor . ' (' . $amount
             . ') awaiting approval by ' . $person['name'];
@@ -511,7 +515,7 @@ final class Activity
     private function buildPayroll(int $i, array $person): array
     {
         $month = sprintf('%02d', $this->intIn(1, 8, 'pmon|' . $i));
-        $run = 'run-2026-' . $month;
+        $run = 'run-' . FrozenClock::year() . '-' . $month;
         $summary = 'Payroll ' . $run . ' submitted for second approval by ' . $person['name'];
         return [
             'severity' => 'info',

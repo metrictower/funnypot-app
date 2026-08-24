@@ -28,8 +28,12 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Appliances
 {
-    /** Frozen "now" so a static reload is not a tell. Matches Building/Hvac/Org. */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" so a static reload is not a tell. Matches Building/Hvac/Org. A const can't call
+     *  FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
     /** IoT/AV/lift OT fabric hosts (RFC1918 only). */
     public const IOT_GATEWAY = '10.0.55.10';

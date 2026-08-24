@@ -130,6 +130,24 @@ final class FacilitiesSectionTest extends TestCase
         self::assertSame('WO-2026-004821', $a['id']);
     }
 
+    public function test_freshly_minted_work_order_ids_track_the_deploy_epoch_year(): void
+    {
+        // A newly minted id (as opposed to one reconstructed from a slug) embeds FrozenClock::year(),
+        // so a later-year deploy never mints an id that contradicts every other date on the page.
+        $prior = getenv('FUNNYPOT_EPOCH');
+        putenv('FUNNYPOT_EPOCH=1844640000'); // 2028-06-15 UTC
+        try {
+            $wo = Facilities::fromSeed(7)->workOrderPage(0, 1)[0];
+            self::assertStringStartsWith('WO-2028-', $wo['id']);
+        } finally {
+            if ($prior === false) {
+                putenv('FUNNYPOT_EPOCH');
+            } else {
+                putenv('FUNNYPOT_EPOCH=' . $prior);
+            }
+        }
+    }
+
     // --- inert-control behaviour ---
 
     public function test_room_controls_are_canned_queues(): void

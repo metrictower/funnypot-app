@@ -13,7 +13,7 @@ namespace Funnypot\App\Render\Fake;
  * Design rules (deep-admin dashboard spec §C.6 + adversarial critique):
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); every clock/date string is formatted by integer arithmetic off one
- *    frozen DEPLOY_EPOCH, so a static reload is byte-identical and never a tell.
+ *    frozen deployEpoch(), so a static reload is byte-identical and never a tell.
  *  - ARITHMETIC CLOSES: an invoice's line items sum to its subtotal, subtotal + tax - discount = total,
  *    paid <= total, balance = total - paid; a dashboard's aging buckets sum to AP outstanding; an
  *    expense report's lines sum to its total. An attacker who adds it up finds it consistent.
@@ -32,10 +32,19 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Finance
 {
-    /** Frozen "now" for dates/ages so a static reload is not a tell — the one shared clock (2026-08-24). */
-    public const DEPLOY_EPOCH = FrozenClock::EPOCH;
+    /** Frozen "now" for dates/ages so a static reload is not a tell — the one shared clock. A const
+     *  can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
+    public static function deployEpoch(): int
+    {
+        return FrozenClock::epoch();
+    }
 
-    private const FY = '2026';
+    /** Fiscal year embedded in invoice/PO/expense ids — the deploy year, so a later-year deploy mints
+     *  later-year ids. A const can't call FrozenClock::year(), so this is a runtime accessor. */
+    private static function fy(): string
+    {
+        return (string) FrozenClock::year();
+    }
 
     /** First document index -> invoice/PO/expense numbers, so an id maps back to a corpus index. */
     private const INV_BASE = 4001;
@@ -109,7 +118,7 @@ final class Finance
 
     public function fiscalYear(): string
     {
-        return self::FY;
+        return self::fy();
     }
 
     public function currency(): string
@@ -120,7 +129,7 @@ final class Finance
     /** The frozen "as of" date the dashboard/audit reference. */
     public function asOf(): string
     {
-        return $this->ymd(self::DEPLOY_EPOCH);
+        return $this->ymd(self::deployEpoch());
     }
 
     /**
@@ -300,14 +309,14 @@ final class Finance
         }
         $balance = $total - $paid;
 
-        $number = sprintf('INV-%s-%06d', self::FY, self::INV_BASE + $i);
+        $number = sprintf('INV-%s-%06d', self::fy(), self::INV_BASE + $i);
         return [
             'index' => $i,
             'number' => $number,
             'id' => strtolower($number),
             'vendorName' => $vendor['name'],
             'vendorId' => $vendor['id'],
-            'po' => sprintf('PO-%s-%05d', self::FY, 10000 + ($this->h('inv-po|' . $i) % 80000)),
+            'po' => sprintf('PO-%s-%05d', self::fy(), 10000 + ($this->h('inv-po|' . $i) % 80000)),
             'invoiceDate' => $this->ymd($invEpoch),
             'dueDate' => $this->ymd($dueEpoch),
             'lines' => $lines,
@@ -335,7 +344,8 @@ final class Finance
      */
     private function invoiceStatusAt(int $i): array
     {
-        $invEpoch = self::DEPLOY_EPOCH - $this->intIn(0, 230, 'inv-age|' . $i) * 86400;
+        $now = self::deployEpoch();
+        $invEpoch = $now - $this->intIn(0, 230, 'inv-age|' . $i) * 86400;
         $dueEpoch = $invEpoch + 30 * 86400;
         $r = $this->h('inv-st|' . $i) % 100;
         if ($r < 6) {
@@ -344,7 +354,7 @@ final class Finance
         if ($r < 56) {
             return ['status' => 'Paid', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => true];
         }
-        if ($dueEpoch < self::DEPLOY_EPOCH) {
+        if ($dueEpoch < $now) {
             return ['status' => 'Overdue', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => false];
         }
         if ($this->h('inv-oa|' . $i) % 2 === 0) {
@@ -375,7 +385,7 @@ final class Finance
      */
     public function invoiceByNumberSlug(string $slug): array
     {
-        $i = $this->indexFromSlug($slug, 'inv-' . strtolower(self::FY) . '-', self::INV_BASE, $this->invoiceCount());
+        $i = $this->indexFromSlug($slug, 'inv-' . strtolower(self::fy()) . '-', self::INV_BASE, $this->invoiceCount());
         if ($i !== null) {
             return $this->invoiceAt($i);
         }
@@ -431,14 +441,14 @@ final class Finance
             $total += $amount;
             $dayBack = $this->intIn(1, 120, 'exp-dt|' . $i . '|' . $k);
             $lines[] = [
-                'date' => $this->ymd(self::DEPLOY_EPOCH - $dayBack * 86400),
+                'date' => $this->ymd(self::deployEpoch() - $dayBack * 86400),
                 'category' => $catVocab[$this->h('exp-c|' . $i . '|' . $k) % count($catVocab)],
                 'merchant' => $merchVocab[$this->h('exp-m|' . $i . '|' . $k) % count($merchVocab)],
                 'amountCents' => $amount,
             ];
         }
 
-        $number = sprintf('EXP-%s-%06d', self::FY, self::EXP_BASE + $i);
+        $number = sprintf('EXP-%s-%06d', self::fy(), self::EXP_BASE + $i);
         $status = $this->pick(['Submitted', 'Approved', 'Reimbursed', 'Rejected'], 'exp-st|' . $i);
 
         $receipts = [];
@@ -453,7 +463,7 @@ final class Finance
             'id' => strtolower($number),
             'employee' => $person['name'],
             'employeeEmail' => $person['email'],
-            'submitted' => $this->ymd(self::DEPLOY_EPOCH - $this->intIn(1, 150, 'exp-sub|' . $i) * 86400),
+            'submitted' => $this->ymd(self::deployEpoch() - $this->intIn(1, 150, 'exp-sub|' . $i) * 86400),
             'status' => $status,
             'lines' => $lines,
             'totalCents' => $total,
@@ -464,7 +474,7 @@ final class Finance
 
     public function expenseByNumberSlug(string $slug): array
     {
-        $i = $this->indexFromSlug($slug, 'exp-' . strtolower(self::FY) . '-', self::EXP_BASE, $this->expenseCount());
+        $i = $this->indexFromSlug($slug, 'exp-' . strtolower(self::fy()) . '-', self::EXP_BASE, $this->expenseCount());
         if ($i !== null) {
             return $this->expenseAt($i);
         }
@@ -499,13 +509,13 @@ final class Finance
         $out = [];
         // Walk back from "now" by a CUMULATIVE per-row gap, so timestamps are strictly descending down
         // the page (newest first) — never the non-monotonic order an independent per-row gap produced.
-        $epoch = self::DEPLOY_EPOCH;
+        $epoch = self::deployEpoch();
         for ($i = 0; $i < $count; $i++) {
             $salt = 'aud|' . $i;
             $epoch -= $this->intIn(200, 5400, $salt . '|gap');   // each gap > 0 => strictly descending
             $actor = $roster[$this->h($salt . '|who') % $n];
             $action = $actions[$this->h($salt . '|act') % count($actions)];
-            $ref = sprintf('INV-%s-%06d', self::FY, self::INV_BASE + ($this->h($salt . '|ref') % $this->invoiceCount()));
+            $ref = sprintf('INV-%s-%06d', self::fy(), self::INV_BASE + ($this->h($salt . '|ref') % $this->invoiceCount()));
 
             if ($plantBankChange && $i === 4) {
                 // The buried vendor bank-detail change — done off-hours by a non-finance actor, so the
@@ -532,7 +542,7 @@ final class Finance
     }
 
     /**
-     * Recover a 0-based corpus index from a slugified document id (e.g. `inv-2026-004821`). Returns null
+     * Recover a 0-based corpus index from a slugified document id (e.g. `inv-<year>-004821`). Returns null
      * when the slug does not carry a numeric suffix under $prefix or falls outside [0,$total).
      */
     private function indexFromSlug(string $slug, string $prefix, int $base, int $total): ?int

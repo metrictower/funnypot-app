@@ -203,7 +203,7 @@ final class FakeFiles
         } else {
             $month = (int) $this->pick(['07', '08'], 'mon|' . $name);
             $day = $this->intIn(1, 22, 'day|' . $name);
-            $days = FrozenClock::daysFromCivil(FrozenClock::YEAR, $month, $day);
+            $days = FrozenClock::daysFromCivil(FrozenClock::year(), $month, $day);
         }
         // Never in the future, whichever source the date came from.
         if ($days > FrozenClock::nowDays()) {
