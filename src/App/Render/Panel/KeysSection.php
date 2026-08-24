@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeSecrets;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /** API Keys + .env: masked, inert secret lures (migrated from AdminLteSkin::keysCard). */
 final class KeysSection extends AbstractPanelSection

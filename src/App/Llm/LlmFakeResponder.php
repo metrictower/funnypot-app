@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Llm;
 
-use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\Detection;

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeLog;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /** Logs: long, deterministic auth.log + access.log scroll-backs (migrated from AdminLteSkin::logsCard). */
 final class LogsSection extends AbstractPanelSection

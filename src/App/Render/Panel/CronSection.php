@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeCron;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /** Scheduled tasks: the seeded crontab (migrated from AdminLteSkin::cronCard). */
 final class CronSection extends AbstractPanelSection

@@ -1,8 +1,11 @@
 <?php
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
-use Funnypot\App\Render\{PageShellRenderer, SkinSet, GenericSkin, PageSlots, VisualPersona};
+use Funnypot\App\Render\{PageShellRenderer, SkinSet};
 use Funnypot\RequestContext;
+use Funnypot\Support\Chrome\GenericSkin;
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class PageShellRendererTest extends TestCase

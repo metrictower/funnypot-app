@@ -12,7 +12,7 @@ use Funnypot\App\Render\Fake\Payroll;
 use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\FinanceSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class FinanceSectionTest extends TestCase
@@ -69,7 +69,7 @@ final class FinanceSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end.
         $html = $this->render('/admin/finance/ap/inv-does-not-exist-9999999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Line items', $html);
     }
 

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Vendors;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Vendors / Suppliers (spec §C.6) — the business-email-compromise (BEC) lure. Renders the five-rung
@@ -85,7 +85,7 @@ final class VendorsSection extends AbstractPanelSection
             $href = $this->esc($navBase . '/vendors/' . $v['id']);
             $flag = $v['bankChanged'] ? ' ' . $this->pillHtml('bank changed', 'warn') : '';
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($v['name']) . '</a>' . $flag . '</td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($v['name']) . '</a>' . $flag . '</td>'
                 . '<td>' . $this->esc($v['category']) . '</td>'
                 . '<td>' . $this->esc($v['owner']) . '</td>'
                 . '<td>' . $this->esc($v['terms']) . '</td>'
@@ -172,7 +172,7 @@ final class VendorsSection extends AbstractPanelSection
         ], ' class="alte-kv"');
 
         $flag = $vendor['bankChanged']
-            ? '<p class="alte-muted" style="margin-top:8px">' . $this->pillHtml('bank details changed', 'warn')
+            ? '<p class="fp-muted" style="margin-top:8px">' . $this->pillHtml('bank details changed', 'warn')
                 . ' Remit-to banking was amended recently — pending AP review.</p>'
             : '';
 
@@ -201,7 +201,7 @@ final class VendorsSection extends AbstractPanelSection
         }
         $table = $this->tableHtml(['Invoice', 'Date', 'PO', 'Paid', 'Status'], $rows, ' class="alte-table"');
         // The footer total equals the row sum, which equals the vendor's spend YTD (arithmetic closes).
-        $foot = '<p class="alte-muted" style="margin-top:8px">YTD paid: <strong>'
+        $foot = '<p class="fp-muted" style="margin-top:8px">YTD paid: <strong>'
             . $this->esc($this->money($sum)) . '</strong> (sum of ' . count($rows) . ' settled invoices)</p>';
         return $this->card('Spend history', $table . $foot, $vendor['name']);
     }
@@ -214,7 +214,7 @@ final class VendorsSection extends AbstractPanelSection
         foreach ($invoices as $inv) {
             $href = $this->esc($base . '/invoice/' . $inv['routeId']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($inv['display']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($inv['display']) . '</a></td>'
                 . '<td>' . $this->esc($inv['date']) . '</td>'
                 . '<td>' . $this->esc($inv['due']) . '</td>'
                 . '<td>' . $this->esc($this->money($inv['totalCents'])) . '</td>'
@@ -256,7 +256,7 @@ final class VendorsSection extends AbstractPanelSection
             $navBase,
             $sub,
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         return $this->card('Onboarding documents', $dl, $vendor['name']);
     }
@@ -274,7 +274,7 @@ final class VendorsSection extends AbstractPanelSection
             ['SWIFT / BIC', $remit['swiftMasked']],
             ['Tax id', $remit['taxIdMasked']],
         ], ' class="alte-kv"');
-        $note = '<p class="alte-muted" style="margin-top:8px">Remit-to details are masked at rest. '
+        $note = '<p class="fp-muted" style="margin-top:8px">Remit-to details are masked at rest. '
             . 'Changes require dual approval and a verification callback to the vendor\'s on-file number.</p>';
         $edit = '<div class="alte-actions" style="display:flex;gap:8px;margin-top:12px">'
             . $this->actionLink($base . '/edit-banking', 'Edit banking details', true)
@@ -338,7 +338,7 @@ final class VendorsSection extends AbstractPanelSection
             $navBase,
             $sub,
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
 
         return $this->breadcrumbHtml($crumbs)
@@ -400,7 +400,7 @@ final class VendorsSection extends AbstractPanelSection
             . 'border-radius:4px;background:#b23b3b;color:#fff;font-size:.86em;font-weight:600;cursor:pointer">'
             . 'Submit change for approval</button>'
             . '</form>';
-        $warn = '<p class="alte-muted" style="margin-top:12px">Changing a vendor\'s remit-to details is a '
+        $warn = '<p class="fp-muted" style="margin-top:12px">Changing a vendor\'s remit-to details is a '
             . 'high-risk action. Submissions require a second approver and a verification callback before '
             . 'any change is applied.</p>';
 
@@ -432,7 +432,7 @@ final class VendorsSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -468,14 +468,14 @@ final class VendorsSection extends AbstractPanelSection
     private function pager(string $base, int $page, int $pages, int $from, int $to, int $total): string
     {
         $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
-            : '<span class="alte-muted">‹ Prev</span>';
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
+            : '<span class="fp-muted">‹ Prev</span>';
         $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
-            : '<span class="alte-muted">Next ›</span>';
-        return '<div class="alte-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
+            : '<span class="fp-muted">Next ›</span>';
+        return '<div class="fp-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
             . $prev . $next
-            . '<span class="alte-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
+            . '<span class="fp-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
             . ' of ' . $this->esc(number_format($total)) . ' · page ' . $page . '/' . $pages . '</span></div>';
     }
 

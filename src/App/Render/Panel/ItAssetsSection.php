@@ -5,7 +5,7 @@ namespace Funnypot\App\Render\Panel;
 use Funnypot\App\Render\Fake\Cmdb;
 use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Integrations;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * IT Assets / CMDB + Integrations registry (spec §C.7; §F.3 #15). Two deep, read-only surfaces off one
@@ -81,7 +81,7 @@ final class ItAssetsSection extends AbstractPanelSection
             ['label' => 'Unencrypted', 'value' => (string) $cs['unencrypted'], 'sub' => $cs['unencrypted'] === 0 ? 'all encrypted' : 'review at-rest encryption'],
             ['label' => 'Patch-gap > 30d', 'value' => (string) $cs['patchBehind'], 'sub' => 'behind on updates'],
             ['label' => 'Out of warranty', 'value' => (string) $cs['outOfWarranty'], 'sub' => 'renewal candidates'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $links = '<div class="alte-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0">'
             . $this->jumpLink($navBase . '/it/assets', 'Asset inventory / CMDB')
@@ -144,7 +144,7 @@ final class ItAssetsSection extends AbstractPanelSection
         foreach ($slice as $a) {
             $href = $this->esc($navBase . '/it/assets/' . $a['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($a['tag']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($a['tag']) . '</a></td>'
                 . '<td>' . $this->esc($a['typeLabel']) . '</td>'
                 . '<td>' . $this->esc($a['model']) . '</td>'
                 . '<td>' . $this->esc($a['serial']) . '</td>'
@@ -167,7 +167,7 @@ final class ItAssetsSection extends AbstractPanelSection
             $navBase,
             '/it/download',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
 
         $crumbs = array_merge([['Corevance', $navBase]], $tailCrumbs);
@@ -205,10 +205,10 @@ final class ItAssetsSection extends AbstractPanelSection
     {
         // Cross-coherence: the assignee resolves in HR, the location resolves in the building rooms.
         $assignee = $a['assigneeId'] !== ''
-            ? '<a class="alte-dl" href="' . $this->esc($navBase . '/hr/' . $a['assigneeId']) . '">' . $this->esc($a['assigneeName']) . '</a>'
+            ? '<a class="fp-dl" href="' . $this->esc($navBase . '/hr/' . $a['assigneeId']) . '">' . $this->esc($a['assigneeName']) . '</a>'
                 . ' &lt;' . $this->esc($a['assigneeEmail']) . '&gt;'
             : $this->esc($a['assigneeName']);
-        $room = '<a class="alte-dl" href="' . $this->esc($navBase . '/rooms/' . $a['roomId']) . '">' . $this->esc($a['roomName']) . '</a>';
+        $room = '<a class="fp-dl" href="' . $this->esc($navBase . '/rooms/' . $a['roomId']) . '">' . $this->esc($a['roomName']) . '</a>';
 
         $kvBody = '<tr><th>Asset tag</th><td>' . $this->esc($a['tag']) . '</td></tr>'
             . '<tr><th>Type</th><td>' . $this->esc($a['typeLabel']) . '</td></tr>'
@@ -249,7 +249,7 @@ final class ItAssetsSection extends AbstractPanelSection
             ['VLAN', $this->vlanLabel($a['lastIp'])],
         ], ' class="alte-kv"');
         $note = $a['switchPort'] !== '—'
-            ? '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin:8px 0 0">Cabling maps to the access switch in Network Devices.</p>'
+            ? '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin:8px 0 0">Cabling maps to the access switch in Network Devices.</p>'
             : '';
         return $this->card('Network', $kv . $note, $a['tag']);
     }
@@ -305,7 +305,7 @@ final class ItAssetsSection extends AbstractPanelSection
         foreach ($slice as $e) {
             $href = $this->esc($root . '/' . $e['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($e['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($e['name']) . '</a></td>'
                 . '<td>' . $this->esc($e['protocol']) . '</td>'
                 . '<td><code>' . $this->esc($e['endpoint']) . '</code></td>'
                 . '<td>' . $this->esc($e['category']) . '</td>'
@@ -332,7 +332,7 @@ final class ItAssetsSection extends AbstractPanelSection
             $navBase,
             '/it/download',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
 
         $crumbs = [['Corevance', $navBase], ['IT & Platform', $navBase . '/it'], ['Integrations', $filterLabel === null ? '' : $root]];
@@ -405,7 +405,7 @@ final class ItAssetsSection extends AbstractPanelSection
             ['Auth mode', $e['authMode']],
             ['Stored credential', $cred],
         ], ' class="alte-kv"');
-        $note = '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin:8px 0 0">'
+        $note = '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin:8px 0 0">'
             . 'Stored secrets are shown masked. Reveal requires a break-glass request through the secrets vault.</p>';
         return $this->card('Credentials', $kv . $note, $e['name']);
     }

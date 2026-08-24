@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Llm\LlmPromptBuilder;
-use Funnypot\App\Render\GenericSkin;
+use Funnypot\Support\Chrome\GenericSkin;
 use Funnypot\App\Render\PageShellRenderer;
-use Funnypot\App\Render\PageSlots;
+use Funnypot\Support\Chrome\PageSlots;
 use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
-use Funnypot\App\Render\Skins\PhpMyAdminSkin;
-use Funnypot\App\Render\Skins\WordpressSkin;
+use Funnypot\Support\Chrome\PhpMyAdminSkin;
+use Funnypot\Support\Chrome\WordpressSkin;
 use Funnypot\App\Render\SkinSet;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use Funnypot\RequestContext;
 use PHPUnit\Framework\TestCase;
 

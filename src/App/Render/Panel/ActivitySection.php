@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Activity;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Activity Feed (spec §B Overview) — the one global, reverse-chronological timeline that ties every
@@ -108,14 +108,14 @@ final class ActivitySection extends AbstractPanelSection
     private function timeline(array $events, string $navBase): string
     {
         if ($events === []) {
-            return '<p class="alte-muted">No events in this view.</p>';
+            return '<p class="fp-muted">No events in this view.</p>';
         }
         $rows = '';
         foreach ($events as $e) {
             $href = $this->esc($navBase . $e['link']);
             $when = '<div>' . $this->esc($e['datetime']) . '</div>'
-                . '<div class="alte-muted" style="font-size:.82em">' . $this->esc($e['ago']) . '</div>';
-            $summary = '<a class="alte-dl" href="' . $href . '">' . $this->esc($e['summary']) . '</a>';
+                . '<div class="fp-muted" style="font-size:.82em">' . $this->esc($e['ago']) . '</div>';
+            $summary = '<a class="fp-dl" href="' . $href . '">' . $this->esc($e['summary']) . '</a>';
             $rows .= '<tr>'
                 . '<td style="white-space:nowrap">' . $when . '</td>'
                 . '<td>' . $this->pillHtml($e['typeLabel'], 'info') . '</td>'

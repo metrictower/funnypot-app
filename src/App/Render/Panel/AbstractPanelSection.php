@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
-use Funnypot\App\Render\RenderHtmlHelpers;
+use Funnypot\Support\Chrome\RenderHtmlHelpers;
 
 /**
  * Base for every PanelSection: pulls in the shared escape-by-construction rendering primitives

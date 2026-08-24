@@ -6,7 +6,7 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Fake\Safety;
 use Funnypot\App\Render\Panel\FireSection;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

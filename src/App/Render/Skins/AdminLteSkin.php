@@ -2,13 +2,13 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\App\Render\AbstractSkin;
+use Funnypot\Support\Chrome\AbstractSkin;
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\App\Render\PageSlots;
+use Funnypot\Support\Chrome\PageSlots;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\PathSegments;
+use Funnypot\Support\Chrome\PathSegments;
 use Funnypot\App\Render\Panel\PanelRegistry;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * A hand-authored lookalike of an AdminLTE/Bootstrap-style server control panel — the honeypot's
@@ -165,9 +165,9 @@ final class AdminLteSkin extends AbstractSkin
         // The model's heading/intro (when present) becomes a small page header above the section, so an
         // LLM-shaped page still reads coherently on a templated-miss path.
         if ($slots->heading() !== '' || $slots->intro() !== '') {
-            $html .= '<div class="alte-card"><div class="alte-card-body">';
+            $html .= '<div class="fp-card"><div class="fp-card-body">';
             if ($slots->heading() !== '') {
-                $html .= '<div class="alte-card-header">' . $this->esc($slots->heading()) . '</div>';
+                $html .= '<div class="fp-card-header">' . $this->esc($slots->heading()) . '</div>';
             }
             if ($slots->intro() !== '') {
                 $html .= '<p class="alte-intro">' . $this->esc($slots->intro()) . '</p>';
@@ -281,29 +281,29 @@ final class AdminLteSkin extends AbstractSkin
             . '.alte-nav-link-active{background:#3b4148;color:#fff;border-left:3px solid #3b7ea1;padding-left:13px}'
             . '.alte-content-wrapper{margin-left:210px;padding-top:52px;box-sizing:border-box}'
             . '.alte-content{padding:20px}'
-            . '.alte-card{background:#fff;border:1px solid #d7dbdf;border-radius:4px;margin-bottom:20px}'
-            . '.alte-card-header{padding:10px 14px;border-bottom:1px solid #d7dbdf;font-weight:bold;'
+            . '.fp-card{background:#fff;border:1px solid #d7dbdf;border-radius:4px;margin-bottom:20px}'
+            . '.fp-card-header{padding:10px 14px;border-bottom:1px solid #d7dbdf;font-weight:bold;'
             . 'color:#2c3136;display:flex;justify-content:space-between;align-items:center}'
-            . '.alte-card-body{padding:14px}'
+            . '.fp-card-body{padding:14px}'
             . '.alte-intro{color:#5b636a}'
-            . '.alte-muted{font-weight:normal;color:#9aa1a8;font-size:.82em}'
+            . '.fp-muted{font-weight:normal;color:#9aa1a8;font-size:.82em}'
             . '.alte-table{border-collapse:collapse;width:100%;margin-top:4px}'
             . '.alte-table th,.alte-table td{border:1px solid #eef1f3;padding:6px 10px;text-align:left;font-size:.88em}'
             . '.alte-table th{background:#f7f9fa;color:#6c757d}'
             . '.alte-mono td{font-family:monospace;font-size:.82em;white-space:nowrap}'
             . '.alte-flash{margin-top:12px;padding:8px 12px;background:#eaf2f6;border-left:4px solid #3b7ea1}'
-            . '.alte-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}'
-            . '.alte-st{background:#fff;border:1px solid #d7dbdf;border-radius:4px;padding:14px 16px}'
-            . '.alte-st-v{font-size:1.5em;font-weight:bold;color:#2c3136}'
-            . '.alte-st-l{color:#6c757d;font-size:.82em;margin-top:2px}'
-            . '.alte-st-sub{color:#9aa1a8;font-size:.74em;margin-top:4px}'
+            . '.fp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}'
+            . '.fp-tile{background:#fff;border:1px solid #d7dbdf;border-radius:4px;padding:14px 16px}'
+            . '.fp-tile-v{font-size:1.5em;font-weight:bold;color:#2c3136}'
+            . '.fp-tile-l{color:#6c757d;font-size:.82em;margin-top:2px}'
+            . '.fp-tile-sub{color:#9aa1a8;font-size:.74em;margin-top:4px}'
             . '.alte-kv{border-collapse:collapse;width:100%}'
             . '.alte-kv th{width:150px;text-align:left;color:#6c757d;font-weight:600;vertical-align:top;'
             . 'padding:6px 10px;border-bottom:1px solid #eef1f3}'
             . '.alte-kv td{padding:6px 10px;border-bottom:1px solid #eef1f3;font-size:.9em}'
-            . '.alte-dl{color:#3b7ea1;text-decoration:none;font-family:monospace}'
-            . '.alte-dl:hover{text-decoration:underline}'
-            . '.alte-pager{padding:10px 4px;color:#6c757d;font-size:.84em}'
+            . '.fp-dl{color:#3b7ea1;text-decoration:none;font-family:monospace}'
+            . '.fp-dl:hover{text-decoration:underline}'
+            . '.fp-pager{padding:10px 4px;color:#6c757d;font-size:.84em}'
             . '.alte-log{background:#1b1e21;color:#c9ccd1;padding:12px;border-radius:4px;overflow-x:auto;'
             . 'font-size:.78em;line-height:1.5;max-height:520px;overflow-y:auto;margin:0}'
             // Control widgets (buttons, danger buttons, control rows, PIN forms) used by the building/

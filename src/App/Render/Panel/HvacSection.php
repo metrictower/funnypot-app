@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Hvac;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * HVAC / Climate (spec §C.2): the building's climate plane rendered off Fake\Hvac (which itself sits on
@@ -66,7 +66,7 @@ final class HvacSection extends AbstractPanelSection
             ['label' => 'CRAC units', 'value' => (string) $s['cracUnits'], 'sub' => 'server-room cooling'],
             ['label' => 'BMS controllers', 'value' => (string) $s['controllers'], 'sub' => 'BACnet/IP'],
             ['label' => 'Active alarms', 'value' => (string) $s['activeAlarms'], 'sub' => $s['activeAlarms'] === 0 ? 'all clear' : 'requires review'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $zones = $hvac->zones();
         $total = count($zones);
@@ -83,7 +83,7 @@ final class HvacSection extends AbstractPanelSection
         foreach ($slice as $z) {
             $href = $this->esc($navBase . '/hvac/' . $z['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($z['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($z['name']) . '</a></td>'
                 . '<td>' . $this->esc($z['floorLabel']) . '</td>'
                 . '<td>' . $this->pillHtml($z['hvacMode'], $this->modePill($z['hvacMode'])) . '</td>'
                 . '<td>' . $this->esc(number_format((float) $z['currentTemp'], 1) . ' °C') . '</td>'
@@ -121,7 +121,7 @@ final class HvacSection extends AbstractPanelSection
             $state = $c['anomaly'] === '' ? 'ok' : 'crit';
             $stateLabel = $c['anomaly'] === '' ? 'Normal' : ($c['anomaly'] === 'dirty-filter' ? 'Filter alarm' : 'Comms fault');
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
                 . '<td>' . $this->esc($c['servesRoomName']) . '</td>'
                 . '<td>' . $this->esc(number_format((float) $c['currentTemp'], 1) . ' °C') . '</td>'
                 . '<td>' . $this->esc(number_format((float) $c['setpoint'], 1) . ' °C') . '</td>'
@@ -179,9 +179,9 @@ final class HvacSection extends AbstractPanelSection
         ], ' class="alte-kv"');
 
         $gauges = '<div class="alte-grid">'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Humidity', (int) $z['humidity'], $z['humidity'] . ' %') . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('CO₂', $this->co2Pct((int) $z['co2']), $z['co2'] . ' ppm') . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Damper', (int) $z['damperPct'], $z['damperPct'] . ' %') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Humidity', (int) $z['humidity'], $z['humidity'] . ' %') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('CO₂', $this->co2Pct((int) $z['co2']), $z['co2'] . ' ppm') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Damper', (int) $z['damperPct'], $z['damperPct'] . ' %') . '</div></div>'
             . '</div>';
 
         return $gauges
@@ -216,8 +216,8 @@ final class HvacSection extends AbstractPanelSection
         }
 
         $note = $isCrac
-            ? '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Precision-cooling changes are interlocked — see the confirmation.</p>'
-            : '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Changes queue to the BMS controller and apply at the next BACnet poll.</p>';
+            ? '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Precision-cooling changes are interlocked — see the confirmation.</p>'
+            : '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Changes queue to the BMS controller and apply at the next BACnet poll.</p>';
 
         $inner = '<div style="margin-bottom:10px"><strong>Setpoint</strong>' . $slider . '</div>'
             . '<div style="margin-bottom:10px"><strong>Mode</strong><div style="margin-top:6px">' . $modes . '</div></div>'
@@ -240,7 +240,7 @@ final class HvacSection extends AbstractPanelSection
     private function trendsCard(Hvac $hvac, array $z): string
     {
         $spark = $this->sparklineHtml($hvac->tempTrend($z));
-        $body = $spark . '<p class="alte-muted" style="font-size:.85em;color:#6c757d">'
+        $body = $spark . '<p class="fp-muted" style="font-size:.85em;color:#6c757d">'
             . $this->esc('24 h zone temperature, hourly · setpoint ' . number_format((float) $z['setpoint'], 1) . ' °C · cached 30 s') . '</p>';
         return $this->card('Trends', $body, 'temperature');
     }
@@ -325,15 +325,15 @@ final class HvacSection extends AbstractPanelSection
         $accessHref = $this->esc($navBase . '/access');
         $sysHref = $this->esc($navBase . '/system');
         $links = '<p style="margin:8px 0">Cooling load: <strong>' . $this->esc($c['servesRoomName']) . '</strong> · '
-            . '<a class="alte-dl" href="' . $accessHref . '">Physical access &amp; doors</a> · '
-            . '<a class="alte-dl" href="' . $sysHref . '">Server hosts</a></p>';
+            . '<a class="fp-dl" href="' . $accessHref . '">Physical access &amp; doors</a> · '
+            . '<a class="fp-dl" href="' . $sysHref . '">Server hosts</a></p>';
 
         $anomaly = '';
         if ($c['anomaly'] !== '') {
             $anomaly = $this->cracAnomalyNotice($c, $navBase);
         }
 
-        $gauge = '<div class="alte-card"><div class="alte-card-body">'
+        $gauge = '<div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Return temp load', $this->tempPct((float) $c['returnTemp']), number_format((float) $c['returnTemp'], 1) . ' °C')
             . '</div></div>';
 
@@ -357,7 +357,7 @@ final class HvacSection extends AbstractPanelSection
         $woHref = $this->esc($navBase . '/facilities/work-orders/' . $wo);
         $status = $c['anomaly'] === 'dirty-filter' ? 'Awaiting parts — filter cartridge on order' : 'Awaiting contractor — comms module RMA';
         $body = '<p style="margin:0 0 8px">' . $this->esc($detail) . '</p>'
-            . '<p style="margin:0">Work order <a class="alte-dl" href="' . $woHref . '">' . $this->esc($wo) . '</a> — '
+            . '<p style="margin:0">Work order <a class="fp-dl" href="' . $woHref . '">' . $this->esc($wo) . '</a> — '
             . $this->pillHtml($status, 'warn') . '</p>';
         return '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;border-left:4px solid #b23b3b;border-radius:4px;margin:16px 0">'
             . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;display:flex;align-items:center;gap:8px">'

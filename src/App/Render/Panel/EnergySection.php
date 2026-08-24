@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Energy;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Energy & Power / BMS (module slug `energy`, spec §C.8) — the SCADA-flavoured electrical plane rendered
@@ -95,7 +95,7 @@ final class EnergySection extends AbstractPanelSection
             ['label' => 'BESS charge', 'value' => $s['bessSoc'] . ' %', 'sub' => 'state of charge'],
             ['label' => 'Power factor', 'value' => number_format($s['powerFactor'], 2), 'sub' => 'site aggregate'],
             ['label' => 'Active alarms', 'value' => (string) $s['activeAlarms'], 'sub' => $s['activeAlarms'] === 0 ? 'all clear' : 'requires review'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $gauges = '<div class="alte-grid">'
             . $this->gaugeCard('Load vs peak', $this->pctOf($s['loadKw'], $s['peakKw']), number_format($s['loadKw'], 1) . ' kW')
@@ -139,10 +139,10 @@ final class EnergySection extends AbstractPanelSection
         $cards = '<div class="alte-grid">';
         foreach ($items as $it) {
             $href = $this->esc($navBase . '/energy/' . $it[0]);
-            $cards .= '<a class="alte-card" href="' . $href . '" style="text-decoration:none;color:inherit;display:block">'
-                . '<div class="alte-card-body">'
+            $cards .= '<a class="fp-card" href="' . $href . '" style="text-decoration:none;color:inherit;display:block">'
+                . '<div class="fp-card-body">'
                 . '<div style="font-weight:600;color:#2c3136">' . $this->esc($it[1]) . '</div>'
-                . '<div class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:4px">' . $this->esc($it[2]) . '</div>'
+                . '<div class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:4px">' . $this->esc($it[2]) . '</div>'
                 . '</div></a>';
         }
         return $cards . '</div>';
@@ -161,7 +161,7 @@ final class EnergySection extends AbstractPanelSection
             return '';
         }
         $table = $this->tableHtml(['Meter', 'Circuit', 'Field controller', 'Last seen'], $rows, ' class="alte-table"');
-        $link = '<p style="margin:8px 0 0"><a class="alte-dl" href="' . $this->esc($navBase . '/energy/meters') . '">Open sub-metering →</a></p>';
+        $link = '<p style="margin:8px 0 0"><a class="fp-dl" href="' . $this->esc($navBase . '/energy/meters') . '">Open sub-metering →</a></p>';
         return $this->card('Sub-meters not reporting', $table . $link, 'comms fault');
     }
 
@@ -226,7 +226,7 @@ final class EnergySection extends AbstractPanelSection
             $href = $this->esc($navBase . '/energy/meters/' . $m['id']);
             $comms = $m['comms'] === 'OK' ? $this->pillHtml('OK', 'ok') : $this->pillHtml('Comms FAIL', 'crit');
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($m['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($m['id']) . '</a></td>'
                 . '<td>' . $this->esc($m['label']) . '</td>'
                 . '<td>' . $this->esc(ucfirst($m['scope'])) . '</td>'
                 . '<td>' . $this->esc($m['comms'] === 'OK' ? number_format((float) $m['kw'], 1) . ' kW' : '—') . '</td>'
@@ -259,7 +259,7 @@ final class EnergySection extends AbstractPanelSection
         switch ($subtab) {
             case 'trend':
                 return $body . $this->card('24 h trend', $this->sparklineHtml($energy->meterTrend($m))
-                    . '<p class="alte-muted" style="font-size:.85em;color:#6c757d">' . $this->esc('hourly kW · ' . $m['label']) . '</p>', 'cached 30 s');
+                    . '<p class="fp-muted" style="font-size:.85em;color:#6c757d">' . $this->esc('hourly kW · ' . $m['label']) . '</p>', 'cached 30 s');
             case 'config':
                 return $body . $this->card('Meter configuration', $this->kvTableHtml([
                     ['Meter id', $m['id']],
@@ -334,7 +334,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->boards() as $b) {
             $href = $this->esc($navBase . '/energy/breakers/' . $b['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($b['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($b['id']) . '</a></td>'
                 . '<td>' . $this->esc($b['floorLabel']) . '</td>'
                 . '<td>' . $this->esc((string) $b['ways']) . '</td>'
                 . '<td>' . $this->esc($b['fedFrom']) . '</td>'
@@ -365,7 +365,7 @@ final class EnergySection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Way</th><th>Load</th><th>Rating</th><th>Phase</th><th>Load %</th><th>State</th><th></th></tr></thead>';
-        $note = '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Switching a way is queued to the field controller and held for a second authorised operator (two-person rule).</p>';
+        $note = '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Switching a way is queued to the field controller and held for a second authorised operator (two-person rule).</p>';
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'],
                     ['Breaker schedule', $navBase . '/energy/breakers'], [$board['id'], '']])
             . $this->card('Board ' . $board['id'], '<table class="alte-table">' . $head . '<tbody>' . $rows . '</tbody></table>' . $note,
@@ -407,7 +407,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->upsFleet() as $u) {
             $href = $this->esc($navBase . '/energy/ups/' . $u['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($u['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($u['id']) . '</a></td>'
                 . '<td>' . $this->esc($u['model']) . '</td>'
                 . '<td>' . $this->esc($u['room']) . '</td>'
                 . '<td>' . $this->esc($u['capacityKva'] . ' kVA') . '</td>'
@@ -497,7 +497,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->generators() as $g) {
             $href = $this->esc($navBase . '/energy/generator/' . $g['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($g['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($g['id']) . '</a></td>'
                 . '<td>' . $this->esc($g['model']) . '</td>'
                 . '<td>' . $this->esc($g['ratingKva'] . ' kVA') . '</td>'
                 . '<td>' . $this->esc($g['fuelPct'] . ' %') . '</td>'
@@ -533,7 +533,7 @@ final class EnergySection extends AbstractPanelSection
             . $this->actionLink($base . '/self-test', 'Run self-test', false)
             . ' ' . $this->actionLink($base . '/start', 'Start + transfer load', true)
             . '</div>'
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d">A self-test runs the set off-load and logs a report. Starting on-load and transferring the building requires a PIN entered at the local HMI at the set.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d">A self-test runs the set off-load and logs a report. Starting on-load and transferring the building requires a PIN entered at the local HMI at the set.</p>';
 
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'],
                     ['Standby generators', $navBase . '/energy/generator'], [$g['id'], '']])
@@ -580,7 +580,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->solarStrings() as $s) {
             $href = $this->esc($navBase . '/energy/solar/' . $s['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($s['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($s['id']) . '</a></td>'
                 . '<td>' . $this->esc((string) $s['panels']) . '</td>'
                 . '<td>' . $this->esc(number_format((float) $s['outputKw'], 1) . ' kW') . '</td>'
                 . '<td>' . $this->esc(number_format((float) $s['yieldToday'], 1) . ' kWh') . '</td>'
@@ -613,7 +613,7 @@ final class EnergySection extends AbstractPanelSection
             $wo = $energy->solarWorkOrder();
             $woHref = $this->esc($navBase . '/facilities/work-orders/' . $wo);
             $note = '<p style="margin:0 0 8px">Isolation resistance below threshold — string automatically isolated. Roof access and an electrician are required to megger the string and inverter input.</p>'
-                . '<p style="margin:0">Electrician work order <a class="alte-dl" href="' . $woHref . '">' . $this->esc($wo) . '</a> — '
+                . '<p style="margin:0">Electrician work order <a class="fp-dl" href="' . $woHref . '">' . $this->esc($wo) . '</a> — '
                 . $this->pillHtml('Awaiting contractor — roof access permit', 'warn') . '</p>';
             $notice = '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;border-left:4px solid #b23b3b;border-radius:4px;margin:16px 0">'
                 . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;display:flex;align-items:center;gap:8px">'
@@ -668,7 +668,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->utilities() as $u) {
             $href = $this->esc($navBase . '/energy/utilities/' . $u['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($u['kind']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($u['kind']) . '</a></td>'
                 . '<td>' . $this->esc($u['meterId']) . '</td>'
                 . '<td>' . $this->esc($u['reading']) . '</td>'
                 . '<td>' . $this->esc($u['today']) . '</td>'
@@ -694,7 +694,7 @@ final class EnergySection extends AbstractPanelSection
             $href = $navBase . '/energy/utilities/gas/shutoff';
             $controls = $this->card('Controls',
                 '<div style="margin:6px 0">' . $this->actionLink($href, 'Emergency gas shut-off', true) . '</div>'
-                . '<p class="alte-muted" style="font-size:.85em;color:#6c757d">The emergency gas isolation valve is a mechanical break-glass device at the riser — it cannot be actuated from the console.</p>',
+                . '<p class="fp-muted" style="font-size:.85em;color:#6c757d">The emergency gas isolation valve is a mechanical break-glass device at the riser — it cannot be actuated from the console.</p>',
                 'life-safety interlock');
         }
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'],
@@ -725,7 +725,7 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->plant() as $p) {
             $href = $this->esc($navBase . '/energy/plant/' . $p['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($p['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($p['id']) . '</a></td>'
                 . '<td>' . $this->esc($p['type']) . '</td>'
                 . '<td>' . $this->esc($p['model']) . '</td>'
                 . '<td>' . $this->esc($p['room']) . '</td>'
@@ -755,7 +755,7 @@ final class EnergySection extends AbstractPanelSection
         ], ' class="alte-kv"');
         $gauge = '<div class="alte-grid">' . $this->gaugeCard('Load', (int) $p['loadPct'], $p['loadPct'] . ' %') . '</div>';
         // Cross-link into the HVAC module — the same plant seen from the climate plane.
-        $link = '<p style="margin:8px 0"><a class="alte-dl" href="' . $this->esc($navBase . '/hvac') . '">Open climate / HVAC →</a></p>';
+        $link = '<p style="margin:8px 0"><a class="fp-dl" href="' . $this->esc($navBase . '/hvac') . '">Open climate / HVAC →</a></p>';
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'],
                     ['HVAC plant', $navBase . '/energy/plant'], [$p['id'], '']])
             . $this->card($p['type'] . ' ' . $p['id'], $link . $kv, $p['model']) . $gauge;
@@ -790,7 +790,7 @@ final class EnergySection extends AbstractPanelSection
             . $this->actionLink($base . '/simulate', 'Simulate DR event', false)
             . ' ' . $this->actionLink($base . '/shed', 'Shed non-essential load', true)
             . '</div>'
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Simulation produces a modelled report only. Shedding real load requires a signed utility event.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Simulation produces a modelled report only. Shedding real load requires a signed utility event.</p>';
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'], ['Demand response', '']])
             . $this->card('Demand response', $intro . $controls, 'DR-ready');
     }
@@ -833,7 +833,7 @@ final class EnergySection extends AbstractPanelSection
                 $stamp, number_format($kwh) . ' kWh', $sum['currencySym'] . $cost, $variance === '' ? 'settled' : $variance,
             ]];
         }
-        $table = $this->downloadTableHtml(['File', 'Period', 'Energy', 'Amount', 'Note'], $files, $navBase, '/energy/bills/download', ' class="alte-table"', 'alte-dl');
+        $table = $this->downloadTableHtml(['File', 'Period', 'Energy', 'Amount', 'Note'], $files, $navBase, '/energy/bills/download', ' class="alte-table"', 'fp-dl');
 
         // The +38% variance dispute thread (spec §C.8).
         $thread = $this->preScrollHtml([
@@ -868,7 +868,7 @@ final class EnergySection extends AbstractPanelSection
         foreach (['site-load', 'solar-yield', 'bess-soc', 'power-factor', 'carbon'] as $agg) {
             $files[] = ['file' => 'trend-' . $agg . '-2026-08.csv.zip', 'cells' => [$agg, 'hourly', 'August 2026']];
         }
-        $table = $this->downloadTableHtml(['File', 'Series', 'Resolution', 'Period'], $files, $navBase, '/energy/trends/download', ' class="alte-table"', 'alte-dl');
+        $table = $this->downloadTableHtml(['File', 'Series', 'Resolution', 'Period'], $files, $navBase, '/energy/trends/download', ' class="alte-table"', 'fp-dl');
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'], ['Trends catalog', '']])
             . $this->card('Trend exports', $table, count($files) . ' series · CSV (zip)');
     }
@@ -884,7 +884,7 @@ final class EnergySection extends AbstractPanelSection
 
     private function gaugeCard(string $label, int $pct, string $text): string
     {
-        return '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml($label, $pct, $text) . '</div></div>';
+        return '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml($label, $pct, $text) . '</div></div>';
     }
 
     private function pctOf(float $part, float $whole): int
@@ -913,7 +913,7 @@ final class EnergySection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 

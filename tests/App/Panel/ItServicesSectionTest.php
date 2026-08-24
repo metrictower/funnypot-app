@@ -11,7 +11,7 @@ use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\ItServicesSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class ItServicesSectionTest extends TestCase
@@ -61,7 +61,7 @@ final class ItServicesSectionTest extends TestCase
         self::assertStringContainsString('Mailboxes', $this->render('/admin/mail'));
         // A detail id under an alias root resolves too (slot shift is handled).
         $html = $this->render('/admin/printers/mfp-g-01');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
     }
 
     public function test_ticket_detail_and_subtabs_render(): void
@@ -84,7 +84,7 @@ final class ItServicesSectionTest extends TestCase
             '/admin/helpdesk/mail/mbx-nope',
             '/admin/helpdesk/certs/cert-nope',
         ] as $p) {
-            self::assertStringContainsString('alte-card', $this->render($p), $p);
+            self::assertStringContainsString('fp-card', $this->render($p), $p);
         }
     }
 

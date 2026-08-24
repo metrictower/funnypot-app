@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Helpdesk;
 use Funnypot\App\Render\Fake\ItServices;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * IT & Platform services (spec §C.7) — the lateral-movement intel lure. One section renders six sub-areas
@@ -126,7 +126,7 @@ final class ItServicesSection extends AbstractPanelSection
         foreach ($tickets as $t) {
             $href = $this->esc($root . '/' . $t['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($t['number']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($t['number']) . '</a></td>'
                 . '<td>' . $this->esc($t['subject']) . '</td>'
                 . '<td>' . $this->esc($t['requester']) . '</td>'
                 . '<td>' . $this->esc($t['assignee']) . '</td>'
@@ -190,7 +190,7 @@ final class ItServicesSection extends AbstractPanelSection
         $thread = '';
         foreach ($t['comments'] as $c) {
             $tag = $c['internal']
-                ? '<span class="alte-muted" style="color:#b23b3b;font-weight:600"> · internal note</span>'
+                ? '<span class="fp-muted" style="color:#b23b3b;font-weight:600"> · internal note</span>'
                 : '';
             $border = $c['internal'] ? '#b23b3b' : '#3b7ea1';
             $thread .= '<div style="border-left:3px solid ' . $border . ';padding:6px 12px;margin:8px 0;background:#fafbfc">'
@@ -207,7 +207,7 @@ final class ItServicesSection extends AbstractPanelSection
         foreach ($t['attachments'] as $n => $name) {
             $files[] = ['file' => $name, 'cells' => ['Attachment ' . ($n + 1), 'archive (zip)']];
         }
-        $table = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/helpdesk/download', ' class="alte-table"', 'alte-dl');
+        $table = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/helpdesk/download', ' class="alte-table"', 'fp-dl');
         return $this->card('Attachments', $table, $t['number']);
     }
 
@@ -237,7 +237,7 @@ final class ItServicesSection extends AbstractPanelSection
         foreach ($printers as $p) {
             $href = $this->esc($root . '/' . $p['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($p['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($p['id']) . '</a></td>'
                 . '<td>' . $this->esc($p['model']) . '</td>'
                 . '<td>' . $this->esc($p['location']) . '</td>'
                 . '<td>' . $this->esc($p['ip']) . '</td>'
@@ -306,7 +306,7 @@ final class ItServicesSection extends AbstractPanelSection
     {
         $jobs = $it->printerQueue($p);
         if ($jobs === []) {
-            return $this->card('Print queue', '<p class="alte-muted">Queue is empty.</p>', $p['id']);
+            return $this->card('Print queue', '<p class="fp-muted">Queue is empty.</p>', $p['id']);
         }
         $rows = '';
         foreach ($jobs as $j) {
@@ -398,7 +398,7 @@ final class ItServicesSection extends AbstractPanelSection
             $href = $this->esc($root . '/' . $l['id']);
             $seatState = $l['seatsUsed'] >= $l['seatsTotal'] ? 'crit' : ($l['seatsUsed'] >= (int) round($l['seatsTotal'] * 0.9) ? 'warn' : 'ok');
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($l['product']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($l['product']) . '</a></td>'
                 . '<td>' . $this->esc($l['edition']) . '</td>'
                 . '<td>' . $this->pillHtml($l['seatsUsed'] . '/' . $l['seatsTotal'], $seatState) . '</td>'
                 . '<td>' . $this->esc($l['keyMasked']) . '</td>'
@@ -492,7 +492,7 @@ final class ItServicesSection extends AbstractPanelSection
         foreach ($devices as $d) {
             $href = $this->esc($root . '/' . $d['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($d['hostname']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($d['hostname']) . '</a></td>'
                 . '<td>' . $this->esc($d['owner']) . '</td>'
                 . '<td>' . $this->esc($d['os'] . ' ' . $d['osVersion']) . '</td>'
                 . '<td>' . $this->esc($d['ip']) . '</td>'
@@ -625,7 +625,7 @@ final class ItServicesSection extends AbstractPanelSection
             }
             $pct = $b['quotaTotalMb'] > 0 ? (int) round($b['quotaUsedMb'] / $b['quotaTotalMb'] * 100) : 0;
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($b['address']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($b['address']) . '</a></td>'
                 . '<td>' . $this->esc($b['displayName']) . '</td>'
                 . '<td>' . $this->esc($b['dept']) . '</td>'
                 . '<td>' . $pct . '%</td>'
@@ -667,7 +667,7 @@ final class ItServicesSection extends AbstractPanelSection
             $fwdRows[] = [$f['to'], $f['scope'], $f['suspicious'] ? 'review' : 'ok'];
         }
         $fwdCard = $fwdRows === []
-            ? $this->card('Forwarding rules', '<p class="alte-muted">No forwarding rules configured.</p>', $b['address'])
+            ? $this->card('Forwarding rules', '<p class="fp-muted">No forwarding rules configured.</p>', $b['address'])
             : $this->card('Forwarding rules', $this->tableHtml(['Forward to', 'Scope', 'Flag'], $fwdRows, ' class="alte-table"'), $b['address']);
 
         $controls = '<div class="alte-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
@@ -734,7 +734,7 @@ final class ItServicesSection extends AbstractPanelSection
         foreach ($certs as $c) {
             $href = $this->esc($root . '/' . $c['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['subject']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['subject']) . '</a></td>'
                 . '<td>' . $this->esc($c['issuer']) . '</td>'
                 . '<td>' . $this->esc($c['keyType']) . '</td>'
                 . '<td>' . $this->esc($c['notAfter']) . '</td>'
@@ -774,7 +774,7 @@ final class ItServicesSection extends AbstractPanelSection
             ['file' => 'key_' . $c['id'] . '.pem.zip', 'cells' => ['Private key (PEM)', 'archive (zip)']],
             ['file' => 'bundle_' . $c['id'] . '.pfx.zip', 'cells' => ['PKCS#12 bundle', 'archive (zip)']],
         ];
-        $downloads = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/helpdesk/download', ' class="alte-table"', 'alte-dl');
+        $downloads = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/helpdesk/download', ' class="alte-table"', 'fp-dl');
 
         $crumbs = [['Corevance', $navBase], ['IT Services', $navBase . '/helpdesk'], ['Certificates', $root], [$c['subject'], '']];
         return $this->breadcrumbHtml($crumbs)
@@ -850,7 +850,7 @@ final class ItServicesSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 

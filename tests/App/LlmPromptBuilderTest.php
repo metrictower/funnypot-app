@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Llm\LlmPromptBuilder;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

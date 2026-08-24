@@ -6,9 +6,11 @@ namespace Funnypot\App\Render;
 
 /**
  * Cache-busting tag for LLM page artifacts. Derived from the grammar, every Render class's
- * mtime+size (recursively, so subdirectories like Skins/ count too), the prompt-builder source, and
- * the prompt version, so a skin edit, prompt edit, or grammar change can never serve a fake built for
- * the old shape out of the response cache.
+ * mtime+size (recursively, so subdirectories like Skins/ count too), the prompt-builder source, the
+ * vendored core chrome classes (Support\Chrome\* + Support\VisualPersona, now that they live in
+ * funnypot-core rather than under $srcDir), and the prompt version — so a skin edit, prompt edit,
+ * core chrome edit, or grammar change can never serve a fake built for the old shape out of the
+ * response cache.
  */
 final class ArtifactVersion
 {
@@ -22,6 +24,17 @@ final class ArtifactVersion
         if (is_file($promptBuilder)) {
             $files[] = $promptBuilder;
         }
+
+        // The Skin/PageSlots/GenericSkin/etc. classes moved out of $srcDir into the vendored core
+        // package; hash their vendored copies too so a core chrome change still busts the cache.
+        $appRoot = dirname(rtrim($srcDir, '/'), 3);
+        $coreChromeDir = $appRoot . '/vendor/metrictower/funnypot-core/src/Support/Chrome';
+        $files = array_merge($files, self::phpFiles($coreChromeDir));
+        $visualPersona = $appRoot . '/vendor/metrictower/funnypot-core/src/Support/VisualPersona.php';
+        if (is_file($visualPersona)) {
+            $files[] = $visualPersona;
+        }
+
         sort($files);
 
         $fingerprint = '';

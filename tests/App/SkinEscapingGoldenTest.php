@@ -2,11 +2,10 @@
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
-use Funnypot\App\Render\GenericSkin;
-use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\VisualPersona;
-use Funnypot\App\Render\Skins\{WordpressSkin, PhpMyAdminSkin, GrafanaSkin, AdminLteSkin};
+use Funnypot\App\Render\Skins\{GrafanaSkin, AdminLteSkin};
 use Funnypot\App\Llm\LlmOutputSanitizer;
+use Funnypot\Support\Chrome\{GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

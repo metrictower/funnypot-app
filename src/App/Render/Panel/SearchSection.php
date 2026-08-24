@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Search;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Global search (spec §D.6) — the cross-module lure that ties the whole estate into one company. The query
@@ -71,7 +71,7 @@ final class SearchSection extends AbstractPanelSection
         // The one reflected value on the page — esc() it, and never build a link from it.
         $heading = '<p style="margin:0 0 4px;font-size:1.05em;color:#2c3136">Results for '
             . '<strong>"' . $this->esc($query) . '"</strong></p>'
-            . '<p class="alte-muted" style="margin:0;font-size:.86em;color:#6c757d">'
+            . '<p class="fp-muted" style="margin:0;font-size:.86em;color:#6c757d">'
             . number_format($total) . ' matches across ' . count($groups) . ' areas</p>';
 
         $body = $this->breadcrumbHtml($crumbs)
@@ -124,9 +124,9 @@ final class SearchSection extends AbstractPanelSection
         foreach ($items as $it) {
             $href = $this->esc($navBase . $it['path']);
             $html .= '<li style="padding:8px 0;border-bottom:1px solid #eef1f3">'
-                . '<a class="alte-dl" style="color:#3b7ea1;text-decoration:none;font-weight:600" href="' . $href . '">'
+                . '<a class="fp-dl" style="color:#3b7ea1;text-decoration:none;font-weight:600" href="' . $href . '">'
                 . $this->esc($it['title']) . '</a>'
-                . '<div class="alte-muted" style="font-size:.82em;color:#6c757d">' . $this->esc($it['sub']) . '</div>'
+                . '<div class="fp-muted" style="font-size:.82em;color:#6c757d">' . $this->esc($it['sub']) . '</div>'
                 . '</li>';
         }
         return $html . '</ul>';

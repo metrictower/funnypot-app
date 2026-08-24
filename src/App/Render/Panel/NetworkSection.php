@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Network;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Network / VPN / VoIP (spec §C.7) — the lateral-movement intel lure. Renders the deep ladder over the
@@ -93,7 +93,7 @@ final class NetworkSection extends AbstractPanelSection
             }
         }
         if ($healthRows === []) {
-            $healthCard = $this->card('Device health', '<p class="alte-muted">All managed devices report healthy.</p>');
+            $healthCard = $this->card('Device health', '<p class="fp-muted">All managed devices report healthy.</p>');
         } else {
             $healthCard = $this->card('Device health — attention',
                 $this->tableHtml(['Device', 'Role', 'Mgmt IP', 'State'], $healthRows, ' class="alte-table"'));
@@ -103,7 +103,7 @@ final class NetworkSection extends AbstractPanelSection
             ['file' => 'configs-backup.tar.gz', 'cells' => ['All running-configs', 'tar.gz']],
             ['file' => 'lldp-topology.csv.zip', 'cells' => ['LLDP neighbour map', 'CSV (zip)']],
         ];
-        $downloads = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'alte-dl');
+        $downloads = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'fp-dl');
 
         return $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Network'))
             . $tiles
@@ -138,7 +138,7 @@ final class NetworkSection extends AbstractPanelSection
         foreach ($devices as $d) {
             $href = $this->esc($navBase . '/network/devices/' . $d['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($d['hostname']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($d['hostname']) . '</a></td>'
                 . '<td>' . $this->esc($d['role']) . '</td>'
                 . '<td>' . $this->esc($d['model']) . '</td>'
                 . '<td>' . $this->esc($d['mgmtIp']) . '</td>'
@@ -218,7 +218,7 @@ final class NetworkSection extends AbstractPanelSection
             . '</div>';
 
         $files = [['file' => $d['id'] . '.cfg.zip', 'cells' => ['Running-config', 'CLI (zip)']]];
-        $download = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'alte-dl');
+        $download = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'fp-dl');
 
         return $this->card($d['hostname'], $kv . $controls, $d['role'] . ' · ' . $d['mgmtIp'])
             . $this->card('Config backup', $download, $d['hostname']);
@@ -228,7 +228,7 @@ final class NetworkSection extends AbstractPanelSection
     {
         $scroll = $this->preScrollHtml($net->runningConfig($d), 'alte-log');
         $files = [['file' => $d['id'] . '.cfg.zip', 'cells' => ['Running-config', 'CLI (zip)']]];
-        $download = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'alte-dl');
+        $download = $this->downloadTableHtml(['File', 'Contents', 'Format'], $files, $navBase, '/network/download', ' class="alte-table"', 'fp-dl');
         return $this->card('Running config — ' . $d['hostname'], $scroll, 'read-only snapshot · secrets masked')
             . $this->card('Download', $download, $d['hostname']);
     }
@@ -476,7 +476,7 @@ final class NetworkSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 

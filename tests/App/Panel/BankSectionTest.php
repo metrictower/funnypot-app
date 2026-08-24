@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\Bank;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\BankSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class BankSectionTest extends TestCase
@@ -48,7 +48,7 @@ final class BankSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end (a 404 inside a deep panel is a tell).
         $html = $this->render('/admin/bank/acct-does-not-exist-9999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Send wire', $html);
     }
 

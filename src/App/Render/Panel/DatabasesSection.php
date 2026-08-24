@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Databases: a phpMyAdmin-style Browse illusion, and the home of the users loot after the T1 de-tell.
@@ -51,7 +51,7 @@ final class DatabasesSection extends AbstractPanelSection
         foreach (self::TABLES as $name => $engine) {
             $count = $this->rowCount($seed, $name);
             $size = $this->tableSize($seed, $name);
-            $browse = '<a class="alte-dl" href="' . $this->esc($navBase . '/databases/' . $name) . '">Browse</a>';
+            $browse = '<a class="fp-dl" href="' . $this->esc($navBase . '/databases/' . $name) . '">Browse</a>';
             $rowsHtml .= '<tr><td>' . $this->esc($name) . '</td><td>' . $this->esc($engine) . '</td><td>'
                 . $this->esc(number_format($count)) . '</td><td>' . $this->esc($size) . '</td><td>' . $browse . '</td></tr>';
         }
@@ -68,7 +68,7 @@ final class DatabasesSection extends AbstractPanelSection
         $rows = $sp->lootUsers($persona->domain());
         $total = $sp->lootRowCount('users');
         $table = $this->tableHtml(['id', 'username', 'email', 'role', 'password_hash'], $rows, ' class="alte-table"');
-        $table .= '<div class="alte-pager">Showing 1&ndash;' . count($rows) . ' of ' . number_format($total) . ' rows</div>';
+        $table .= '<div class="fp-pager">Showing 1&ndash;' . count($rows) . ' of ' . number_format($total) . ' rows</div>';
         $crumbs = [['Corevance', $navBase], ['Databases', $navBase . '/databases'], ['appdb.users', '']];
         return $this->breadcrumbHtml($crumbs) . $this->card('users', $table, 'appdb · InnoDB');
     }
@@ -86,7 +86,7 @@ final class DatabasesSection extends AbstractPanelSection
             $rows[] = [$id, 'row-' . sprintf('%06d', $this->rowRef($seed, $table . '|' . $i)), $created];
         }
         $html = $this->tableHtml(['id', 'ref', 'created'], $rows, ' class="alte-table"');
-        $html .= '<div class="alte-pager">Showing 1&ndash;' . $show . ' of ' . number_format($total) . ' rows</div>';
+        $html .= '<div class="fp-pager">Showing 1&ndash;' . $show . ' of ' . number_format($total) . ' rows</div>';
         $crumbs = [['Corevance', $navBase], ['Databases', $navBase . '/databases'], ['appdb.' . $table, '']];
         return $this->breadcrumbHtml($crumbs) . $this->card($table, $html, 'appdb · InnoDB');
     }

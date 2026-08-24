@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeCron;
 use Funnypot\App\Render\Fake\MinerRig;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /** Processes: the ps table plus the "already compromised, actively mining" lure (migrated from
  *  AdminLteSkin::processesCard). */

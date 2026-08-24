@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Hr;
 use Funnypot\App\Render\Fake\Payroll;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * HR portal (spec §C.5) — the PII gold-mine illusion. Renders the five-rung ladder over the `Fake\Hr`
@@ -94,7 +94,7 @@ final class HrSection extends AbstractPanelSection
         $rows = array();
         foreach ($depts as $d) {
             $rows[] = [
-                '<a class="alte-dl" href="' . $this->esc($navBase . '/hr/employees/' . $d['slug']) . '">' . $this->esc($d['dept']) . '</a>',
+                '<a class="fp-dl" href="' . $this->esc($navBase . '/hr/employees/' . $d['slug']) . '">' . $this->esc($d['dept']) . '</a>',
                 (string) $d['count'],
             ];
         }
@@ -161,7 +161,7 @@ final class HrSection extends AbstractPanelSection
             $href = $this->esc($navBase . '/hr/employees/' . $p['id']);
             $rows .= '<tr>'
                 . '<td>' . $this->esc($p['id']) . '</td>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a></td>'
                 . '<td>' . $this->esc($p['title']) . '</td>'
                 . '<td>' . $this->esc($p['dept']) . '</td>'
                 . '<td>' . $this->esc($p['location']) . '</td>'
@@ -190,7 +190,7 @@ final class HrSection extends AbstractPanelSection
                 $navBase,
                 '/hr/employees/download',
                 ' class="alte-table"',
-                'alte-dl'
+                'fp-dl'
             )
             . '</div>';
 
@@ -253,13 +253,13 @@ final class HrSection extends AbstractPanelSection
         return '<div class="fp-profile-head" style="margin:0 0 10px">'
             . '<span style="font-size:1.15em;font-weight:600;color:#2c3136">' . $this->esc($person['name']) . '</span> '
             . $this->pillHtml($person['status'], $this->statusPill($person['status']))
-            . '<div class="alte-muted" style="font-size:.86em">' . $this->esc($person['title'] . ' · ' . $person['dept'] . ' · ' . $person['id']) . '</div></div>';
+            . '<div class="fp-muted" style="font-size:.86em">' . $this->esc($person['title'] . ' · ' . $person['dept'] . ' · ' . $person['id']) . '</div></div>';
     }
 
     private function personalTab(Hr $hr, string $base, array $person): string
     {
         $kv = $this->kvTableHtml($hr->personal($person['id']), ' class="alte-kv"');
-        $note = '<p class="alte-muted" style="margin:8px 0 0">Personal data is masked at rest. Unmasking requires an approved access request to People Operations.</p>';
+        $note = '<p class="fp-muted" style="margin:8px 0 0">Personal data is masked at rest. Unmasking requires an approved access request to People Operations.</p>';
         $controls = '<div class="alte-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
             . $this->actionLink($base . '/edit', 'Edit profile', false)
             . $this->actionLink($base . '/offboard', 'Start offboarding', true)
@@ -290,7 +290,7 @@ final class HrSection extends AbstractPanelSection
             $navBase,
             '/hr/employees/' . $person['id'] . '/doc',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         return $this->card($person['name'] . ' — documents', $table, 'contracts · ID scans · screening');
     }
@@ -370,8 +370,8 @@ final class HrSection extends AbstractPanelSection
         }
         $p = $hr->person($empId);
         $href = $this->esc($navBase . '/hr/employees/' . $p['id']);
-        $line = '<a class="alte-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a>'
-            . ' <span class="alte-muted" style="font-size:.85em">' . $this->esc($p['title']) . '</span>';
+        $line = '<a class="fp-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a>'
+            . ' <span class="fp-muted" style="font-size:.85em">' . $this->esc($p['title']) . '</span>';
         $reports = $hr->directReports($empId);
         $children = '';
         if ($reports !== array()) {
@@ -408,7 +408,7 @@ final class HrSection extends AbstractPanelSection
         foreach ($payroll->runs() as $r) {
             $href = $this->esc($navBase . '/hr/payroll/' . $r['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($r['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($r['id']) . '</a></td>'
                 . '<td>' . $this->esc($r['period']) . '</td>'
                 . '<td>' . $this->esc($r['payDate']) . '</td>'
                 . '<td>' . $this->esc(number_format($r['headcount'])) . '</td>'
@@ -505,7 +505,7 @@ final class HrSection extends AbstractPanelSection
             $href = $this->esc($base . '/payslip/' . $ps['empId']);
             $rows .= '<tr>'
                 . '<td>' . $this->esc($ps['empId']) . '</td>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($ps['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($ps['name']) . '</a></td>'
                 . '<td>' . $this->esc($ps['dept']) . '</td>'
                 . '<td>' . $this->esc($this->money($ps['gross'])) . '</td>'
                 . '<td>' . $this->esc($this->money($ps['deductions'])) . '</td>'
@@ -531,7 +531,7 @@ final class HrSection extends AbstractPanelSection
         $notes = ['Missing timesheet approval', 'New starter — prorated', 'Bank detail change pending review'];
         foreach ($roster as $i => $ps) {
             $rows[] = [
-                '<a class="alte-dl" href="' . $this->esc($navBase . '/hr/employees/' . $ps['empId']) . '">' . $this->esc($ps['name']) . '</a>',
+                '<a class="fp-dl" href="' . $this->esc($navBase . '/hr/employees/' . $ps['empId']) . '">' . $this->esc($ps['name']) . '</a>',
                 $this->esc($ps['empId']),
                 $this->esc(isset($notes[$i]) ? $notes[$i] : 'Review'),
             ];
@@ -669,7 +669,7 @@ final class HrSection extends AbstractPanelSection
             $b = $hr->ptoBalance($p['id']);
             $href = $this->esc($navBase . '/hr/employees/' . $p['id'] . '/leave');
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($p['name']) . '</a></td>'
                 . '<td>' . $this->esc($p['dept']) . '</td>'
                 . '<td>' . $this->esc($b['available'] . ' d') . '</td>'
                 . '<td>' . $this->esc($b['taken'] . ' d') . '</td>'
@@ -699,7 +699,7 @@ final class HrSection extends AbstractPanelSection
             $navBase,
             '/hr/documents/download',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         $crumbs = [['Corevance', $navBase], ['People · HR', $navBase . '/hr'], ['Documents / reports', '']];
         return $this->breadcrumbHtml($crumbs)
@@ -719,7 +719,7 @@ final class HrSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -734,7 +734,7 @@ final class HrSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -781,14 +781,14 @@ final class HrSection extends AbstractPanelSection
     private function pager(string $base, int $page, int $pages, int $from, int $to, int $total): string
     {
         $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
-            : '<span class="alte-muted">‹ Prev</span>';
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
+            : '<span class="fp-muted">‹ Prev</span>';
         $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
-            : '<span class="alte-muted">Next ›</span>';
-        return '<div class="alte-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
+            : '<span class="fp-muted">Next ›</span>';
+        return '<div class="fp-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
             . $prev . $next
-            . '<span class="alte-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
+            . '<span class="fp-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
             . ' of ' . $this->esc(number_format($total)) . ' · page ' . $page . '/' . $pages . '</span></div>';
     }
 

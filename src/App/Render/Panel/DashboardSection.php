@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Fake\Org;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * The panel landing: business / operations metrics ONLY (spec T1/E1). No secrets, and specifically NO
@@ -44,7 +44,7 @@ final class DashboardSection extends AbstractPanelSection
             ['label' => 'Controllers online', 'value' => $ctrlOnline . ' / ' . count($controllers)],
             ['label' => 'Open work orders', 'value' => (string) $openWo],
             ['label' => 'Active alarms', 'value' => (string) $activeAlarms, 'sub' => $activeAlarms === 0 ? 'all clear' : 'requires review'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $siteKv = $this->kvTableHtml([
             ['Site', $site['name'] . ' (' . $site['code'] . ')'],

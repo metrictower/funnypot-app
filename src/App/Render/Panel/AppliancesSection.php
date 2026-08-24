@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Appliances;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Appliances / AV / Elevators (spec §C.9): the operator's "it does everything" whimsy, rendered off
@@ -84,16 +84,16 @@ final class AppliancesSection extends AbstractPanelSection
             ['label' => 'Elevator cars', 'value' => $s['carsInService'] . ' / ' . $s['cars'], 'sub' => $s['carsFaulted'] === 0 ? 'all in service' : $s['carsFaulted'] . ' out of service'],
             ['label' => 'Signage', 'value' => $s['signageOn'] . ' / ' . $s['signage'], 'sub' => 'screens on'],
             ['label' => 'Paging zones', 'value' => (string) $s['paZones'], 'sub' => 'PA / audio'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $gauges = '<div class="alte-grid">'
-            . '<div class="alte-card"><div class="alte-card-body">'
+            . '<div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Cars in service', $s['cars'] > 0 ? (int) round($s['carsInService'] / $s['cars'] * 100) : 0, $s['carsInService'] . ' / ' . $s['cars'])
             . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">'
+            . '<div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Screens on', $s['signage'] > 0 ? (int) round($s['signageOn'] / $s['signage'] * 100) : 0, $s['signageOn'] . ' / ' . $s['signage'])
             . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">'
+            . '<div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Descale due', $s['coffee'] > 0 ? (int) round($s['descaleDue'] / $s['coffee'] * 100) : 0, $s['descaleDue'] . ' machine' . ($s['descaleDue'] === 1 ? '' : 's'))
             . '</div></div>'
             . '</div>';
@@ -113,7 +113,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach (array_slice($appl->coffeeMachines(), 0, 6) as $m) {
             $href = $this->esc($navBase . '/appliances/coffee/' . $m['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($m['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($m['name']) . '</a></td>'
                 . '<td>' . $this->esc($m['boilerTemp'] . ' °C') . '</td>'
                 . '<td>' . $this->pillHtml($m['beanPct'] . '% beans', $m['beanPct'] < 15 ? 'warn' : 'ok') . '</td>'
                 . '<td>' . $this->pillHtml($m['descaleStatus'], $m['descaleStatus'] === 'OK' ? 'ok' : ($m['descaleStatus'] === 'Overdue' ? 'crit' : 'warn')) . '</td>'
@@ -121,7 +121,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Machine</th><th>Boiler</th><th>Beans</th><th>Descale</th><th>Cups today</th></tr></thead>';
-        $more = '<p style="margin:8px 0 0"><a class="alte-dl" href="' . $this->esc($navBase . '/appliances/coffee') . '">View all coffee machines →</a></p>';
+        $more = '<p style="margin:8px 0 0"><a class="fp-dl" href="' . $this->esc($navBase . '/appliances/coffee') . '">View all coffee machines →</a></p>';
         return $this->card('Coffee machines', '<table class="alte-table">' . $head . '<tbody>' . $rows . '</tbody></table>' . $more, 'brew-boiler temperature');
     }
 
@@ -132,7 +132,7 @@ final class AppliancesSection extends AbstractPanelSection
             $href = $this->esc($navBase . '/appliances/elevators/' . $c['id']);
             $music = $c['music'];
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
                 . '<td>' . $this->esc($c['currentFloorLabel']) . '</td>'
                 . '<td>' . $this->esc($c['direction']) . '</td>'
                 . '<td>' . $this->pillHtml($c['mode'], $c['maintenance'] ? 'crit' : 'ok') . '</td>'
@@ -140,7 +140,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Car</th><th>Floor</th><th>Direction</th><th>Mode</th><th>Now playing</th></tr></thead>';
-        $more = '<p style="margin:8px 0 0"><a class="alte-dl" href="' . $this->esc($navBase . '/appliances/elevators') . '">Elevator bank &amp; music →</a></p>';
+        $more = '<p style="margin:8px 0 0"><a class="fp-dl" href="' . $this->esc($navBase . '/appliances/elevators') . '">Elevator bank &amp; music →</a></p>';
         return $this->card('Elevator bank', '<table class="alte-table">' . $head . '<tbody>' . $rows . '</tbody></table>' . $more, 'lifts + elevator music');
     }
 
@@ -155,7 +155,7 @@ final class AppliancesSection extends AbstractPanelSection
         $rows = [];
         foreach ($links as $l) {
             $href = $navBase . '/appliances/' . $l[0];
-            $rows[] = '<li style="margin:6px 0"><a class="alte-dl" href="' . $this->esc($href) . '"><strong>' . $this->esc($l[1]) . '</strong></a> — ' . $this->esc($l[2]) . '</li>';
+            $rows[] = '<li style="margin:6px 0"><a class="fp-dl" href="' . $this->esc($href) . '"><strong>' . $this->esc($l[1]) . '</strong></a> — ' . $this->esc($l[2]) . '</li>';
         }
         $body = '<ul style="list-style:none;padding:0;margin:0">' . implode('', $rows) . '</ul>';
         return $this->card('More', $body, 'last gateway poll ' . $appl->lastPollAge());
@@ -185,7 +185,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($slice as $m) {
             $href = $this->esc($navBase . '/appliances/coffee/' . $m['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($m['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($m['name']) . '</a></td>'
                 . '<td>' . $this->esc($m['floorLabel']) . '</td>'
                 . '<td>' . $this->esc($m['boilerTemp'] . ' / ' . $m['setpoint'] . ' °C') . '</td>'
                 . '<td>' . $this->esc($m['beanPct'] . '%') . '</td>'
@@ -235,9 +235,9 @@ final class AppliancesSection extends AbstractPanelSection
         ], ' class="alte-kv"');
 
         $gauges = '<div class="alte-grid">'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Beans', (int) $m['beanPct'], $m['beanPct'] . ' %') . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Water', (int) $m['waterPct'], $m['waterPct'] . ' %') . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->tempBar((int) $m['boilerTemp'], (int) $m['setpoint'], 80, 98) . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Beans', (int) $m['beanPct'], $m['beanPct'] . ' %') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Water', (int) $m['waterPct'], $m['waterPct'] . ' %') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->tempBar((int) $m['boilerTemp'], (int) $m['setpoint'], 80, 98) . '</div></div>'
             . '</div>';
 
         return $body
@@ -255,7 +255,7 @@ final class AppliancesSection extends AbstractPanelSection
             . '<a class="alte-btn" href="' . $down . '" style="text-decoration:none;padding:4px 12px;border:1px solid #c9ccd1;border-radius:4px;color:#2c3136">−</a>'
             . '<span style="font-weight:600;font-size:1.1em;color:#2c3136">' . $this->esc($sp . ' °C') . '</span>'
             . '<a class="alte-btn" href="' . $up . '" style="text-decoration:none;padding:4px 12px;border:1px solid #c9ccd1;border-radius:4px;color:#2c3136">+</a>'
-            . '<span class="alte-muted" style="font-size:.82em;color:#9aa1a8">range ' . $this->esc($m['tempMin'] . '–' . $m['tempMax'] . ' °C') . '</span>'
+            . '<span class="fp-muted" style="font-size:.82em;color:#9aa1a8">range ' . $this->esc($m['tempMin'] . '–' . $m['tempMax'] . ' °C') . '</span>'
             . '</div>';
         $descaleHref = $this->esc($base . '/descale/start');
         $rinseHref = $this->esc($base . '/rinse/start');
@@ -265,7 +265,7 @@ final class AppliancesSection extends AbstractPanelSection
             . '</div>';
         $inner = '<div style="margin-bottom:10px"><strong>Brew-boiler setpoint</strong>' . $slider . '</div>'
             . $btns
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Changes queue to the appliance gateway and apply at the next poll (~30 s).</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Changes queue to the appliance gateway and apply at the next poll (~30 s).</p>';
         return $this->card('Controls', $inner, 'IoT gateway');
     }
 
@@ -334,7 +334,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($slice as $v) {
             $href = $this->esc($navBase . '/appliances/vending/' . $v['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($v['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($v['name']) . '</a></td>'
                 . '<td>' . $this->esc($v['kind']) . '</td>'
                 . '<td>' . $this->esc($v['tempC'] . ' °C') . '</td>'
                 . '<td>' . $this->pillHtml($v['stockPct'] . '%', $v['stockPct'] < 25 ? 'warn' : 'ok') . '</td>'
@@ -380,7 +380,7 @@ final class AppliancesSection extends AbstractPanelSection
             ['Firmware', $v['firmware']],
             ['Gateway', $v['gatewayIp']],
         ], ' class="alte-kv"');
-        $gauge = '<div class="alte-grid"><div class="alte-card"><div class="alte-card-body">'
+        $gauge = '<div class="alte-grid"><div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Stock', (int) $v['stockPct'], $v['stockPct'] . ' %') . '</div></div></div>';
         return $body . $gauge . $this->card('Vending state', $kv, $v['name']);
     }
@@ -393,7 +393,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($slots as $s) {
             $vendHref = $base . '/vend/' . $s['slot'];
             $qty = $s['qty'] . ' / ' . $s['capacity'];
-            $first = '<a class="alte-dl" href="' . $this->esc($vendHref) . '">' . $this->esc($s['slot']) . '</a>';
+            $first = '<a class="fp-dl" href="' . $this->esc($vendHref) . '">' . $this->esc($s['slot']) . '</a>';
             $rows[] = '<tr><td>' . $first . '</td>'
                 . '<td>' . $this->esc($s['product']) . '</td>'
                 . '<td>' . $this->esc($s['price']) . '</td>'
@@ -415,7 +415,7 @@ final class AppliancesSection extends AbstractPanelSection
             ['Cashbox', $v['cashboxAmount']],
             ['Status', $v['state'] === 'Payment offline' ? 'Terminal offline — cashless disabled' : 'Online'],
         ], ' class="alte-kv"');
-        $note = '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Card details are tokenised at the terminal; the panel only ever shows the last four (test card).</p>';
+        $note = '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Card details are tokenised at the terminal; the panel only ever shows the last four (test card).</p>';
         return $this->card('Cashless payment', $kv . $note, 'tokenised');
     }
 
@@ -459,7 +459,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($slice as $a) {
             $href = $this->esc($navBase . '/appliances/kitchen/' . $a['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($a['type']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($a['type']) . '</a></td>'
                 . '<td>' . $this->esc($a['floorLabel'] . ' — ' . $a['room']) . '</td>'
                 . '<td>' . $this->esc($a['reading']) . '</td>'
                 . '<td>' . $this->esc($a['setpoint']) . '</td>'
@@ -524,7 +524,7 @@ final class AppliancesSection extends AbstractPanelSection
                 break;
         }
         $inner = '<div style="margin-bottom:6px"><strong>' . $this->esc($label) . '</strong></div>' . $inner
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Queues to the appliance gateway; applies at the next poll.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Queues to the appliance gateway; applies at the next poll.</p>';
         return $this->card('Controls', $inner, 'IoT gateway');
     }
 
@@ -567,7 +567,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($cars as $c) {
             $href = $this->esc($navBase . '/appliances/elevators/' . $c['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
                 . '<td>' . $this->esc($c['status']) . '</td>'
                 . '<td>' . $this->esc($c['currentFloorLabel']) . '</td>'
                 . '<td>' . $this->esc($c['direction']) . '</td>'
@@ -632,9 +632,9 @@ final class AppliancesSection extends AbstractPanelSection
             ['Controller', $c['controllerIp']],
             ['Firmware', $c['firmware']],
         ], ' class="alte-kv"');
-        $gauge = '<div class="alte-grid"><div class="alte-card"><div class="alte-card-body">'
+        $gauge = '<div class="alte-grid"><div class="fp-card"><div class="fp-card-body">'
             . $this->gaugeHtml('Car load', (int) $c['loadPct'], $c['loadPct'] . ' %') . '</div></div></div>';
-        $musicLink = '<p style="margin:8px 0"><a class="alte-dl" href="' . $this->esc($base . '/music') . '">Elevator music →</a></p>';
+        $musicLink = '<p style="margin:8px 0"><a class="fp-dl" href="' . $this->esc($base . '/music') . '">Elevator music →</a></p>';
         return $fault . $gauge . $this->card('Car state', $musicLink . $kv, $c['name']) . $this->carControls($c, $base);
     }
 
@@ -655,7 +655,7 @@ final class AppliancesSection extends AbstractPanelSection
         $toggle = $this->toggleHtml('Maintenance mode', $c['maintenance'], $base . '/maint/' . $maintTo);
         $inner = '<div style="margin-bottom:10px">' . $toggle . '</div>'
             . '<div><strong>Operations</strong><div style="margin-top:6px">' . $btns . '</div></div>'
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Operations queue to the group controller and are confirmed by the lift interlock.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:10px">Operations queue to the group controller and are confirmed by the lift interlock.</p>';
         return $this->card('Controls', $inner, 'group controller');
     }
 
@@ -665,7 +665,7 @@ final class AppliancesSection extends AbstractPanelSection
         $now = '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px">'
             . '<div style="font-size:1.5em">♪</div>'
             . '<div><div style="font-weight:600;font-size:1.05em;color:#2c3136">' . $this->esc($mu['nowTrack']) . '</div>'
-            . '<div class="alte-muted" style="color:#6c757d">' . $this->esc($mu['nowArtist']) . '</div></div>'
+            . '<div class="fp-muted" style="color:#6c757d">' . $this->esc($mu['nowArtist']) . '</div></div>'
             . '<div style="margin-left:auto">' . $this->pillHtml($mu['state'], $mu['state'] === 'Playing' ? 'ok' : 'idle') . '</div>'
             . '</div>'
             . $this->progressBar((int) $mu['positionSec'], (int) $mu['durationSec']);
@@ -717,7 +717,7 @@ final class AppliancesSection extends AbstractPanelSection
             $navBase,
             '/appliances/elevators/' . $c['id'] . '/music',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
 
         return $this->card('Now playing', $now . $transport . $volume . $sourceBlock, $c['name'])
@@ -816,7 +816,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($slice as $s) {
             $href = $this->esc($navBase . '/appliances/signage/' . $s['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($s['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($s['name']) . '</a></td>'
                 . '<td>' . $this->esc($s['content']) . '</td>'
                 . '<td>' . $this->esc($s['orientation'] . ' · ' . $s['resolution']) . '</td>'
                 . '<td>' . $this->pillHtml($s['power'], $s['power'] === 'On' ? 'ok' : 'idle') . '</td>'
@@ -870,7 +870,7 @@ final class AppliancesSection extends AbstractPanelSection
             . '<textarea name="message" rows="3" style="width:100%;max-width:520px;padding:8px;border:1px solid #c9ccd1;border-radius:4px" placeholder="Message to push to all screens…"></textarea>'
             . '<div style="margin-top:8px"><button class="alte-btn" type="submit" style="padding:6px 14px;border:1px solid #3b7ea1;background:#3b7ea1;color:#fff;border-radius:4px;cursor:pointer">Push to screens</button></div>'
             . '</form>'
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Displayed on all powered screens until cleared. The message is not stored on this panel.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Displayed on all powered screens until cleared. The message is not stored on this panel.</p>';
         return $this->card('Push content', $form, 'signage broadcast');
     }
 
@@ -929,7 +929,7 @@ final class AppliancesSection extends AbstractPanelSection
         foreach ($zones as $z) {
             $href = $this->esc($navBase . '/appliances/pa/' . $z['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($z['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($z['name']) . '</a></td>'
                 . '<td>' . $this->esc((string) $z['speakers']) . '</td>'
                 . '<td>' . $this->esc($z['volumePct'] . '%') . '</td>'
                 . '<td>' . $this->pillHtml($z['state'], 'info') . '</td>'
@@ -978,7 +978,7 @@ final class AppliancesSection extends AbstractPanelSection
             . '<textarea name="page" rows="2" style="width:100%;max-width:520px;padding:8px;border:1px solid #c9ccd1;border-radius:4px" placeholder="Announcement text (text-to-speech)…"></textarea>'
             . '<div style="margin-top:8px"><button class="alte-btn" type="submit" style="padding:6px 14px;border:1px solid #3b7ea1;background:#3b7ea1;color:#fff;border-radius:4px;cursor:pointer">Send page</button></div>'
             . '</form>'
-            . '<p class="alte-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Pre-chime then text-to-speech to the selected zones. Test system emits nothing.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Pre-chime then text-to-speech to the selected zones. Test system emits nothing.</p>';
         return $this->card('Send page', $form, 'PA / TTS');
     }
 
@@ -1024,7 +1024,7 @@ final class AppliancesSection extends AbstractPanelSection
             . '<circle cx="' . ($knobX + 10) . '" cy="12" r="9" fill="#ffffff"/></svg>';
         return '<a href="' . $this->esc($href) . '" style="text-decoration:none;display:inline-flex;align-items:center;gap:10px;color:#2c3136">'
             . '<strong>' . $this->esc($label) . '</strong>' . $svg
-            . '<span class="alte-muted" style="font-size:.85em;color:#6c757d">' . $this->esc($on ? 'ON' : 'OFF') . '</span></a>';
+            . '<span class="fp-muted" style="font-size:.85em;color:#6c757d">' . $this->esc($on ? 'ON' : 'OFF') . '</span></a>';
     }
 
     /** A horizontal level bar (volume/brightness) — pure inline SVG, deterministic, no state. */
@@ -1052,9 +1052,9 @@ final class AppliancesSection extends AbstractPanelSection
             return sprintf('%d:%02d', intdiv($s, 60), $s % 60);
         };
         return '<div style="display:flex;align-items:center;gap:10px">'
-            . '<span class="alte-muted" style="font-size:.8em;color:#6c757d">' . $this->esc($fmt($pos)) . '</span>'
+            . '<span class="fp-muted" style="font-size:.8em;color:#6c757d">' . $this->esc($fmt($pos)) . '</span>'
             . $this->levelBar($pct)
-            . '<span class="alte-muted" style="font-size:.8em;color:#6c757d">' . $this->esc($fmt($dur)) . '</span></div>';
+            . '<span class="fp-muted" style="font-size:.8em;color:#6c757d">' . $this->esc($fmt($dur)) . '</span></div>';
     }
 
     /** A temperature bar showing the current boiler reading and its setpoint tick within a min-max range. */

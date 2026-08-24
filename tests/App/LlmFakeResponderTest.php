@@ -11,13 +11,13 @@ use Funnypot\App\Llm\LlmResponseProfiles;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
-use Funnypot\App\Render\GenericSkin;
+use Funnypot\Support\Chrome\GenericSkin;
 use Funnypot\App\Render\PageShellRenderer;
 use Funnypot\App\Render\SkinSet;
 use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
-use Funnypot\App\Render\Skins\PhpMyAdminSkin;
-use Funnypot\App\Render\Skins\WordpressSkin;
+use Funnypot\Support\Chrome\PhpMyAdminSkin;
+use Funnypot\Support\Chrome\WordpressSkin;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\RequestContext;
@@ -300,7 +300,7 @@ final class LlmFakeResponderTest extends TestCase
     {
         $slots = json_encode(['content' => '{"app_name":"HR Portal","heading":"Users","table":{"cols":["User","Token"],"rows":[["m.hale","APITOKEN"]]}}']);
         $renderer = new \Funnypot\App\Render\PageShellRenderer(
-            new \Funnypot\App\Render\SkinSet([], new \Funnypot\App\Render\GenericSkin())
+            new \Funnypot\App\Render\SkinSet([], new \Funnypot\Support\Chrome\GenericSkin())
         );
         $store = new SqliteHitStore($this->dbPath('hits'));
         $r = new LlmFakeResponder(

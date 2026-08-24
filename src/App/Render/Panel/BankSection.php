@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Bank;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Bank / Treasury (spec §C.6) — the top-tier greed lure. Renders the five-rung ladder over the
@@ -76,7 +76,7 @@ final class BankSection extends AbstractPanelSection
         foreach ($bank->accounts() as $a) {
             $href = $this->esc($navBase . '/bank/' . $a['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($a['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($a['name']) . '</a></td>'
                 . '<td>' . $this->esc($a['type']) . '</td>'
                 . '<td>' . $this->esc($a['bank']) . '</td>'
                 . '<td>' . $this->esc($a['accountMasked']) . '</td>'
@@ -153,7 +153,7 @@ final class BankSection extends AbstractPanelSection
 
         $preview = $this->ledgerTable($bank->ledgerPage($acct['id'], 0, 6), false);
         $previewCard = $this->card('Recent transactions', $preview
-            . '<div style="margin-top:8px"><a class="alte-dl" href="' . $this->esc($acctBase . '/ledger') . '">View full ledger ›</a></div>',
+            . '<div style="margin-top:8px"><a class="fp-dl" href="' . $this->esc($acctBase . '/ledger') . '">View full ledger ›</a></div>',
             'newest first');
 
         return $this->card($acct['name'], $kv . $controls, $acct['type'] . ' · ' . $acct['bank']) . $previewCard;
@@ -186,7 +186,7 @@ final class BankSection extends AbstractPanelSection
                 $navBase,
                 '/bank/download',
                 ' class="alte-table"',
-                'alte-dl'
+                'fp-dl'
             )
             . '</div>';
 
@@ -225,7 +225,7 @@ final class BankSection extends AbstractPanelSection
             ['SWIFT / BIC', $acct['bic']],
             ['Currency', $acct['currency']],
         ], ' class="alte-kv"');
-        $note = '<p class="alte-muted" style="margin-top:8px">Coordinates shown for reconciliation only. '
+        $note = '<p class="fp-muted" style="margin-top:8px">Coordinates shown for reconciliation only. '
             . 'Changes to remit-to or wire instructions require dual approval and a verification callback.</p>';
         return $this->card('Banking details', $kv . $note, $acct['name']);
     }
@@ -238,7 +238,7 @@ final class BankSection extends AbstractPanelSection
             $navBase,
             '/bank/download',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         return $this->card('Statements', $table, $acct['name']);
     }
@@ -264,7 +264,7 @@ final class BankSection extends AbstractPanelSection
         foreach ($bank->cards() as $c) {
             $href = $this->esc($navBase . '/bank/cards/' . $c['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['id']) . '</a></td>'
                 . '<td>' . $this->esc($c['holder']) . '</td>'
                 . '<td>' . $this->esc($c['program']) . '</td>'
                 . '<td>' . $this->esc($c['masked']) . '</td>'
@@ -323,7 +323,7 @@ final class BankSection extends AbstractPanelSection
             . $this->pillHtml('Revealed', 'warn')
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc('Card ' . $card['id']) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">' . $body
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p></div></div>';
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p></div></div>';
         $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
                    ['Corporate cards', $navBase . '/bank/cards'],
                    [$card['id'], $navBase . '/bank/cards/' . $card['id']], ['Reveal', '']];
@@ -398,7 +398,7 @@ final class BankSection extends AbstractPanelSection
             . '<button class="alte-btn" type="submit" style="display:inline-block;padding:8px 16px;border:0;'
             . 'border-radius:4px;background:#b23b3b;color:#fff;font-size:.9em;font-weight:600;cursor:pointer">'
             . 'Submit for authorization</button></form>';
-        $note = '<p class="alte-muted" style="margin-top:10px">Wires are released only after dual '
+        $note = '<p class="fp-muted" style="margin-top:10px">Wires are released only after dual '
             . 'authorization and OFAC / sanctions screening. A verification callback is placed to the '
             . 'beneficiary bank before release.</p>';
         $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
@@ -431,7 +431,7 @@ final class BankSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -467,14 +467,14 @@ final class BankSection extends AbstractPanelSection
     private function pager(string $base, int $page, int $pages, int $from, int $to, int $total): string
     {
         $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
-            : '<span class="alte-muted">‹ Prev</span>';
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
+            : '<span class="fp-muted">‹ Prev</span>';
         $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
-            : '<span class="alte-muted">Next ›</span>';
-        return '<div class="alte-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
+            : '<span class="fp-muted">Next ›</span>';
+        return '<div class="fp-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
             . $prev . $next
-            . '<span class="alte-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
+            . '<span class="fp-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
             . ' of ' . $this->esc(number_format($total)) . ' · page ' . $page . '/' . $pages . '</span></div>';
     }
 

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /** Backups: downloadable archive lures. Each filename keeps its archive extension so the link routes
  *  to the decoy-archive handler (migrated from AdminLteSkin::backupsCard). */
@@ -17,7 +17,7 @@ final class BackupsSection extends AbstractPanelSection
             $rows[] = ['file' => $b['name'], 'cells' => [$b['size'], $b['age'], 'Download']];
         }
         // Downloads route to $navBase/backups/<file> so the mount-rooted path reaches the decoy handler.
-        $table = $this->downloadTableHtml(['File', 'Size', 'Created', ''], $rows, $navBase, '/backups', ' class="alte-table"', 'alte-dl');
+        $table = $this->downloadTableHtml(['File', 'Size', 'Created', ''], $rows, $navBase, '/backups', ' class="alte-table"', 'fp-dl');
         return $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Backups'))
             . $this->card('Backups', $table, 'Keep last 7 · retain 30 days');
     }

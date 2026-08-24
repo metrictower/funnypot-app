@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Safety;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Fire & Life-Safety (module slug `fire`) — flagship lure #2 (spec §C.4). The dangerous-looking crown
@@ -99,7 +99,7 @@ final class FireSection extends AbstractPanelSection
             ['label' => 'Battery', 'value' => $panel['batteryVolts'], 'sub' => 'AC ' . $panel['ac']],
             ['label' => 'Exit signs', 'value' => $el['exitSignsOk'] . ' / ' . $el['exitSignsTotal']],
             ['label' => 'EM luminaires', 'value' => $el['luminairesOk'] . ' / ' . $el['luminairesTotal'], 'sub' => $el['luminairesFault'] > 0 ? $el['luminairesFault'] . ' in fault' : 'all healthy'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $panelKv = $this->kvTableHtml([
             ['Panel', $panel['id'] . ' · ' . $panel['model']],
@@ -145,7 +145,7 @@ final class FireSection extends AbstractPanelSection
             if ($shown >= $limit) {
                 break;
             }
-            $link = '<a class="alte-dl" href="' . $this->esc($navBase . '/fire/zones/' . $z['id']) . '">Detail</a>';
+            $link = '<a class="fp-dl" href="' . $this->esc($navBase . '/fire/zones/' . $z['id']) . '">Detail</a>';
             $state = $z['status'] === 'Armed' ? $this->pillHtml('Armed', 'ok') : $this->pillHtml($z['status'], 'warn');
             $rows[] = '<tr><td>' . $this->esc($z['name']) . '</td><td>' . $this->esc($z['agent']) . '</td><td>'
                 . $state . '</td><td>' . $this->esc($z['cylinders']) . '</td><td>' . $this->esc($z['controllerIp'])
@@ -358,7 +358,7 @@ final class FireSection extends AbstractPanelSection
             . '<th>State</th><th>Last test</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table>';
         $from = $offset + 1;
         $to = $offset + count($rows);
-        $pager = '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
+        $pager = '<div class="fp-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
             . ' devices &middot; page ' . $page . ' / ' . $pages . '</div>';
         return $this->fireCrumbs($navBase, [['Detector loops', '']])
             . $this->card('SLC detector loops', $table . $pager . $this->pageNav($navBase, '/fire/detectors', $page, $pages), $total . ' addressable devices');
@@ -424,7 +424,7 @@ final class FireSection extends AbstractPanelSection
         $pre = $this->preScrollHtml($lines, 'alte-log');
         $from = $offset + 1;
         $to = $offset + count($lines);
-        $pager = '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
+        $pager = '<div class="fp-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
             . ' &middot; page ' . $page . ' / ' . $pages . '</div>';
         return $this->fireCrumbs($navBase, [['Incident log', '']])
             . $this->card('Incident log', $pre . $pager . $this->pageNav($navBase, '/fire/incidents', $page, $pages), 'life-safety events');

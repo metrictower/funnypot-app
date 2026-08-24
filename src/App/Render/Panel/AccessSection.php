@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Access;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Access Control (spec §C.3) — flagship physical-access lure. Renders the five-rung ladder over the
@@ -98,7 +98,7 @@ final class AccessSection extends AbstractPanelSection
             $state = $this->pillHtml($d['state'], $this->stateStatus($d['state']));
             $hs = $d['highSecurity'] ? $this->pillHtml('high-sec', 'warn') : '';
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($d['name']) . '</a> ' . $hs . '</td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($d['name']) . '</a> ' . $hs . '</td>'
                 . '<td>' . $this->esc($d['area']) . '</td>'
                 . '<td>' . $this->esc($d['type']) . '</td>'
                 . '<td>' . $this->esc($d['controller']) . ' · ' . $this->esc($d['controllerIp']) . '</td>'
@@ -179,7 +179,7 @@ final class AccessSection extends AbstractPanelSection
             . $this->actionLink($doorBase . '/lockdown', 'Lockdown door', true)
             . '</div>';
 
-        $cam = '<div style="margin-top:8px"><a class="alte-dl" href="'
+        $cam = '<div style="margin-top:8px"><a class="fp-dl" href="'
             . $this->esc($navBase . '/cctv/' . $camId) . '">Open ' . $this->esc(strtoupper($camId)) . ' feed</a></div>';
 
         return $this->card($door['name'], $kv . $controls . $cam,
@@ -215,7 +215,7 @@ final class AccessSection extends AbstractPanelSection
         }
         $table = $this->tableHtml(['Holder', 'Dept', 'Access level', 'Last seen'], $rows, ' class="alte-table"');
         $note = $door['highSecurity']
-            ? '<p class="alte-muted" style="margin-top:8px">Access limited to elevated authorization levels. To request access, raise a ticket to the Security desk.</p>'
+            ? '<p class="fp-muted" style="margin-top:8px">Access limited to elevated authorization levels. To request access, raise a ticket to the Security desk.</p>'
             : '';
         return $this->card('Who has access', $table . $note, $door['name']);
     }
@@ -266,7 +266,7 @@ final class AccessSection extends AbstractPanelSection
                 $navBase,
                 '/access/download',
                 ' class="alte-table"',
-                'alte-dl'
+                'fp-dl'
             )
             . '</div>';
 
@@ -373,7 +373,7 @@ final class AccessSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -409,14 +409,14 @@ final class AccessSection extends AbstractPanelSection
     private function pager(string $base, int $page, int $pages, int $from, int $to, int $total): string
     {
         $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
-            : '<span class="alte-muted">‹ Prev</span>';
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
+            : '<span class="fp-muted">‹ Prev</span>';
         $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
-            : '<span class="alte-muted">Next ›</span>';
-        return '<div class="alte-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
+            : '<span class="fp-muted">Next ›</span>';
+        return '<div class="fp-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
             . $prev . $next
-            . '<span class="alte-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
+            . '<span class="fp-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
             . ' of ' . $this->esc(number_format($total)) . ' · page ' . $page . '/' . $pages . '</span></div>';
     }
 

@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\NetworkSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class NetworkSectionTest extends TestCase
@@ -79,7 +79,7 @@ final class NetworkSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end.
         $html = $this->render('/admin/network/devices/sw-does-not-exist-9999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Running config', $html);
     }
 

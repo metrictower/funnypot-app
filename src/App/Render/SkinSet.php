@@ -2,6 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render;
 
+use Funnypot\Support\Chrome\Skin;
+
 /** Picks the chrome for a path. Real-analog families (wp, phpmyadmin, …) get a resemblance skin;
  *  everything else falls to the generic seed-varied skin. First match wins; order = priority. */
 final class SkinSet

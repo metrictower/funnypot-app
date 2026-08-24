@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Facilities;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Facilities (spec §C.1 / §C.9) — the building FLOORPLAN hub and the maintenance fault-chain hub. It is
@@ -288,7 +288,7 @@ final class FacilitiesSection extends AbstractPanelSection
         foreach ($rooms as $r) {
             $href = $this->esc($navBase . '/facilities/rooms/' . $r['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($r['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($r['name']) . '</a></td>'
                 . '<td>' . $this->esc(strtoupper($r['floor'])) . '</td>'
                 . '<td>' . $this->esc($r['zone']) . '</td>'
                 . '<td>' . $this->esc($r['type']) . '</td>'
@@ -386,7 +386,7 @@ final class FacilitiesSection extends AbstractPanelSection
             $wo = $fac->workOrderForRoom($room['id']);
             $woHref = $this->esc($navBase . '/facilities/work-orders/' . strtolower($wo['id']));
             $note = '<p style="margin:0">Open fault on this room — work order '
-                . '<a class="alte-dl" href="' . $woHref . '">' . $this->esc($wo['id']) . '</a> ('
+                . '<a class="fp-dl" href="' . $woHref . '">' . $this->esc($wo['id']) . '</a> ('
                 . $this->esc($wo['status']) . ').</p>';
             $body .= $this->card('Maintenance', $note, 'fault');
         }
@@ -397,13 +397,13 @@ final class FacilitiesSection extends AbstractPanelSection
     {
         $devices = $fac->devicesInRoom($room['id']);
         if ($devices === []) {
-            return $this->card('Devices in room', '<p class="alte-muted" style="margin:0">No addressable devices in this room.</p>', $room['name']);
+            return $this->card('Devices in room', '<p class="fp-muted" style="margin:0">No addressable devices in this room.</p>', $room['name']);
         }
         $rows = '';
         foreach ($devices as $d) {
             $href = $this->esc($navBase . '/' . $d['module'] . '/' . $d['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($d['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($d['id']) . '</a></td>'
                 . '<td>' . $this->esc($d['type']) . '</td>'
                 . '<td>' . $this->esc($d['controller']) . '</td>'
                 . '<td>' . $this->pillHtml($d['state'], $this->deviceStatePill($d['state'])) . '</td>'
@@ -454,7 +454,7 @@ final class FacilitiesSection extends AbstractPanelSection
         foreach ($rooms as $r) {
             $href = $this->esc($navBase . '/facilities/bookings/' . $r['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($r['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($r['name']) . '</a></td>'
                 . '<td>' . $this->esc(strtoupper((string) $r['floor'])) . '</td>'
                 . '<td>' . $this->esc($r['type']) . '</td>'
                 . '<td>' . $this->esc((string) $r['capacity']) . '</td>'
@@ -582,7 +582,7 @@ final class FacilitiesSection extends AbstractPanelSection
         foreach ($wos as $w) {
             $href = $this->esc($navBase . '/facilities/work-orders/' . strtolower($w['id']));
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($w['id']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($w['id']) . '</a></td>'
                 . '<td>' . $this->esc($w['title']) . '</td>'
                 . '<td>' . $this->esc($w['category']) . '</td>'
                 . '<td>' . $this->pillHtml($w['priority'], $this->priorityPill($w['priority'])) . '</td>'
@@ -644,9 +644,9 @@ final class FacilitiesSection extends AbstractPanelSection
             ['SLA due', $wo['sla']],
         ], ' class="alte-kv"');
 
-        $asset = '<p style="margin:8px 0 0">Linked asset: <a class="alte-dl" href="' . $roomHref . '">'
+        $asset = '<p style="margin:8px 0 0">Linked asset: <a class="fp-dl" href="' . $roomHref . '">'
             . $this->esc($wo['assetLabel']) . '</a></p>'
-            . '<p style="margin:6px 0 0">See also: <a class="alte-dl" href="' . $seeAlsoHref . '">'
+            . '<p style="margin:6px 0 0">See also: <a class="fp-dl" href="' . $seeAlsoHref . '">'
             . $this->esc($wo['seeAlso']) . '</a></p>';
 
         $woBaseC = $woBase;
@@ -662,7 +662,7 @@ final class FacilitiesSection extends AbstractPanelSection
             ['file' => 'quote_' . strtolower($wo['id']) . '.pdf.zip', 'cells' => ['Contractor quote', 'PDF (zip)']],
             ['file' => 'method_statement_' . strtolower($wo['id']) . '.pdf.zip', 'cells' => ['Method statement', 'PDF (zip)']],
         ];
-        $attachments = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/facilities/download', ' class="alte-table"', 'alte-dl');
+        $attachments = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/facilities/download', ' class="alte-table"', 'fp-dl');
 
         return $this->breadcrumbHtml($crumbs)
             . $this->card($wo['id'], $kv . $asset . $controls, $wo['category'] . ' · ' . $wo['priority'] . ' · ' . $wo['status'])

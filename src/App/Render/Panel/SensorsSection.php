@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Sensors;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Sensors / Environment (spec §C.2): the HA device-class long tail rendered off Fake\Sensors (which sits
@@ -60,16 +60,16 @@ final class SensorsSection extends AbstractPanelSection
             ['label' => 'Low battery', 'value' => (string) $s['lowBattery'], 'sub' => $s['lowBattery'] === 0 ? 'all healthy' : 'replace soon'],
             ['label' => 'Leak detectors', 'value' => $s['leaks'] === 0 ? 'Dry' : (string) $s['leaks'], 'sub' => $s['leaks'] === 0 ? 'no water detected' : 'water detected'],
             ['label' => 'Last BMS poll', 'value' => $sensors->lastPollAge(), 'sub' => 'cached 30 s'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $gauges = '<div class="alte-grid" style="display:flex;flex-wrap:wrap;gap:16px">'
-            . '<div class="alte-card" style="flex:1;min-width:200px"><div class="alte-card-body">'
+            . '<div class="fp-card" style="flex:1;min-width:200px"><div class="fp-card-body">'
             . $this->gaugeHtml('Avg temperature', $this->clamp((int) round(($s['avgTemp'] - 15.0) / 15.0 * 100)), number_format($s['avgTemp'], 1) . ' °C')
             . '</div></div>'
-            . '<div class="alte-card" style="flex:1;min-width:200px"><div class="alte-card-body">'
+            . '<div class="fp-card" style="flex:1;min-width:200px"><div class="fp-card-body">'
             . $this->gaugeHtml('Avg CO₂', $this->clamp((int) round($s['avgCo2'] / 2000 * 100)), $s['avgCo2'] . ' ppm')
             . '</div></div>'
-            . '<div class="alte-card" style="flex:1;min-width:200px"><div class="alte-card-body">'
+            . '<div class="fp-card" style="flex:1;min-width:200px"><div class="fp-card-body">'
             . $this->gaugeHtml('Avg PM2.5', $this->clamp((int) round($s['avgPm25'] / 60 * 100)), $s['avgPm25'] . ' µg/m³')
             . '</div></div></div>';
 
@@ -103,10 +103,10 @@ final class SensorsSection extends AbstractPanelSection
         }
         $href = $this->esc($navBase . '/sensors/' . $leak['id']);
         $woHref = $this->esc($navBase . '/facilities/work-orders/' . $leak['workOrder']);
-        $body = '<p style="margin:0 0 8px">Water detected at <a class="alte-dl" href="' . $href . '">'
+        $body = '<p style="margin:0 0 8px">Water detected at <a class="fp-dl" href="' . $href . '">'
             . $this->esc($leak['name']) . '</a> (' . $this->esc($leak['roomName']) . '). '
             . 'Under-floor leak detector tripped — facilities dispatched.</p>'
-            . '<p style="margin:0">Work order <a class="alte-dl" href="' . $woHref . '">' . $this->esc($leak['workOrder']) . '</a> — '
+            . '<p style="margin:0">Work order <a class="fp-dl" href="' . $woHref . '">' . $this->esc($leak['workOrder']) . '</a> — '
             . $this->pillHtml('Awaiting attendance — plumber en route', 'warn') . '</p>';
         return '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;border-left:4px solid #b23b3b;border-radius:4px;margin:16px 0">'
             . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;display:flex;align-items:center;gap:8px">'
@@ -206,7 +206,7 @@ final class SensorsSection extends AbstractPanelSection
         foreach ($slice as $s) {
             $href = $this->esc($navBase . '/sensors/' . $s['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($s['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($s['name']) . '</a></td>'
                 . '<td>' . $this->esc($s['classLabel']) . '</td>'
                 . '<td>' . $this->readingCell($s) . '</td>'
                 . '<td>' . $this->esc($s['roomName']) . '</td>'
@@ -278,11 +278,11 @@ final class SensorsSection extends AbstractPanelSection
 
         // The reading widget: a gauge for a numeric class, a state pill for a binary class.
         if ($s['kind'] === 'numeric') {
-            $widget = '<div class="alte-card"><div class="alte-card-body" style="text-align:center">'
+            $widget = '<div class="fp-card"><div class="fp-card-body" style="text-align:center">'
                 . $this->gaugeHtml((string) $s['classLabel'], (int) $s['gaugePct'], (string) $s['value'])
                 . '</div></div>';
         } else {
-            $widget = '<div class="alte-card"><div class="alte-card-body" style="text-align:center">'
+            $widget = '<div class="fp-card"><div class="fp-card-body" style="text-align:center">'
                 . '<div style="font-size:.72em;color:#9aa1a8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">' . $this->esc((string) $s['classLabel']) . '</div>'
                 . $this->pillHtml((string) $s['value'], $this->sevPill((string) $s['severity']))
                 . '</div></div>';
@@ -292,9 +292,9 @@ final class SensorsSection extends AbstractPanelSection
         $roomHref = $this->esc($navBase . '/rooms/' . $s['roomId']);
         $floorHref = $this->esc($navBase . '/sensors/floor/' . strtolower((string) $s['floor']));
         $classHref = $this->esc($navBase . '/sensors/class/' . $s['class']);
-        $links = '<p style="margin:8px 0">Bound to <a class="alte-dl" href="' . $roomHref . '">' . $this->esc($s['roomName']) . '</a> · '
-            . '<a class="alte-dl" href="' . $floorHref . '">All sensors on ' . $this->esc((string) $s['floorLabel']) . '</a> · '
-            . '<a class="alte-dl" href="' . $classHref . '">All ' . $this->esc((string) $s['classLabel']) . '</a></p>';
+        $links = '<p style="margin:8px 0">Bound to <a class="fp-dl" href="' . $roomHref . '">' . $this->esc($s['roomName']) . '</a> · '
+            . '<a class="fp-dl" href="' . $floorHref . '">All sensors on ' . $this->esc((string) $s['floorLabel']) . '</a> · '
+            . '<a class="fp-dl" href="' . $classHref . '">All ' . $this->esc((string) $s['classLabel']) . '</a></p>';
 
         $trend = $s['kind'] === 'numeric'
             ? $this->card('24 h trend', $this->sparklineHtml($sensors->history($s)), 'cached 30 s')
@@ -312,7 +312,7 @@ final class SensorsSection extends AbstractPanelSection
         $woHref = $this->esc($navBase . '/facilities/work-orders/' . $s['workOrder']);
         $body = '<p style="margin:0 0 8px">Under-floor water detected in ' . $this->esc((string) $s['roomName'])
             . '. Detector latched Wet; the reading holds until reset by facilities.</p>'
-            . '<p style="margin:0">Work order <a class="alte-dl" href="' . $woHref . '">' . $this->esc((string) $s['workOrder']) . '</a> — '
+            . '<p style="margin:0">Work order <a class="fp-dl" href="' . $woHref . '">' . $this->esc((string) $s['workOrder']) . '</a> — '
             . $this->pillHtml('Awaiting attendance', 'warn') . '</p>';
         return '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;border-left:4px solid #b23b3b;border-radius:4px;margin:16px 0">'
             . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;display:flex;align-items:center;gap:8px">'
@@ -336,7 +336,7 @@ final class SensorsSection extends AbstractPanelSection
             $rows[] = [$when, $val];
         }
         $table = $this->tableHtml(['Time', 'Reading'], $rows, ' class="alte-table"');
-        $note = '<p class="alte-muted" style="font-size:.85em;color:#6c757d">'
+        $note = '<p class="fp-muted" style="font-size:.85em;color:#6c757d">'
             . $this->esc('24 h history, hourly · ' . $s['classLabel'] . ' · cached 30 s') . '</p>';
         return $this->card('History', $spark . $note, (string) $s['name'])
             . $this->card('Hourly readings', $table, 'read-only mirror');
@@ -359,7 +359,7 @@ final class SensorsSection extends AbstractPanelSection
             ['label' => 'Min (24 h)', 'value' => number_format($stats['min'], 1) . $u],
             ['label' => 'Max (24 h)', 'value' => number_format($stats['max'], 1) . $u],
             ['label' => 'Mean (24 h)', 'value' => number_format($stats['avg'], 1) . $u],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
         return $this->card('Statistics', $cards, (string) $s['name']);
     }
 

@@ -3,6 +3,10 @@ declare(strict_types=1);
 namespace Funnypot\App\Render;
 
 use Funnypot\RequestContext;
+use Funnypot\Support\Chrome\Esc;
+use Funnypot\Support\Chrome\GenericSkin;
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use Throwable;
 
 /**

@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\VendorsSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class VendorsSectionTest extends TestCase
@@ -41,7 +41,7 @@ final class VendorsSectionTest extends TestCase
         foreach (['', '/spend', '/invoices', '/documents', '/banking'] as $sub) {
             $html = $this->render('/admin/vendors/vendor-1001' . $sub);
             self::assertNotSame('', trim($html), "subtab $sub non-empty");
-            self::assertStringContainsString('alte-card', $html, "subtab $sub");
+            self::assertStringContainsString('fp-card', $html, "subtab $sub");
         }
     }
 
@@ -49,7 +49,7 @@ final class VendorsSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end (a 404 inside a deep panel is a tell).
         $html = $this->render('/admin/vendors/vendor-does-not-exist-9999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Edit banking details', $html);
     }
 

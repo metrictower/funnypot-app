@@ -11,7 +11,7 @@ use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\ItAssetsSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class ItAssetsSectionTest extends TestCase
@@ -219,7 +219,7 @@ final class ItAssetsSectionTest extends TestCase
     {
         $p1 = $this->render('/admin/it/assets', 5);
         $p2 = $this->render('/admin/it/assets/p2', 5);
-        self::assertStringContainsString('alte-pager', $p1);
+        self::assertStringContainsString('fp-pager', $p1);
         self::assertStringContainsString('href="/admin/it/assets/p2"', $p1);
         self::assertStringContainsString('page 1 /', $p1);
         self::assertStringContainsString('page 2 /', $p2);
@@ -260,7 +260,7 @@ final class ItAssetsSectionTest extends TestCase
     public function test_integrations_list_paginates_and_filters(): void
     {
         $p1 = $this->render('/admin/it/integrations', 5);
-        self::assertStringContainsString('alte-pager', $p1);
+        self::assertStringContainsString('fp-pager', $p1);
         self::assertStringContainsString('href="/admin/it/integrations/p2"', $p1);
         // Protocol filter chips route back into the registry.
         self::assertStringContainsString('href="/admin/it/integrations/protocol/', $p1);
@@ -284,7 +284,7 @@ final class ItAssetsSectionTest extends TestCase
     {
         // When wired as module=integrations, the same registry renders at /admin/integrations.
         $list = $this->render('/admin/integrations', 5);
-        self::assertStringContainsString('alte-pager', $list);
+        self::assertStringContainsString('fp-pager', $list);
         self::assertStringContainsString('href="/admin/integrations/p2"', $list);
         $integ = Integrations::fromSeed(5);
         $id = $integ->endpoints()[0]['id'];

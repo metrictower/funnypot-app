@@ -2,7 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
 use Funnypot\App\Render\Skins\AdminLteSkin;
-use Funnypot\App\Render\{PageSlots, VisualPersona};
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class AdminLteSkinTest extends TestCase
@@ -27,7 +28,7 @@ final class AdminLteSkinTest extends TestCase
         $a = $s->render($slots, VisualPersona::fromSeed(77), '/panel/dashboard', '/panel/dashboard');
         $b = $s->render($slots, VisualPersona::fromSeed(77), '/panel/dashboard', '/panel/dashboard');
         self::assertSame($a, $b, 'enrichment must be byte-identical per seed (cache-safe)');
-        self::assertStringContainsString('alte-stats', $a);                 // business stat tiles
+        self::assertStringContainsString('fp-tiles', $a);                   // business stat tiles
         self::assertStringContainsString('Recent sign-ins', $a);            // benign activity summary
         self::assertStringContainsString('Employees', $a);
         self::assertStringNotContainsString('password_hash', $a);           // the tell is gone (T1)

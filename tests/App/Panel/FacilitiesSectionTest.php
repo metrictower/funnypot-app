@@ -9,7 +9,7 @@ use Funnypot\App\Render\Fake\Facilities;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\FacilitiesSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class FacilitiesSectionTest extends TestCase
@@ -61,7 +61,7 @@ final class FacilitiesSectionTest extends TestCase
         $roomId = Building::fromSeed(7)->roomsFor(Building::fromSeed(7)->floors()[0]['code'])[0]['id'];
         foreach (['', '/devices'] as $sub) {
             $html = $this->render('/admin/facilities/rooms/' . $roomId . $sub);
-            self::assertStringContainsString('alte-card', $html, "subtab $sub");
+            self::assertStringContainsString('fp-card', $html, "subtab $sub");
             self::assertNotSame('', trim($html), "subtab $sub non-empty");
         }
     }
@@ -71,7 +71,7 @@ final class FacilitiesSectionTest extends TestCase
         // Sensors/CCTV emit `$navBase/rooms/<id>` — the deferred link this module closes.
         $roomId = Building::fromSeed(7)->roomsFor(Building::fromSeed(7)->floors()[0]['code'])[0]['id'];
         $html = $this->render('/admin/rooms/' . $roomId);
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Room id', $html);
     }
 
@@ -79,7 +79,7 @@ final class FacilitiesSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end (a 404 inside a deep panel is a tell).
         $html = $this->render('/admin/facilities/rooms/room-does-not-exist-9999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Raise work order', $html);
     }
 

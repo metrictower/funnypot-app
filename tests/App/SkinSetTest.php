@@ -1,8 +1,10 @@
 <?php
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
-use Funnypot\App\Render\{Skin, SkinSet, GenericSkin, PageSlots, VisualPersona};
-use Funnypot\App\Render\Skins\{WordpressSkin, PhpMyAdminSkin, GrafanaSkin, AdminLteSkin};
+use Funnypot\App\Render\SkinSet;
+use Funnypot\App\Render\Skins\{GrafanaSkin, AdminLteSkin};
+use Funnypot\Support\Chrome\{Skin, GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class SkinSetTest extends TestCase

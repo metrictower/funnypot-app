@@ -2,9 +2,9 @@
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
-use Funnypot\App\Render\AbstractSkin;
-use Funnypot\App\Render\PageSlots;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\Chrome\AbstractSkin;
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

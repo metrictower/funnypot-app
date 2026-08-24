@@ -53,7 +53,7 @@ final class LlmResponseProfilesTest extends TestCase
     public function test_html_profile_gets_renderer_and_slots_grammar_when_provided(): void
     {
         $renderer = new \Funnypot\App\Render\PageShellRenderer(
-            new \Funnypot\App\Render\SkinSet([], new \Funnypot\App\Render\GenericSkin())
+            new \Funnypot\App\Render\SkinSet([], new \Funnypot\Support\Chrome\GenericSkin())
         );
         $profiles = new LlmResponseProfiles('nginx', 'root ::= "<"', 'root ::= "{"', $renderer, 'root ::= "{"', 'Velthora');
         $html = $profiles->resolve('/hr/portal');

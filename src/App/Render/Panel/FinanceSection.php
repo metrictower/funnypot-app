@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Finance;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Finance / Accounts Payable (spec §C.6) — the greed lure. Renders the five-rung ladder over the
@@ -120,7 +120,7 @@ final class FinanceSection extends AbstractPanelSection
         foreach ($invoices as $inv) {
             $href = $this->esc($navBase . '/finance/ap/' . $inv['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($inv['number']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($inv['number']) . '</a></td>'
                 . '<td>' . $this->esc($inv['vendorName']) . '</td>'
                 . '<td>' . $this->esc($inv['po']) . '</td>'
                 . '<td>' . $this->esc($inv['dueDate']) . '</td>'
@@ -272,7 +272,7 @@ final class FinanceSection extends AbstractPanelSection
             $navBase,
             '/finance/download',
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         return $this->card('Attachments', $table, $inv['number']);
     }
@@ -386,7 +386,7 @@ final class FinanceSection extends AbstractPanelSection
         foreach ($reports as $r) {
             $href = $this->esc($navBase . '/finance/expenses/' . $r['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($r['number']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($r['number']) . '</a></td>'
                 . '<td>' . $this->esc($r['employee']) . '</td>'
                 . '<td>' . $this->esc($r['submitted']) . '</td>'
                 . '<td>' . $this->esc($fin->money($r['totalCents'])) . '</td>'
@@ -423,7 +423,7 @@ final class FinanceSection extends AbstractPanelSection
         foreach ($r['receipts'] as $n => $name) {
             $files[] = ['file' => $name, 'cells' => ['Receipt ' . ($n + 1), 'PDF (zip)']];
         }
-        $receipts = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/finance/download', ' class="alte-table"', 'alte-dl');
+        $receipts = $this->downloadTableHtml(['File', 'Item', 'Format'], $files, $navBase, '/finance/download', ' class="alte-table"', 'fp-dl');
 
         $meta = $this->kvTableHtml([
             ['Report', $r['number']],
@@ -512,7 +512,7 @@ final class FinanceSection extends AbstractPanelSection
             . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
             . '<div class="fp-result-body" style="padding:12px 14px">'
             . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
-            . '<p class="alte-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
             . '</div></div>';
     }
 
@@ -548,14 +548,14 @@ final class FinanceSection extends AbstractPanelSection
     private function pager(string $base, int $page, int $pages, int $from, int $to, int $total): string
     {
         $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
-            : '<span class="alte-muted">‹ Prev</span>';
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ Prev</a>'
+            : '<span class="fp-muted">‹ Prev</span>';
         $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
-            : '<span class="alte-muted">Next ›</span>';
-        return '<div class="alte-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
+            ? '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next ›</a>'
+            : '<span class="fp-muted">Next ›</span>';
+        return '<div class="fp-pager" style="display:flex;gap:14px;align-items:center;margin-top:10px">'
             . $prev . $next
-            . '<span class="alte-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
+            . '<span class="fp-muted">Showing ' . $this->esc(number_format($from)) . '–' . $this->esc(number_format($to))
             . ' of ' . $this->esc(number_format($total)) . ' · page ' . $page . '/' . $pages . '</span></div>';
     }
 

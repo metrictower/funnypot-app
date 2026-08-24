@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Cctv;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * CCTV / Cameras (spec §C.4). One of the physical-power lures: a camera GRID of inline-SVG placeholders
@@ -73,7 +73,7 @@ final class CctvSection extends AbstractPanelSection
             ['label' => 'No signal', 'value' => (string) $s['offline'], 'sub' => $s['offline'] === 0 ? 'all clear' : 'needs attention'],
             ['label' => 'NVR arrays', 'value' => (string) $s['nvrCount']],
             ['label' => 'Storage', 'value' => $s['usedTb'] . ' / ' . $s['capacityTb'] . ' TB'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $cams = $cctv->cameras();
         $total = count($cams);
@@ -89,12 +89,12 @@ final class CctvSection extends AbstractPanelSection
 
         $from = $total === 0 ? 0 : (($page - 1) * self::PER_PAGE) + 1;
         $to = min($total, $page * self::PER_PAGE);
-        $pager = '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . $total . ' cameras'
+        $pager = '<div class="fp-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . $total . ' cameras'
             . $this->pagerLinks($navBase . '/cctv', $page, $pages) . '</div>';
 
         $quick = '<p class="alte-intro">'
-            . '<a class="alte-dl" href="' . $this->esc($navBase . '/cctv/nvr') . '">NVR arrays</a> &middot; '
-            . '<a class="alte-dl" href="' . $this->esc($navBase . '/cctv/events') . '">Event log</a></p>';
+            . '<a class="fp-dl" href="' . $this->esc($navBase . '/cctv/nvr') . '">NVR arrays</a> &middot; '
+            . '<a class="fp-dl" href="' . $this->esc($navBase . '/cctv/events') . '">Event log</a></p>';
 
         return $this->breadcrumbHtml($this->baseCrumbs($navBase, 'CCTV'))
             . $tiles
@@ -166,7 +166,7 @@ final class CctvSection extends AbstractPanelSection
     /** Live tab: the placeholder plus the PTZ pad and canned camera controls. */
     private function liveTab(array $cam, string $base): string
     {
-        $controls = $cam['ptz'] ? $this->ptzPad($base) : '<p class="alte-muted">Fixed camera &mdash; no PTZ.</p>';
+        $controls = $cam['ptz'] ? $this->ptzPad($base) : '<p class="fp-muted">Fixed camera &mdash; no PTZ.</p>';
         $presets = $cam['ptz'] ? $this->presetButtons($base) : '';
         $actions = '<p class="alte-intro">'
             . $this->actionLink($base . '/snapshot/now', 'Snapshot')
@@ -219,7 +219,7 @@ final class CctvSection extends AbstractPanelSection
             $navBase,
             $sub,
             ' class="alte-table"',
-            'alte-dl'
+            'fp-dl'
         );
         return $this->card('Recordings', $table, $cam['retentionDays'] . '-day retention');
     }
@@ -251,7 +251,7 @@ final class CctvSection extends AbstractPanelSection
                 return $this->card('Recorder', $this->nvrDetail($n, $navBase), $n['model']);
             }
         }
-        return $this->card('Recorder', '<p class="alte-muted">Recorder ' . $this->esc($cam['nvr']) . ' not enumerated.</p>', $cam['nvr']);
+        return $this->card('Recorder', '<p class="fp-muted">Recorder ' . $this->esc($cam['nvr']) . ' not enumerated.</p>', $cam['nvr']);
     }
 
     // --- NVR overview ---
@@ -291,7 +291,7 @@ final class CctvSection extends AbstractPanelSection
         $pane = $this->preScrollHtml($cctv->events(120), 'alte-log');
         $total = number_format($cctv->eventBufferTotal());
         return $this->breadcrumbHtml($crumbs)
-            . $this->card('Camera events', $pane . '<div class="alte-pager">Showing 1&ndash;120 of ' . $total . ' events</div>', 'motion · tamper · signal');
+            . $this->card('Camera events', $pane . '<div class="fp-pager">Showing 1&ndash;120 of ' . $total . ' events</div>', 'motion · tamper · signal');
     }
 
     /** This camera's own event tail — always scoped to the camera, never another camera's ids. @return list<string> */
@@ -412,7 +412,7 @@ final class CctvSection extends AbstractPanelSection
 
     private function actionLink(string $href, string $label): string
     {
-        return '<a class="alte-dl" href="' . $this->esc($href) . '" style="margin-right:10px">' . $this->esc($label) . '</a>';
+        return '<a class="fp-dl" href="' . $this->esc($href) . '" style="margin-right:10px">' . $this->esc($label) . '</a>';
     }
 
     private function locationLabel(array $cam): string
@@ -463,10 +463,10 @@ final class CctvSection extends AbstractPanelSection
         }
         $out = ' &middot; ';
         if ($page > 1) {
-            $out .= '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">Prev</a> ';
+            $out .= '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">Prev</a> ';
         }
         if ($page < $pages) {
-            $out .= '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next</a>';
+            $out .= '<a class="fp-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">Next</a>';
         }
         return $out . ' (page ' . $page . ' of ' . $pages . ')';
     }

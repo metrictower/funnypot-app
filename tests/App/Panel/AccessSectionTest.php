@@ -7,7 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Access;
 use Funnypot\App\Render\Panel\AccessSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class AccessSectionTest extends TestCase
@@ -50,7 +50,7 @@ final class AccessSectionTest extends TestCase
     {
         // A fuzzed slug must not dead-end (a 404 inside a deep panel is a tell).
         $html = $this->render('/admin/access/door-does-not-exist-9999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Unlock', $html);
     }
 

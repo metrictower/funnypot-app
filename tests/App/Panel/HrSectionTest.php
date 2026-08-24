@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\Hr;
 use Funnypot\App\Render\Fake\Payroll;
 use Funnypot\App\Render\Panel\HrSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class HrSectionTest extends TestCase
@@ -82,7 +82,7 @@ final class HrSectionTest extends TestCase
     public function test_unknown_employee_still_renders_a_profile_not_a_404(): void
     {
         $html = $this->render('/admin/hr/employees/emp-999999');
-        self::assertStringContainsString('alte-card', $html);
+        self::assertStringContainsString('fp-card', $html);
         self::assertStringContainsString('Edit profile', $html);
     }
 

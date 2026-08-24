@@ -2,7 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
 use Funnypot\App\Render\Skins\GrafanaSkin;
-use Funnypot\App\Render\{PageSlots, VisualPersona};
+use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class GrafanaSkinTest extends TestCase

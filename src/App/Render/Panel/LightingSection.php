@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Lighting;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 
 /**
  * Lighting & Covers (spec §C.2 light/scene/cover): the building's lighting plane rendered off
@@ -80,7 +80,7 @@ final class LightingSection extends AbstractPanelSection
             ['label' => 'Blinds & shades', 'value' => (string) $s['covers'], 'sub' => $s['coversOpen'] . ' open'],
             ['label' => 'Scenes', 'value' => (string) $s['scenes'], 'sub' => 'building-wide'],
             ['label' => 'BMS controllers', 'value' => (string) $s['controllers'], 'sub' => 'DALI/KNX gateway'],
-        ], 'alte-stats', 'alte-st');
+        ], 'fp-tiles', 'fp-tile');
 
         $groups = $lx->groups();
         $total = count($groups);
@@ -90,7 +90,7 @@ final class LightingSection extends AbstractPanelSection
         foreach ($slice as $g) {
             $href = $this->esc($navBase . '/lighting/' . $g['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($g['name']) . '</a>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($g['name']) . '</a>'
                 . '<div style="font-size:.82em;color:#9aa1a8">' . $this->esc($g['haEntity']) . '</div></td>'
                 . '<td>' . $this->esc($g['floorLabel'] . ' · ' . $g['zone']) . '</td>'
                 . '<td>' . $this->statePill($g['state']) . '</td>'
@@ -140,13 +140,13 @@ final class LightingSection extends AbstractPanelSection
                 . '<td>' . $this->esc($sc['name']) . '</td>'
                 . '<td>' . $this->esc($sc['desc']) . '</td>'
                 . '<td>' . $this->esc($sc['members'] . ' groups') . '</td>'
-                . '<td><a class="alte-dl" href="' . $href . '">Apply</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">Apply</a></td>'
                 . '</tr>';
         }
         $head = '<thead><tr><th>Scene</th><th>Effect</th><th>Members</th><th></th></tr></thead>';
         $all = $this->esc($navBase . '/lighting/scenes');
         $table = '<table class="alte-table">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . '<p style="margin:10px 0 0"><a class="alte-dl" href="' . $all . '">All scenes &amp; details &rarr;</a></p>';
+            . '<p style="margin:10px 0 0"><a class="fp-dl" href="' . $all . '">All scenes &amp; details &rarr;</a></p>';
         return $this->card('Scenes', $table, 'building-wide · inert until poll');
     }
 
@@ -163,7 +163,7 @@ final class LightingSection extends AbstractPanelSection
         foreach ($access as $c) {
             $href = $this->esc($navBase . '/lighting/covers/' . $c['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
                 . '<td>' . $this->esc(ucfirst((string) $c['type'])) . '</td>'
                 . '<td>' . $this->esc($c['position'] . '% open') . '</td>'
                 . '<td>' . $this->coverStatePill($c['state']) . '</td>'
@@ -172,7 +172,7 @@ final class LightingSection extends AbstractPanelSection
         $head = '<thead><tr><th>Cover</th><th>Type</th><th>Position</th><th>State</th></tr></thead>';
         $all = $this->esc($navBase . '/lighting/covers');
         $table = '<table class="alte-table">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . '<p style="margin:10px 0 0"><a class="alte-dl" href="' . $all . '">All blinds &amp; shades ('
+            . '<p style="margin:10px 0 0"><a class="fp-dl" href="' . $all . '">All blinds &amp; shades ('
             . count($covers) . ') &rarr;</a></p>';
         return $this->card('Perimeter & access covers', $table, 'loading dock · barriers · skylights');
     }
@@ -225,8 +225,8 @@ final class LightingSection extends AbstractPanelSection
 
         $lampPct = (int) round((int) $g['lampUsed'] / max(1, (int) $g['lampRated']) * 100);
         $gauges = '<div class="alte-grid">'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Brightness', (int) $g['brightnessPct'], $g['brightnessPct'] . ' %') . '</div></div>'
-            . '<div class="alte-card"><div class="alte-card-body">' . $this->gaugeHtml('Lamp life used', $lampPct, number_format((int) $g['lampUsed']) . ' h') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Brightness', (int) $g['brightnessPct'], $g['brightnessPct'] . ' %') . '</div></div>'
+            . '<div class="fp-card"><div class="fp-card-body">' . $this->gaugeHtml('Lamp life used', $lampPct, number_format((int) $g['lampUsed']) . ' h') . '</div></div>'
             . '</div>';
 
         return $notice
@@ -284,7 +284,7 @@ final class LightingSection extends AbstractPanelSection
                 . $this->rgbSwatches($g, $base) . '</div></div>';
         }
 
-        $note = '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Changes queue to the BMS gateway and apply at the next DALI/KNX poll (~10 s). Nothing is written until then.</p>';
+        $note = '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Changes queue to the BMS gateway and apply at the next DALI/KNX poll (~10 s). Nothing is written until then.</p>';
 
         $inner = '<div style="margin-bottom:10px"><strong>Brightness</strong>' . $slider
             . '<div style="margin-top:6px">' . $presets . '</div></div>'
@@ -388,7 +388,7 @@ final class LightingSection extends AbstractPanelSection
         ], ' class="alte-kv"');
         $ctrlHref = $this->esc($navBase . '/hvac');
         $link = '<p style="margin:8px 0">Shares the BMS gateway with '
-            . '<a class="alte-dl" href="' . $ctrlHref . '">Climate / HVAC</a> on the same 10.0.50.x fabric.</p>';
+            . '<a class="fp-dl" href="' . $ctrlHref . '">Climate / HVAC</a> on the same 10.0.50.x fabric.</p>';
         return $this->card('Wiring', $link . $kv, $g['busType'] . ' · read-only mirror');
     }
 
@@ -493,7 +493,7 @@ final class LightingSection extends AbstractPanelSection
                 . '<td>' . $this->esc($sc['name']) . '</td>'
                 . '<td>' . $this->esc($sc['desc']) . '</td>'
                 . '<td>' . $this->esc(number_format((int) $sc['members']) . ' groups') . '</td>'
-                . '<td><a class="alte-dl" href="' . $href . '">Apply</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">Apply</a></td>'
                 . '</tr>';
         }
         $head = '<thead><tr><th>Scene</th><th>Effect</th><th>Members</th><th></th></tr></thead>';
@@ -528,7 +528,7 @@ final class LightingSection extends AbstractPanelSection
         foreach ($slice as $c) {
             $href = $this->esc($navBase . '/lighting/covers/' . $c['id']);
             $rows .= '<tr>'
-                . '<td><a class="alte-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
+                . '<td><a class="fp-dl" href="' . $href . '">' . $this->esc($c['name']) . '</a></td>'
                 . '<td>' . $this->esc(ucfirst((string) $c['type'])) . '</td>'
                 . '<td>' . $this->esc($c['floorLabel'] . ' · ' . $c['zone']) . '</td>'
                 . '<td>' . $this->esc($c['position'] . '%') . '</td>'
@@ -568,7 +568,7 @@ final class LightingSection extends AbstractPanelSection
         $kvPairs[] = ['Battery', $c['battery'] . ' %'];
         $kv = $this->kvTableHtml($kvPairs, ' class="alte-kv"');
 
-        $bar = '<div class="alte-card"><div class="alte-card-body">'
+        $bar = '<div class="fp-card"><div class="fp-card-body">'
             . '<div style="font-size:.72em;color:#9aa1a8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Position</div>'
             . $this->fillBar((int) $c['position'], '#3b7ea1')
             . '</div></div>';
@@ -613,8 +613,8 @@ final class LightingSection extends AbstractPanelSection
         }
 
         $note = $c['windLockout']
-            ? '<p class="alte-muted" style="font-size:.85em;color:#c07a1a">Wind lockout active — commands queue but movement is inhibited until the anemometer clears.</p>'
-            : '<p class="alte-muted" style="font-size:.85em;color:#6c757d">Commands queue to the BMS controller and apply at the next poll.</p>';
+            ? '<p class="fp-muted" style="font-size:.85em;color:#c07a1a">Wind lockout active — commands queue but movement is inhibited until the anemometer clears.</p>'
+            : '<p class="fp-muted" style="font-size:.85em;color:#6c757d">Commands queue to the BMS controller and apply at the next poll.</p>';
 
         $inner = '<div style="margin-bottom:10px"><strong>Movement</strong><div style="margin-top:6px">' . $buttons . '</div></div>'
             . '<div style="margin-bottom:10px"><strong>Position</strong>' . $slider . '</div>'

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Panel\DashboardSection;
-use Funnypot\App\Render\VisualPersona;
+use Funnypot\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**
