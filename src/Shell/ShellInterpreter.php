@@ -121,7 +121,7 @@ final class ShellInterpreter
             case 'id':
                 return $this->id($s);
             case 'hostname':
-                return $s->host . "\n";
+                return $this->facts->hostname() . "\n"; // one source — matches uname + /etc/hostname
             case 'uname':
                 return $this->uname($args);
             case 'ps':

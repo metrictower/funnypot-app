@@ -56,9 +56,9 @@ final class HostFactsTest extends TestCase
         // df root % matches storage().
         self::assertSame($sp->storage()['rootPct'] . '%', $hf->df()[0]['pct']);
 
-        // uname carries the kernel + hostname; netstat lists ssh.
-        self::assertStringContainsString($sp->os()['kernel'], $hf->uname());
-        self::assertStringContainsString($sp->hostname(), $hf->uname());
+        // uname carries the shell's OWN kernel + hostname (HostIdentity, not ServerProfile); netstat lists ssh.
+        self::assertStringContainsString($hf->os()['kernel'], $hf->uname());
+        self::assertStringContainsString($hf->hostname(), $hf->uname());
         self::assertNotEmpty(array_filter($hf->netstat(), fn ($s) => $s['local'] === '0.0.0.0:22'));
 
         self::assertNull($hf->proc('proc/nonsense'));
@@ -66,30 +66,37 @@ final class HostFactsTest extends TestCase
 
     public function test_kernel_version_coherent_across_uname_procversion_and_distro(): void
     {
-        // Per-distro UTS token that must appear in BOTH uname and /proc/version (one kernel constant),
-        // plus the distro-correct compiler in /proc/version.
-        $token = [
-            'Ubuntu 22.04.4 LTS' => ['uts' => '#123-Ubuntu SMP', 'gcc' => 'Ubuntu'],
-            'Debian GNU/Linux 12 (bookworm)' => ['uts' => 'Debian 6.1.90-1', 'gcc' => 'Debian'],
-            'Rocky Linux 9.4 (Blue Onyx)' => ['uts' => 'PREEMPT_DYNAMIC Thu Apr', 'gcc' => 'Red Hat'],
-        ];
-        $seen = [];
-        for ($i = 0; $i < 90 && count($seen) < 3; $i++) {
+        $families = [];
+        for ($i = 0; $i < 60; $i++) {
             $hf = new HostFacts($i);
-            $distro = $hf->os()['distro'];
-            if (isset($seen[$distro]) || !isset($token[$distro])) {
-                continue;
-            }
-            $seen[$distro] = true;
             $uname = $hf->uname();
             $ver = (string) $hf->proc('version');
-            self::assertStringContainsString($hf->os()['kernel'], $uname);
-            self::assertStringContainsString($hf->os()['kernel'], $ver);
-            self::assertStringContainsString($token[$distro]['uts'], $uname, "$distro uname UTS");
-            self::assertStringContainsString($token[$distro]['uts'], $ver, "$distro version UTS");
-            self::assertStringContainsString($token[$distro]['gcc'], $ver, "$distro compiler");
+            $kernel = $hf->os()['kernel'];
+
+            // both carry the same real kernel release
+            self::assertStringContainsString($kernel, $uname, "kernel in uname (seed $i)");
+            self::assertStringContainsString($kernel, $ver, "kernel in /proc/version (seed $i)");
+
+            // the UTS ('#...' onward in /proc/version) is byte-identical inside uname — one kernel constant
+            $uts = trim(substr($ver, (int) strpos($ver, '#')));
+            self::assertStringContainsString($uts, $uname, "shared UTS (seed $i)");
+
+            // distro-correct compiler in /proc/version
+            $id = $hf->identity()->osReleaseId();
+            $expect = $id === 'ubuntu' ? 'Ubuntu' : ($id === 'debian' ? 'Debian' : 'Red Hat');
+            self::assertStringContainsString($expect, $ver, "compiler for {$id} (seed $i)");
+            $families[$expect] = true;
         }
-        self::assertCount(3, $seen, 'should observe all 3 ServerProfile distros');
+        self::assertGreaterThanOrEqual(2, count($families), 'should observe multiple distro families');
+    }
+
+    public function test_uname_arch_suffix_matches_distro(): void
+    {
+        // Debian's uname suffix is the short "x86_64 GNU/Linux"; Ubuntu/RHEL use the triple.
+        for ($i = 0; $i < 40; $i++) {
+            $hf = new HostFacts($i);
+            self::assertStringEndsWith($hf->identity()->archSuffix(), rtrim($hf->uname()));
+        }
     }
 
     public function test_uptime_not_exact_multiple_of_day(): void

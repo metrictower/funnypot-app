@@ -18,26 +18,8 @@ use Funnypot\Shell\Fs\Draw;
  */
 final class HostFacts
 {
-    /** Per-distro kernel UTS + toolchain, so uname and /proc/version share ONE string and match os-release. */
-    private const KERNEL_META = [
-        'Ubuntu 22.04.4 LTS' => [
-            'uts' => '#123-Ubuntu SMP Mon Jun 10 12:59:33 UTC 2024',
-            'gcc' => 'gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38',
-            'builder' => 'buildd@lcy02-amd64-054',
-        ],
-        'Debian GNU/Linux 12 (bookworm)' => [
-            'uts' => '#1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 (2024-05-03)',
-            'gcc' => 'gcc-12 (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40',
-            'builder' => 'debian-kernel@lists.debian.org',
-        ],
-        'Rocky Linux 9.4 (Blue Onyx)' => [
-            'uts' => '#1 SMP PREEMPT_DYNAMIC Thu Apr 4 08:12:31 UTC 2024',
-            'gcc' => 'gcc (GCC) 11.4.1 20231218 (Red Hat 11.4.1-3)',
-            'builder' => 'mockbuild@iad1-prod-build001.bld.equ.rockylinux.org',
-        ],
-    ];
-
     private int $seed;
+    private HostIdentity $id;
     private ServerProfile $sp;
     private FakeCron $cron;
     /** @var array<string,mixed> */
@@ -46,32 +28,26 @@ final class HostFacts
     public function __construct(int $identitySeed)
     {
         $this->seed = $identitySeed;
-        $this->sp = ServerProfile::fromSeed($identitySeed);
+        $this->id = HostIdentity::fromSeed($identitySeed);   // distro + hostname (shell's own machine)
+        $this->sp = ServerProfile::fromSeed($identitySeed);  // x86_64 hardware facts (cpu/mem/disk/gauges)
         $this->cron = FakeCron::fromSeed($identitySeed);
         $this->miner = MinerRig::fromSeed($identitySeed)->summary();
     }
 
-    /** @return array{uts:string,gcc:string,builder:string} */
-    private function kernelMeta(): array
-    {
-        $distro = $this->sp->os()['distro'];
-
-        return self::KERNEL_META[$distro] ?? [
-            'uts' => '#1 SMP PREEMPT_DYNAMIC',
-            'gcc' => 'gcc (GCC) 11.4.0',
-            'builder' => 'builder@localhost',
-        ];
-    }
-
     public function hostname(): string
     {
-        return $this->sp->hostname();
+        return $this->id->hostname();
+    }
+
+    public function identity(): HostIdentity
+    {
+        return $this->id;
     }
 
     /** @return array{distro:string,kernel:string} */
     public function os(): array
     {
-        return $this->sp->os();
+        return ['distro' => $this->id->distroPretty(), 'kernel' => $this->id->kernel()];
     }
 
     public function primaryIp(): string
@@ -86,9 +62,9 @@ final class HostFacts
 
     public function uname(): string
     {
-        // Same kernel + UTS string /proc/version uses — on a real box they come from one kernel constant.
-        return 'Linux ' . $this->sp->hostname() . ' ' . $this->sp->os()['kernel'] . ' '
-            . $this->kernelMeta()['uts'] . ' x86_64 x86_64 x86_64 GNU/Linux';
+        // Same kernel + UTS /proc/version uses; distro-correct arch suffix (Debian's is the short form).
+        return 'Linux ' . $this->id->hostname() . ' ' . $this->id->kernel() . ' '
+            . $this->id->uts() . ' ' . $this->id->archSuffix();
     }
 
     /**
@@ -231,11 +207,9 @@ final class HostFacts
 
     private function procVersion(): string
     {
-        $k = $this->sp->os()['kernel'];
-        $m = $this->kernelMeta();
-
         // Same kernel + UTS as uname(); distro-correct compiler + a distro build host (not the honeypot).
-        return "Linux version {$k} ({$m['builder']}) ({$m['gcc']}) {$m['uts']}\n";
+        return "Linux version {$this->id->kernel()} ({$this->id->builder()}) "
+            . "({$this->id->gcc()}) {$this->id->uts()}\n";
     }
 
     /**

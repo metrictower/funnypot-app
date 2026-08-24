@@ -89,7 +89,7 @@ final class PinnedNodesTest extends TestCase
         for ($i = 0; $i < 80; $i++) {
             $fs = new FakeFilesystem(Draw::seed("s\0h\0ops"), 'ops', $i); // OS is keyed by identitySeed now
             $os = $fs->read('/etc/os-release');
-            $isRhel = (bool) preg_match('/^ID=(rocky|centos|rhel|almalinux)/m', $os);
+            $isRhel = (bool) preg_match('/^ID=(rocky|centos|rhel|almalinux|amzn)/m', $os);
             if (($family === 'rhel') === $isRhel) {
                 return $fs;
             }
@@ -124,7 +124,7 @@ final class PinnedNodesTest extends TestCase
             $fs = new FakeFilesystem(Draw::seed("s\0h\0ops"), 'ops', $i);
             $os = $fs->read('/etc/os-release');
             $passwd = $fs->read('/etc/passwd');
-            if (preg_match('/^ID=(rocky|centos|rhel|almalinux)/m', $os)) {
+            if (preg_match('/^ID=(rocky|centos|rhel|almalinux|amzn)/m', $os)) {
                 self::assertStringContainsString('apache:x:48:48', $passwd, "rhel os-release needs rhel passwd (seed $i)");
                 self::assertStringNotContainsString('www-data', $passwd, "seed $i");
             } elseif (preg_match('/^ID=(ubuntu|debian)/m', $os)) {
