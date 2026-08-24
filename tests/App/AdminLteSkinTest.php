@@ -19,6 +19,21 @@ final class AdminLteSkinTest extends TestCase
         self::assertFalse($s->matches('/hr/portal'));
     }
 
+    public function test_debug_mode_banner_explains_public_exposure(): void
+    {
+        // A dev/debug pretext banner on every page makes the panel's public reachability read as a
+        // misconfiguration ("bound to 0.0.0.0, auth off"), not a trap. Framework-agnostic (a named
+        // framework's debug bar would be its own fingerprint), inert, deterministic per seed.
+        $s = new AdminLteSkin();
+        $a = $s->render(PageSlots::fromArray([]), VisualPersona::fromSeed(7), '/admin/bank', '/admin/bank');
+        $b = $s->render(PageSlots::fromArray([]), VisualPersona::fromSeed(7), '/admin/bank', '/admin/bank');
+        self::assertSame($a, $b, 'banner must be byte-identical per seed');
+        self::assertStringContainsString('DEBUG MODE ENABLED', $a);
+        self::assertMatchesRegularExpression('/0\.0\.0\.0:\d+/', $a);
+        self::assertStringContainsString('alte-debug-banner', $a);
+        self::assertDoesNotMatchRegularExpression('/laravel|django|werkzeug|symfony|flask/i', $a);
+    }
+
     public function test_dashboard_is_business_metrics_only_no_secrets(): void
     {
         // T1: the loudest tell — a password_hash column on the landing — must be gone. The dashboard is

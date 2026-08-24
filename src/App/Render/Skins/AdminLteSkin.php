@@ -162,6 +162,8 @@ final class AdminLteSkin extends AbstractSkin
 
         $html .= '<div class="alte-content-wrapper"><section class="alte-content">';
 
+        $html .= $this->debugBanner($persona);
+
         // The model's heading/intro (when present) becomes a small page header above the section, so an
         // LLM-shaped page still reads coherently on a templated-miss path.
         if ($slots->heading() !== '' || $slots->intro() !== '') {
@@ -253,6 +255,22 @@ final class AdminLteSkin extends AbstractSkin
             . 'aria-label="Search" class="alte-navsearch-input"></form>';
     }
 
+    /**
+     * A dev/debug warning strip shown on every panel page. It explains WHY an admin panel is publicly
+     * reachable — a misconfigured debug build bound to all interfaces with auth off — so the exposure
+     * reads as an accident, not a trap. Framework-AGNOSTIC on purpose: a named framework's debug bar
+     * (Laravel/Werkzeug/Django) would be its own fingerprint against the deliberately framework-free
+     * design. Inert, seeded port, escape-by-construction (no dynamic value but the integer port).
+     */
+    private function debugBanner(VisualPersona $persona): string
+    {
+        $port = 8000 + ($persona->seed() % 1000);
+        return '<div class="alte-debug-banner" role="alert">'
+            . '<strong>&#9888; DEBUG MODE ENABLED</strong> &mdash; server bound to '
+            . '<code>0.0.0.0:' . $port . '</code> &middot; authentication bypass active for local '
+            . 'testing &middot; <em>do not use in production</em></div>';
+    }
+
     private function css(): string
     {
         // Palette reads as a Bootstrap-admin-template scheme (dark sidebar, blue-grey accent) but every
@@ -281,6 +299,9 @@ final class AdminLteSkin extends AbstractSkin
             . '.alte-nav-link-active{background:#3b4148;color:#fff;border-left:3px solid #3b7ea1;padding-left:13px}'
             . '.alte-content-wrapper{margin-left:210px;padding-top:52px;box-sizing:border-box}'
             . '.alte-content{padding:20px}'
+            . '.alte-debug-banner{background:#fff3cd;border:1px solid #ffe69c;border-left:4px solid #d39e00;'
+            . 'color:#664d03;padding:8px 14px;margin:0 0 16px;font-size:.85em;border-radius:4px}'
+            . '.alte-debug-banner code{background:#fff;padding:1px 5px;border-radius:3px;font-family:monospace;color:#7a4b00}'
             . '.fp-card{background:#fff;border:1px solid #d7dbdf;border-radius:4px;margin-bottom:20px}'
             . '.fp-card-header{padding:10px 14px;border-bottom:1px solid #d7dbdf;font-weight:bold;'
             . 'color:#2c3136;display:flex;justify-content:space-between;align-items:center}'

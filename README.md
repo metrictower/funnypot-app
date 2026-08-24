@@ -142,7 +142,9 @@ engine. The SSH server, the TCP protocol emulators and the dashboard live in thi
 On an admin-shaped path (`/admin`, `/panel/…`, `/dashboard`, `/manage`, `/console`, `/cp`, `/wp-admin`,
 `/phpmyadmin`, `/grafana`, …) the LLM tier serves a **deep, explorable fake corporate office panel** — the
 marquee lure, built for *hours* of exploration. It renders **deterministically from a seeded skin, with no
-model call**, so it is always available (never blocked on the sidecar) and byte-identical per deploy.
+model call**, so it is always available (never blocked on the sidecar) and byte-identical per deploy. A
+dev-style **debug-mode banner** ("bound to `0.0.0.0`, auth off") rides every page to explain — in-narrative
+— why an admin panel is publicly reachable at all, so the exposure reads as a misconfiguration, not a trap.
 
 **What's in it.** A "control-everything" building + business dashboard, roughly 26 modules behind a grouped
 sidebar: HR (org chart, directory, payroll), Finance (AP/invoices), **Bank & Treasury**, HVAC, CCTV,
