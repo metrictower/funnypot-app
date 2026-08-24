@@ -157,6 +157,46 @@ final class OrgTest extends TestCase
         self::assertSame([], $org->directReports('emp-999999'));
     }
 
+    /** Realism: a 90-269 person company must NOT read as an inverted pyramid of "Manager" titles —
+     *  individual contributors should be the majority of the roster, like a real company. */
+    public function test_ic_titles_are_the_majority_of_the_roster(): void
+    {
+        for ($seed = 0; $seed < 30; $seed++) {
+            $org = Org::fromSeed($seed);
+            $n = $org->headcount();
+            $ic = 0;
+            $managerTitled = 0;
+            foreach ($org->people($n) as $p) {
+                if (strpos($p['band'], 'IC') === 0) {
+                    $ic++;
+                }
+                if (substr($p['title'], -7) === 'Manager') {
+                    $managerTitled++;
+                }
+            }
+            self::assertGreaterThan($n / 2, $ic, "seed $seed: IC bands must be the majority, not a flat Manager layer");
+            self::assertLessThan($n / 2, $managerTitled, "seed $seed: 'Manager'-titled rows must not dominate the roster");
+        }
+    }
+
+    /** Realism: badge/ext/desk must not be the same loop counter in disguise (ext = badge - 2000 for
+     *  every row). Each is an independent seeded permutation, so no fixed offset holds across the roster. */
+    public function test_badge_ext_desk_are_not_a_shared_counter(): void
+    {
+        for ($seed = 0; $seed < 15; $seed++) {
+            $org = Org::fromSeed($seed);
+            $people = $org->people($org->headcount());
+            $allShareOffset = true;
+            foreach ($people as $p) {
+                if (((int) $p['badgeId']) - 2000 !== (int) $p['ext']) {
+                    $allShareOffset = false;
+                    break;
+                }
+            }
+            self::assertFalse($allShareOffset, "seed $seed: badge/ext must not be the same counter (badge - 2000 = ext for every row)");
+        }
+    }
+
     public function test_magnitudes_derive_from_headcount(): void
     {
         $org = Org::fromSeed(4);

@@ -25,7 +25,8 @@ namespace Funnypot\App\Render\Fake;
  *    be a real card. Bank names are invented, not real institutions; no real BIN/BIC resolves. Account
  *    numbers are masked at rest to their last four; full PANs appear only on the explicit card reveal.
  *  - COHERENT: card holders are the Org roster (one host = one company). Emails render at the persona
- *    domain the caller supplies.
+ *    domain the caller supplies. The Payroll account balance is sized off `Payroll::currentNet()` for
+ *    the same seed (not a generic seeded range), so it can always cover at least one real run.
  *  - COLD WALLETS vs everything else: the 4 real ETH_RESERVE addresses are the only crypto addresses
  *    this class returns that the section ever shows in full (an attacker verifies them on-chain and
  *    sees real money — the hook). Every other crypto address this class hands back — staking
@@ -104,6 +105,9 @@ final class Bank
     /** @var Org */
     private $org;
 
+    /** @var Payroll the seed's real payroll, so the Payroll account balance can be sized to cover it. */
+    private $payroll;
+
     /** @var array<int,array>|null cached account list */
     private $accountsCache = null;
 
@@ -112,6 +116,7 @@ final class Bank
         $this->seed = $seed;
         $this->personaDomain = $personaDomain;
         $this->org = Org::fromSeed($seed, $personaDomain);
+        $this->payroll = Payroll::fromSeed($seed, $personaDomain);
     }
 
     public static function fromSeed(int $seed, string $personaDomain = ''): self
@@ -205,10 +210,26 @@ final class Bank
         $roles = self::ACCOUNT_ROLES;
         for ($i = 0; $i < $extra && $i < count($roles); $i++) {
             $r = $roles[$i];
-            $out[] = $this->buildAccount($r['slug'], $r['name'], $r['type'], $this->intIn($r['min'], $r['max'], $r['slug'] . '|bal'));
+            // Payroll is sized off the seed's actual monthly net (never the generic role range) so it
+            // can always cover at least one real run; every other role keeps its generic seeded band.
+            $balanceDollars = $r['slug'] === 'payroll'
+                ? $this->payrollAccountBalance()
+                : $this->intIn($r['min'], $r['max'], $r['slug'] . '|bal');
+            $out[] = $this->buildAccount($r['slug'], $r['name'], $r['type'], $balanceDollars);
         }
         $this->accountsCache = $out;
         return $out;
+    }
+
+    /** The Payroll account balance, sized ~1-2x the seed's actual monthly net payroll (Payroll's own
+     *  single source of truth) so the funding account can always cover at least one real run, instead
+     *  of a generic range unrelated to what this company actually pays out each month. */
+    private function payrollAccountBalance(): int
+    {
+        $net = $this->payroll->currentNet();
+        $multiplierPct = 100 + ($this->h('payroll|multiplier') % 101);   // 1.00x-2.00x
+        $balance = intdiv($net * $multiplierPct, 100);
+        return $balance < 1 ? 1 : $balance;
     }
 
     /** @param int $balanceDollars whole-dollar balance; stored (and returned) as integer cents. */
@@ -484,14 +505,19 @@ final class Bank
         ];
     }
 
-    /** Published test-card BIN ranges (network sandbox space — never issued to a real cardholder). A PAN
-     *  built on one of these + a computed Luhn check digit passes a card validator but can never be real. */
+    /**
+     * Published test-card BIN ranges (network sandbox space — never issued to a real cardholder). A PAN
+     * built on one of these + a computed Luhn check digit passes a card validator but can never be real.
+     * Deliberately NOT the headline 424242/555555/378282 numbers every tutorial quotes — a
+     * payments-literate attacker recognizes those on sight. These are other genuinely-published
+     * processor sandbox BINs (Stripe's alternate test ranges), same guarantee, just less iconic.
+     */
     private const TEST_BINS = [
-        ['name' => 'Visa',       'bin' => '424242', 'len' => 16, 'cvv' => 3],
-        ['name' => 'Visa',       'bin' => '400000', 'len' => 16, 'cvv' => 3],
-        ['name' => 'Mastercard', 'bin' => '555555', 'len' => 16, 'cvv' => 3],
-        ['name' => 'Mastercard', 'bin' => '222300', 'len' => 16, 'cvv' => 3],
-        ['name' => 'Amex',       'bin' => '378282', 'len' => 15, 'cvv' => 4],
+        ['name' => 'Visa',       'bin' => '400002', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Visa',       'bin' => '401288', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Mastercard', 'bin' => '510510', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Mastercard', 'bin' => '520082', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Amex',       'bin' => '371449', 'len' => 15, 'cvv' => 4],
     ];
 
     /** Mask all but the last four, in the network's grouping (Amex 4-6-5, others 4-4-4-4). */

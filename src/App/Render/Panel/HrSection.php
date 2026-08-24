@@ -488,7 +488,7 @@ final class HrSection extends AbstractPanelSection
 
     private function runPayslips(Payroll $payroll, string $base, array $run, int $page): string
     {
-        $total = $payroll->headcount();
+        $total = $run['headcount'];
         $page = $page < 1 ? 1 : $page;
         $pages = (int) ceil($total / self::PAGE_SIZE);
         if ($pages < 1) {
@@ -564,13 +564,42 @@ final class HrSection extends AbstractPanelSection
     private function runAudit(Payroll $payroll, array $run, int $seed): string
     {
         $approver = $payroll->secondApprover();
+        $times = $this->auditTimes($seed, $run['id']);
         $lines = [
-            $run['payDate'] . ' 09:02:14  run.created        actor=payroll-service   period=' . $run['id'],
-            $run['payDate'] . ' 09:02:51  run.calculated     headcount=' . $run['headcount'] . '   gross=' . $this->money($run['gross']),
-            $run['payDate'] . ' 09:14:07  approval.requested  approver=' . $approver['name'] . '   ref=' . $payroll->approvalRef($run['id']),
+            $run['payDate'] . ' ' . $times[0] . '  run.created        actor=payroll-service   period=' . $run['id'],
+            $run['payDate'] . ' ' . $times[1] . '  run.calculated     headcount=' . $run['headcount'] . '   gross=' . $this->money($run['gross']),
+            $run['payDate'] . ' ' . $times[2] . '  approval.requested  approver=' . $approver['name'] . '   ref=' . $payroll->approvalRef($run['id']),
             $run['payDate'] . ' --:--:--  approval.pending    awaiting second approver',
         ];
         return $this->card('Audit — ' . $run['period'], $this->preScrollHtml($lines, 'alte-log'), 'append-only');
+    }
+
+    /**
+     * Seeded HH:MM:SS for a run's audit-trail lines: created, calculated, approval-requested — each
+     * offset per run id (so every run's timestamps differ, not one literal repeated on every page) but
+     * kept monotonic within the run (create -> calculate -> approval request), inside a plausible
+     * business-morning window.
+     *
+     * @return array{0:string,1:string,2:string}
+     */
+    private function auditTimes(int $seed, string $runId): array
+    {
+        $h = (int) hexdec(substr(hash('sha256', $seed . '|hraudit|' . $runId), 0, 8));
+        $created = 32100 + ($h % 900);                    // ~08:55:00-09:10:00
+        $calc = $created + 20 + (($h >> 9) % 90);          // +20-109s after created
+        $req = $created + 300 + (($h >> 18) % 900);        // +5-20min after created
+        return [$this->hms($created), $this->hms($calc), $this->hms($req)];
+    }
+
+    private function hms(int $secondsOfDay): string
+    {
+        $secondsOfDay %= 86400;
+        return sprintf(
+            '%02d:%02d:%02d',
+            intdiv($secondsOfDay, 3600),
+            intdiv($secondsOfDay % 3600, 60),
+            $secondsOfDay % 60
+        );
     }
 
     private function payslip(Payroll $payroll, string $navBase, string $runId, string $empId): string

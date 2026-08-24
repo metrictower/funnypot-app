@@ -253,6 +253,19 @@ final class FinanceSectionTest extends TestCase
         }
     }
 
+    /** Realism: "open invoices" must track the actual invoice-list status mix (Overdue + Approved +
+     *  Pending), not an independent seeded figure that can land 5-20x off a multi-thousand-row corpus. */
+    public function test_dashboard_open_invoices_matches_the_actual_status_mix(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $fin = Finance::fromSeed($seed, 'example.test');
+            $d = $fin->dashboard();
+            $total = $fin->invoiceCount();
+            self::assertGreaterThan($total * 0.25, $d['invoicesOpen'], "seed $seed: open invoices too low for a $total-invoice corpus");
+            self::assertLessThan($total * 0.60, $d['invoicesOpen'], "seed $seed: open invoices too high for a $total-invoice corpus");
+        }
+    }
+
     public function test_expense_lines_sum_to_total(): void
     {
         for ($seed = 0; $seed < 6; $seed++) {

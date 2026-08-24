@@ -11,10 +11,13 @@ namespace Funnypot\App\Render\Fake;
  *
  * Design rules (deep-admin dashboard spec §C.5 + adversarial critique):
  *  - COHERENT ARITHMETIC (the whole point): one canonical MONTHLY gross per person is the single source
- *    of truth (monthlyGrossFor()). Annual = monthly*12; every run repeats it; gross - Σdeductions = net
- *    by construction (net is the remainder); YTD = line * monthNumber (salary is constant across the
- *    year) so YTD closes column by column; a run's totals = Σ its payslips. An attacker who adds it up
- *    finds it consistent.
+ *    of truth (monthlyGrossFor()) — the CURRENT figure every run converges toward. Older runs perturb it
+ *    a little (a seeded pre-raise discount + a seeded hire cutoff dropping the newest hires) so the
+ *    20-month register isn't one figure copy-pasted down the page, the way a real payroll history isn't
+ *    flat; every period still closes on its own terms: gross - Σdeductions = net by construction (net is
+ *    the remainder); YTD = line * monthNumber (salary is constant across the fiscal year) so YTD closes
+ *    column by column; a run's totals = Σ that run's payslips. An attacker who adds it up finds it
+ *    consistent, period by period.
  *  - DETERMINISTIC per seed: every value is hash(seed+slot) -> vocab index or [min,max]. No
  *    time()/date()/rand()/shuffle(); "now" is one frozen anchor period (ANCHOR_YEAR/ANCHOR_MONTH), so a
  *    static reload is byte-identical and never a tell.
@@ -121,14 +124,50 @@ final class Payroll
     }
 
     /**
-     * One person's month numbers, computed one way so a payslip and a run total can never disagree.
-     * net is the remainder (gross - Σdeductions), so gross - deductions = net is true by construction.
+     * How many months back a run id is from the anchor (0 = the current period). Clamped to >= 0 so a
+     * malformed/future id can never read as "before now".
+     */
+    private function monthsBackFor(int $y, int $mo): int
+    {
+        $anchorTotal = self::ANCHOR_YEAR * 12 + (self::ANCHOR_MONTH - 1);
+        $total = $y * 12 + ($mo - 1);
+        $k = $anchorTotal - $total;
+        return $k < 0 ? 0 : $k;
+    }
+
+    /**
+     * The gross for a specific run, $k months back from the anchor. Most employees show the same
+     * current gross in every run (their last raise predates the whole RUN_HISTORY window); a seeded
+     * minority had their last raise WITHIN the window, so runs older than that raise show a slightly
+     * smaller pre-raise figure — real payroll history steps up over time rather than repeating one
+     * flat number, while every figure here stays pure hash(seed+id+k).
+     */
+    private function monthlyGrossForPeriod(array $person, int $k): int
+    {
+        $current = self::monthlyGrossFor($this->seed, $person);
+        if ($k <= 0) {
+            return $current;
+        }
+        $id = isset($person['id']) ? $person['id'] : 'emp-0000';
+        $raiseAt = $this->h('raiseat|' . $id) % 40;   // months-back of the last raise; >= RUN_HISTORY -> predates the register
+        if ($k <= $raiseAt) {
+            return $current;
+        }
+        $cutPct = 100 - (3 + ($this->h('raisecut|' . $id) % 6));   // pre-raise gross is 3-8% lower
+        return intdiv($current * $cutPct, 100);
+    }
+
+    /**
+     * One person's month numbers for a specific run ($k months back). Gross is that period's own
+     * figure (monthlyGrossForPeriod), so a payslip and its run total can never disagree; net is the
+     * remainder (gross - Σdeductions), so gross - deductions = net is true by construction for every
+     * period, not just the current one.
      *
      * @return array{gross:int,tax:int,pension:int,fica:int,health:int,ded:int,net:int}
      */
-    private function personNumbers(array $person): array
+    private function personNumbersForPeriod(array $person, int $k): array
     {
-        $gross = self::monthlyGrossFor($this->seed, $person);
+        $gross = $this->monthlyGrossForPeriod($person, $k);
         $band = isset($person['band']) ? $person['band'] : 'IC2';
         $id = isset($person['id']) ? $person['id'] : 'emp-0000';
         $tax = intdiv($gross * $this->taxRatePct($band), 100);
@@ -145,6 +184,29 @@ final class Payroll
             'ded' => $ded,
             'net' => $gross - $ded,
         );
+    }
+
+    /**
+     * The roster as it stood $k months back: a seeded minority of employees (whoever has less tenure
+     * than $k months, per Org's own tenure figure) hadn't been hired yet, so older runs show a smaller
+     * headcount that grows toward today's — reusing Org's existing per-employee tenure rather than a
+     * second independent hire model, so the two can never disagree.
+     *
+     * @return list<array>
+     */
+    private function rosterForPeriod(int $k): array
+    {
+        if ($k <= 0) {
+            return $this->roster();
+        }
+        $out = array();
+        foreach ($this->roster() as $p) {
+            $tenure = isset($p['tenureMonths']) ? $p['tenureMonths'] : 999;
+            if ($tenure >= $k) {
+                $out[] = $p;
+            }
+        }
+        return $out;
     }
 
     // --- runs ---
@@ -186,7 +248,7 @@ final class Payroll
         $mo = $ym[1];
         $day = $this->intIn(24, 27, 'payday|' . $y . '-' . $mo);
         $anchor = $y === self::ANCHOR_YEAR && $mo === self::ANCHOR_MONTH;
-        $totals = $this->runTotals();
+        $totals = $this->runTotals($this->monthsBackFor($y, $mo));
         return array(
             'id' => sprintf('run-%04d-%02d', $y, $mo),
             'period' => $this->monthName($mo) . ' ' . $y,
@@ -201,24 +263,33 @@ final class Payroll
         );
     }
 
-    /** Run totals = Σ over the roster of each person's month numbers, so total = Σ payslips exactly. */
-    private function runTotals(): array
+    /** Run totals = Σ over that period's roster of each person's month numbers, so total = Σ payslips
+     *  exactly for that run — never a different, independently-seeded figure. */
+    private function runTotals(int $k): array
     {
         $gross = 0;
         $ded = 0;
         $net = 0;
-        foreach ($this->roster() as $p) {
-            $num = $this->personNumbers($p);
+        $roster = $this->rosterForPeriod($k);
+        foreach ($roster as $p) {
+            $num = $this->personNumbersForPeriod($p, $k);
             $gross += $num['gross'];
             $ded += $num['ded'];
             $net += $num['net'];
         }
         return array(
-            'headcount' => count($this->roster()),
+            'headcount' => count($roster),
             'gross' => $gross,
             'deductions' => $ded,
             'net' => $net,
         );
+    }
+
+    /** The current period's total net payroll (whole dollars) — the one figure Bank sizes the Payroll
+     *  funding account off, so that account can always cover at least this seed's real monthly run. */
+    public function currentNet(): int
+    {
+        return $this->runTotals(0)['net'];
     }
 
     /** run-YYYY-MM -> [year, month]; anything malformed becomes the anchor period. @return array{0:int,1:int} */
@@ -243,18 +314,20 @@ final class Payroll
      */
     public function payslipsPage(string $runId, int $offset, int $limit): array
     {
-        $roster = $this->roster();
+        $ym = $this->parseRunId($runId);
+        $periodK = $this->monthsBackFor($ym[0], $ym[1]);
+        $roster = $this->rosterForPeriod($periodK);
         if ($offset < 0) {
             $offset = 0;
         }
         $out = array();
-        for ($k = 0; $k < $limit; $k++) {
-            $i = $offset + $k;
+        for ($j = 0; $j < $limit; $j++) {
+            $i = $offset + $j;
             if ($i >= count($roster)) {
                 break;
             }
             $p = $roster[$i];
-            $num = $this->personNumbers($p);
+            $num = $this->personNumbersForPeriod($p, $periodK);
             $out[] = array(
                 'empId' => $p['id'],
                 'name' => $p['name'],
@@ -277,7 +350,8 @@ final class Payroll
     {
         $run = $this->run($runId);
         $person = $this->personOrSynthetic($empId);
-        $num = $this->personNumbers($person);
+        $periodK = $this->monthsBackFor($run['year'], $run['monthNumber']);
+        $num = $this->personNumbersForPeriod($person, $periodK);
         $m = $run['monthNumber'];
 
         $earnings = array(

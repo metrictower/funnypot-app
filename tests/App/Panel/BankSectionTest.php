@@ -6,6 +6,7 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Fake\Bank;
 use Funnypot\App\Render\Fake\Org;
+use Funnypot\App\Render\Fake\Payroll;
 use Funnypot\App\Render\Panel\BankSection;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Support\VisualPersona;
@@ -178,6 +179,25 @@ final class BankSectionTest extends TestCase
         }
     }
 
+    /** Realism: the Payroll account must be able to cover at least one real month of this seed's
+     *  payroll, not a generic $90k-$620k range unrelated to what the company actually pays out. */
+    public function test_payroll_account_covers_a_months_net_payroll(): void
+    {
+        $covered = 0;
+        for ($seed = 0; $seed < 20; $seed++) {
+            $bank = Bank::fromSeed($seed, 'x.example');
+            $payroll = Payroll::fromSeed($seed, 'x.example');
+            $net = $payroll->currentNet();
+            foreach ($bank->accounts() as $a) {
+                if ($a['slug'] === 'payroll') {
+                    self::assertGreaterThanOrEqual($net * 100, $a['balance'], "seed $seed: Payroll account must cover a month's net payroll");
+                    $covered++;
+                }
+            }
+        }
+        self::assertGreaterThan(0, $covered, 'at least one seed in range must roll a Payroll account');
+    }
+
     public function test_ledger_running_balance_reconciles_down_the_page(): void
     {
         // Each row's balance must equal the older (next) row's balance plus this row's signed amount,
@@ -241,7 +261,7 @@ final class BankSectionTest extends TestCase
         // Deliberate design: the PAN passes Luhn (so a scanner treats it as a live number to try) but is
         // built on a published test-card BIN — network sandbox space, never issued to a real cardholder —
         // so it can never be a real card. Length is 15 (Amex) or 16 (others).
-        $testBins = ['424242', '400000', '555555', '222300', '378282'];
+        $testBins = ['400002', '401288', '510510', '520082', '371449'];
         for ($seed = 0; $seed < 6; $seed++) {
             $bank = Bank::fromSeed($seed);
             foreach ($bank->cards() as $c) {

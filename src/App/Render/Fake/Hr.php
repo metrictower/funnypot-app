@@ -197,7 +197,15 @@ final class Hr
         $p = $this->person($empId);
         $id = $p['id'];
         $ssn4 = sprintf('%04d', $this->intIn(1000, 9999, 'ssn|' . $id));
-        $dobYear = $this->intIn(1965, 1998, 'dob|' . $id);
+        // DOB stays coherent with the hire date: nobody was hired as a minor. hireYear caps how young
+        // dobYear can be (hireYear - 18); the floor keeps the spread realistic for long-tenured staff.
+        $hireYear = (int) substr($this->startDate($p['tenureMonths'], $id), 0, 4);
+        $maxDobYear = $hireYear - 18;
+        $minDobYear = 1965;
+        if ($maxDobYear < $minDobYear) {
+            $maxDobYear = $minDobYear;
+        }
+        $dobYear = $this->intIn($minDobYear, $maxDobYear, 'dob|' . $id);
         $street = $this->pick(
             array('Birch Lane', 'Maple Avenue', 'Cedar Close', 'Willow Court', 'Elm Rise',
                   'Rowan Way', 'Hazel Grove', 'Aspen Drive', 'Alder Street', 'Linden Walk'),
@@ -312,11 +320,22 @@ final class Hr
     {
         $id = $this->slug($this->person($empId)['id']);
         return array(
-            array('file' => 'employment_contract_' . $id . '.pdf.zip', 'cells' => array('Contract', 'Signed', '2.1 MB')),
-            array('file' => 'passport_scan_' . $id . '.zip', 'cells' => array('ID document', 'On file', '1.4 MB')),
-            array('file' => 'background_check_' . $id . '.pdf.zip', 'cells' => array('Screening', 'Cleared', '380 KB')),
-            array('file' => 'offer_letter_' . $id . '.pdf.zip', 'cells' => array('Offer', 'Accepted', '210 KB')),
+            array('file' => 'employment_contract_' . $id . '.pdf.zip', 'cells' => array('Contract', 'Signed', $this->docSize($id, 'contract', 1500, 3000))),
+            array('file' => 'passport_scan_' . $id . '.zip', 'cells' => array('ID document', 'On file', $this->docSize($id, 'idscan', 900, 2000))),
+            array('file' => 'background_check_' . $id . '.pdf.zip', 'cells' => array('Screening', 'Cleared', $this->docSize($id, 'screening', 250, 500))),
+            array('file' => 'offer_letter_' . $id . '.pdf.zip', 'cells' => array('Offer', 'Accepted', $this->docSize($id, 'offer', 150, 280))),
         );
+    }
+
+    /** A per-employee, per-doc-type file size ('2.4 MB' / '340 KB') — every employee's documents get
+     *  their own seeded size instead of the whole roster sharing one hardcoded figure per doc type. */
+    private function docSize(string $id, string $docType, int $minKB, int $maxKB): string
+    {
+        $kb = $this->intIn($minKB, $maxKB, 'docsize|' . $docType . '|' . $id);
+        if ($kb >= 1024) {
+            return number_format($kb / 1024, 1) . ' MB';
+        }
+        return $kb . ' KB';
     }
 
     // --- manager tree (org chart) ---

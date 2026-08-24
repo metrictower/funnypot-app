@@ -108,6 +108,19 @@ final class HrSectionTest extends TestCase
         self::assertStringContainsString('debits = credits', $this->render('/admin/hr/payroll/run-2026-08/gl'));
     }
 
+    /** Realism: payroll audit-trail timestamps must not be one hardcoded literal repeated on every
+     *  run's page — each run seeds its own times (still monotonic within the run). */
+    public function test_payroll_audit_times_vary_per_run(): void
+    {
+        $a = $this->render('/admin/hr/payroll/run-2026-08/audit');
+        $b = $this->render('/admin/hr/payroll/run-2026-06/audit');
+        preg_match('/(\d{2}:\d{2}:\d{2})\s+run\.created/', $a, $timeA);
+        preg_match('/(\d{2}:\d{2}:\d{2})\s+run\.created/', $b, $timeB);
+        self::assertNotSame([], $timeA, 'run.created carries a HH:MM:SS timestamp');
+        self::assertNotSame([], $timeB, 'run.created carries a HH:MM:SS timestamp');
+        self::assertNotSame($timeA[1], $timeB[1], 'different runs must not share one hardcoded audit time');
+    }
+
     public function test_payslip_detail_renders_with_ytd(): void
     {
         $html = $this->render('/admin/hr/payroll/run-2026-08/payslip/emp-1001');
@@ -164,6 +177,22 @@ final class HrSectionTest extends TestCase
         }
     }
 
+    /** Realism: the 20-month register must not be one figure copy-pasted down the page — historical
+     *  runs vary (hires + a raise cadence) while every run still reconciles internally. */
+    public function test_payroll_runs_vary_across_months(): void
+    {
+        for ($seed = 0; $seed < 5; $seed++) {
+            $pay = Payroll::fromSeed($seed);
+            $signatures = [];
+            foreach ($pay->runs() as $r) {
+                self::assertSame($r['gross'], $r['net'] + $r['deductions'], "seed $seed run {$r['id']}: gross = net + deductions");
+                self::assertGreaterThan(0, $r['net'], "seed $seed run {$r['id']}: net stays positive");
+                $signatures[] = $r['headcount'] . ':' . $r['gross'] . ':' . $r['net'];
+            }
+            self::assertGreaterThan(1, count(array_unique($signatures)), "seed $seed: the register must not be byte-identical every month");
+        }
+    }
+
     public function test_annual_is_twelve_times_monthly(): void
     {
         $person = ['id' => 'emp-1001', 'band' => 'M4'];
@@ -180,6 +209,41 @@ final class HrSectionTest extends TestCase
             self::assertSame($b['available'] - $b['taken'], $b['remaining'], "emp-$i remaining");
             self::assertGreaterThanOrEqual(0, $b['remaining'], "emp-$i remaining non-negative");
         }
+    }
+
+    /** Realism: DOB must stay coherent with the hire date — nobody was hired under 18. */
+    public function test_no_employee_hired_under_18(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $hr = Hr::fromSeed($seed, 'x.example');
+            $n = $hr->headcount();
+            for ($i = 1001; $i < 1001 + $n; $i++) {
+                $id = 'emp-' . $i;
+                $personal = $hr->personal($id);
+                $dobYear = null;
+                foreach ($personal as $row) {
+                    if ($row[0] === 'Date of birth') {
+                        preg_match('/(\d{4})$/', $row[1], $m);
+                        $dobYear = (int) $m[1];
+                    }
+                }
+                $hireYear = (int) substr($hr->hireDate($hr->person($id)), 0, 4);
+                self::assertGreaterThanOrEqual(18, $hireYear - $dobYear, "seed $seed $id: hired under 18 (dob=$dobYear hire=$hireYear)");
+            }
+        }
+    }
+
+    /** Realism: per-employee HR document sizes must not all share the whole roster's one hardcoded
+     *  figure per doc type. */
+    public function test_employee_document_sizes_vary_per_employee(): void
+    {
+        $hr = Hr::fromSeed(3, 'x.example');
+        $sizes = [];
+        for ($i = 1001; $i < 1011; $i++) {
+            $docs = $hr->documents('emp-' . $i);
+            $sizes[] = $docs[0]['cells'][2];   // the Contract row's size column
+        }
+        self::assertGreaterThan(1, count(array_unique($sizes)), 'contract sizes must vary across employees');
     }
 
     // --- guarded money verbs (never "done"/"paid") ---

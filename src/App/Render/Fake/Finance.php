@@ -166,7 +166,9 @@ final class Finance
             'apOutstanding' => $ap,
             'arOutstanding' => $this->intIn(300000, 12000000, 'ar') * 100,
             'overdue' => $d2 + $d3 + $d4,
-            'invoicesOpen' => $this->intIn(60, 480, 'openinv'),
+            // Read off the SAME per-invoice status decision invoiceAt() uses (not a second independent
+            // seed), so this tile can never drift from what the invoice list itself shows.
+            'invoicesOpen' => $this->openInvoiceCount(),
             'aging' => [
                 ['Current', $current],
                 ['1–30 days', $d1],
@@ -281,34 +283,20 @@ final class Finance
             : 0;
         $total = $subtotal + $tax - $discount;
 
-        $invEpoch = self::DEPLOY_EPOCH - $this->intIn(0, 230, 'inv-age|' . $i) * 86400;
-        $dueEpoch = $invEpoch + 30 * 86400;
+        $st = $this->invoiceStatusAt($i);
+        $status = $st['status'];
+        $invEpoch = $st['invEpoch'];
+        $dueEpoch = $st['dueEpoch'];
 
         // Status + payment: paid invoices carry paid = total (balance 0); Rejected are not payable
         // (balance 0); open invoices past their due date read Overdue, else Pending/Approved.
-        $r = $this->h('inv-st|' . $i) % 100;
-        $paid = 0;
+        $paid = $status === 'Paid' ? $total : 0;
         $approver = '';
         $approverEmail = '';
-        if ($r < 6) {
-            $status = 'Rejected';
-        } elseif ($r < 56) {
-            $status = 'Paid';
-            $paid = $total;
+        if ($st['hasApprover']) {
             $ap = $this->org->people($this->org->headcount())[$this->h('inv-appr|' . $i) % $this->org->headcount()];
             $approver = $ap['name'];
             $approverEmail = $ap['email'];
-        } elseif ($dueEpoch < self::DEPLOY_EPOCH) {
-            $status = 'Overdue';
-        } else {
-            if ($this->h('inv-oa|' . $i) % 2 === 0) {
-                $status = 'Approved';
-                $ap = $this->org->people($this->org->headcount())[$this->h('inv-appr|' . $i) % $this->org->headcount()];
-                $approver = $ap['name'];
-                $approverEmail = $ap['email'];
-            } else {
-                $status = 'Pending';
-            }
         }
         $balance = $total - $paid;
 
@@ -335,6 +323,49 @@ final class Finance
             'approverEmail' => $approverEmail,
             'currency' => $this->currency(),
         ];
+    }
+
+    /**
+     * The status decision invoiceAt() renders, factored out so dashboard() can tally the TRUE
+     * corpus-wide status mix (open vs paid vs rejected) without generating every invoice's line items
+     * — the dashboard "open invoices" tile reads this exact same decision, so it can never drift from
+     * what the invoice list itself shows.
+     *
+     * @return array{status:string,invEpoch:int,dueEpoch:int,hasApprover:bool}
+     */
+    private function invoiceStatusAt(int $i): array
+    {
+        $invEpoch = self::DEPLOY_EPOCH - $this->intIn(0, 230, 'inv-age|' . $i) * 86400;
+        $dueEpoch = $invEpoch + 30 * 86400;
+        $r = $this->h('inv-st|' . $i) % 100;
+        if ($r < 6) {
+            return ['status' => 'Rejected', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => false];
+        }
+        if ($r < 56) {
+            return ['status' => 'Paid', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => true];
+        }
+        if ($dueEpoch < self::DEPLOY_EPOCH) {
+            return ['status' => 'Overdue', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => false];
+        }
+        if ($this->h('inv-oa|' . $i) % 2 === 0) {
+            return ['status' => 'Approved', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => true];
+        }
+        return ['status' => 'Pending', 'invEpoch' => $invEpoch, 'dueEpoch' => $dueEpoch, 'hasApprover' => false];
+    }
+
+    /** Open = Overdue + Approved + Pending across the ACTUAL invoice corpus (Rejected/Paid are closed) —
+     *  exactly the rows the paginated invoice list would show as still outstanding. */
+    private function openInvoiceCount(): int
+    {
+        $total = $this->invoiceCount();
+        $open = 0;
+        for ($i = 0; $i < $total; $i++) {
+            $status = $this->invoiceStatusAt($i)['status'];
+            if ($status === 'Overdue' || $status === 'Approved' || $status === 'Pending') {
+                $open++;
+            }
+        }
+        return $open;
     }
 
     /**

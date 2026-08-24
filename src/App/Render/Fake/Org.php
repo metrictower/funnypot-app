@@ -27,8 +27,18 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Org
 {
-    /** Org-chart branching factor: each manager carries up to this many direct reports. */
-    private const BRANCH = 6;
+    /**
+     * Org-chart level fan-out: LEVEL_BRANCH[d] is how many children each depth-d node has at depth
+     * d+1. Front-loaded small (CEO -> a few VPs -> a few Directors each -> a few Managers each) so the
+     * exec/VP/Director/Manager layers stay a thin cap regardless of headcount, then wide at the
+     * manager->IC step so the IC bands (depth>=4) are the layer that actually absorbs the 90-269
+     * headcount range — a real company's shape, not a flat "Manager" layer swallowing the roster.
+     */
+    private const LEVEL_BRANCH = [4, 2, 2, 24];
+
+    /** Bijection modulus for badge/ext/desk permutations: prime, comfortably above the max headcount
+     *  (269) so every seeded permutation stays injective across the whole roster. */
+    private const ID_MODULUS = 997;
 
     /** @var int */
     private $seed;
@@ -214,13 +224,44 @@ final class Org
         return 'emp-' . (1001 + $i);
     }
 
-    /** Arithmetic tree parent: root(0) has none; others hang off floor((i-1)/BRANCH) < i. */
+    /**
+     * Level boundaries [start,count) derived once from LEVEL_BRANCH, wide enough to cover the maximum
+     * possible headcount (269) without ever exhausting the table.
+     *
+     * @return list<array{start:int,count:int}>
+     */
+    private static function levels(): array
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+        $levels = [];
+        $start = 0;
+        $count = 1;
+        while ($start < 400) {
+            $levels[] = ['start' => $start, 'count' => $count];
+            $d = count($levels) - 1;
+            $branch = isset(self::LEVEL_BRANCH[$d]) ? self::LEVEL_BRANCH[$d] : self::LEVEL_BRANCH[count(self::LEVEL_BRANCH) - 1];
+            $start += $count;
+            $count *= $branch;
+        }
+        $cache = $levels;
+        return $cache;
+    }
+
+    /** Arithmetic tree parent: root(0) has none; every other node's parent sits one level up, grouped
+     *  by that level's branch factor, so parent index < own index always (acyclic by construction). */
     private function parentIndex(int $i): ?int
     {
         if ($i <= 0) {
             return null;
         }
-        return (int) (($i - 1) / self::BRANCH);
+        $levels = self::levels();
+        $depth = $this->depthOf($i);
+        $branch = isset(self::LEVEL_BRANCH[$depth - 1]) ? self::LEVEL_BRANCH[$depth - 1] : self::LEVEL_BRANCH[count(self::LEVEL_BRANCH) - 1];
+        $posInLevel = $i - $levels[$depth]['start'];
+        return $levels[$depth - 1]['start'] + intdiv($posInLevel, $branch);
     }
 
     private function managerIdFor(int $i): string
@@ -232,12 +273,26 @@ final class Org
     /** Depth from the root (0 = root) — drives the title ladder. */
     private function depthOf(int $i): int
     {
-        $depth = 0;
-        while ($i > 0) {
-            $i = (int) (($i - 1) / self::BRANCH);
-            $depth++;
+        $levels = self::levels();
+        foreach ($levels as $depth => $lvl) {
+            if ($i < $lvl['start'] + $lvl['count']) {
+                return $depth;
+            }
         }
-        return $depth;
+        return count($levels) - 1;
+    }
+
+    /**
+     * A seeded bijection over 0..ID_MODULUS-1 (affine map mod a prime), independent per $salt. Badge,
+     * ext and desk each permute the roster index through THEIR OWN multiplier/offset, so no two of
+     * them move in lockstep the way `ext = badge - 2000` did when both were the same loop counter —
+     * yet each stays a bijection, so ids drawn from it are still unique across the roster.
+     */
+    private function permute(int $i, string $salt): int
+    {
+        $mult = 1 + ($this->h($salt . '|mult') % (self::ID_MODULUS - 1));   // 1..M-1, coprime (M is prime)
+        $off = $this->h($salt . '|off') % self::ID_MODULUS;
+        return ($i * $mult + $off) % self::ID_MODULUS;
     }
 
     /** @return array{0:string,1:string} [first, last] — pure function of index. */
@@ -296,6 +351,12 @@ final class Org
         $third = 20 + (int) ($i / 200);
         $host = 2 + ($i % 200);
 
+        // Badge/ext/desk each permute the roster index through an independent seeded bijection, so
+        // none of them reveal a shared loop counter — yet all stay unique across the roster.
+        $badgeSlot = $this->permute($i, 'badge');
+        $extSlot = $this->permute($i, 'ext');
+        $deskSlot = $this->permute($i, 'desk');
+
         return [
             'id' => $this->idFor($i),
             'first' => $first,
@@ -306,12 +367,12 @@ final class Org
             'dept' => $dept,
             'location' => 'HQ — Floor ' . $this->intIn(1, 8, 'floor|' . $i),
             'managerId' => $this->managerIdFor($i),
-            'badgeId' => sprintf('%06d', 4000 + $i),          // unique, monotonic, fabricated
-            'deskId' => 'DESK-' . sprintf('%02d', $this->intIn(1, 8, 'floor|' . $i)) . '-' . sprintf('%03d', $i + 1),
-            'ext' => sprintf('%04d', 2000 + $i),               // unique 4-digit extension
+            'badgeId' => sprintf('%06d', 4000 + $badgeSlot),   // unique, fabricated
+            'deskId' => 'DESK-' . sprintf('%02d', $this->intIn(1, 8, 'floor|' . $i)) . '-' . sprintf('%03d', 1 + $deskSlot),
+            'ext' => sprintf('%04d', 2000 + $extSlot),          // unique 4-digit extension
             'ip' => '10.0.' . $third . '.' . $host,            // employee VLAN, RFC1918
             'status' => $this->statusFor($i),
-            'band' => $this->bandFor($depth),
+            'band' => $this->bandFor($depth, $i),
             'tenureMonths' => $this->intIn(1, 168, 'tenure|' . $i),
         ];
     }
@@ -337,7 +398,13 @@ final class Org
         );
     }
 
-    private function bandFor(int $depth): string
+    /**
+     * IC seniority is seeded independently of org-chart depth: real ICs reporting to the same manager
+     * span junior to senior, so tying the band to tree depth would have every IC land on one flat band
+     * (IC3) now that the whole IC layer sits at a single depth. Weighted toward junior/mid, like a real
+     * ladder (fewer senior ICs than junior/mid ones).
+     */
+    private function bandFor(int $depth, int $i): string
     {
         if ($depth === 0) {
             return 'EX';
@@ -351,7 +418,17 @@ final class Org
         if ($depth === 3) {
             return 'M3';
         }
-        return 'IC' . ($depth - 1);
+        $r = $this->h('icband|' . $i) % 100;
+        if ($r < 25) {
+            return 'IC1';
+        }
+        if ($r < 60) {
+            return 'IC2';
+        }
+        if ($r < 85) {
+            return 'IC3';
+        }
+        return 'IC4';
     }
 
     /** Mostly Active; a small budgeted minority On leave / Notice (never a buffet of departures). */
