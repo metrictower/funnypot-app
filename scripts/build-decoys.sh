@@ -112,9 +112,51 @@ build_nest() {
     echo "  backup.$ext: ${size} bytes, $(( i + 1 )) nested layers"
 }
 
+# The ETH "digital asset reserve" keystore decoy: a real Web3 Secret Storage keystore v3 JSON (the
+# format geth/MetaMask export) embedding the primary reserve tranche's REAL, verifiable address (see
+# Fake\Bank::ETH_RESERVE) but with NONSENSE ciphertext/mac. Cracking the passphrase (hashcat/john) only
+# ever decrypts garbage — no valid private key is ever derivable, so funds can never move via this
+# file. Randomized per build (openssl rand), not tied to the app's per-deploy seed — this is a static
+# asset like the archives above, not a request-time render.
+build_wallet() {
+    local addr ciphertext iv salt mac id out
+    addr="638a2f4c652dcdd671adc9b712e0dabf01e256c5"   # Cold Reserve A, lowercase, no 0x (keystore convention)
+    ciphertext="$(openssl rand -hex 32)"
+    iv="$(openssl rand -hex 16)"
+    salt="$(openssl rand -hex 32)"
+    mac="$(openssl rand -hex 32)"
+    id="$(openssl rand -hex 16 | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')"
+    out="$OUT_DIR/wallet.json"
+    cat > "$out" <<JSON
+{
+  "address": "$addr",
+  "crypto": {
+    "cipher": "aes-128-ctr",
+    "ciphertext": "$ciphertext",
+    "cipherparams": {
+      "iv": "$iv"
+    },
+    "kdf": "scrypt",
+    "kdfparams": {
+      "dklen": 32,
+      "n": 262144,
+      "r": 8,
+      "p": 1,
+      "salt": "$salt"
+    },
+    "mac": "$mac"
+  },
+  "id": "$id",
+  "version": 3
+}
+JSON
+    echo "  wallet.json: $(filesize "$out") bytes"
+}
+
 echo "==> building deep nested decoys (target=${TARGET_BYTES}B, blob=${BLOB_BYTES}B) -> $OUT_DIR"
 build_nest zip    pack_zip    zip
 build_nest targz  pack_targz  tar.gz
 build_nest tar    pack_tar    tar
 build_nest tarbz2 pack_tarbz2 tar.bz2
+build_wallet
 echo "==> done."

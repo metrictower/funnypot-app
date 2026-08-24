@@ -271,6 +271,9 @@ final class HoneypotController
             '.sql' => ['backup.sql', 'application/sql'],
             '.pem' => ['backup.pem', 'application/x-pem-file'],
             '.cer' => ['backup.cer', 'application/x-x509-ca-cert'],
+            // Specific filename match (NOT a broad '.json') so an unrelated probe like /foo/config.json
+            // never gets the keystore — only a path that literally ends in "wallet.json" does.
+            'wallet.json' => ['wallet.json', 'application/json'],
         ];
         $path = strtolower($path);
         foreach ($map as $ext => $decoy) {

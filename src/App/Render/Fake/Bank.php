@@ -51,6 +51,45 @@ final class Bank
         ['slug' => 'capital',   'name' => 'Capital Expenditure', 'type' => 'Savings', 'min' => 120000, 'max' => 940000],
     ];
 
+    /** Fictional external counterparties a wire attempt names as beneficiary — never a real company. */
+    private const WIRE_BENEFICIARIES = [
+        'Meridian Supply Co', 'Northfield Logistics Ltd', 'Arcadia Partners LLC', 'Bluecrest Holdings',
+        'Halden & Vance Trading', 'Overseas Commerce Ltd', 'Instrument Freight Group', 'Palisade Sourcing Inc',
+    ];
+
+    /** Why a "completed" wire reads as reversed on the ledger — never a real compliance body/policy name. */
+    private const REVERSAL_REASONS = [
+        'Compliance hold — sanctions screening re-review',
+        'Dual-authorization mismatch — second approver revoked',
+        'Beneficiary bank rejected — instructions under review',
+        'Compliance hold — pending secondary review',
+    ];
+
+    /** Approver job titles for the wire-authorization roster (Treasury/Finance leadership, never real people). */
+    private const APPROVER_ROLES = ['CFO', 'Treasury Director', 'Controller', 'VP Finance', 'Treasury Analyst'];
+
+    /**
+     * HOUSEKEEPING — do not remove this note: these 4 addresses are REAL, currently-funded Ethereum
+     * addresses (independently verified live via `eth_getBalance` against a public RPC, 2026-08-24 —
+     * exact method + re-check commands in `funnypot-project/scratchpad/crypto-addresses.md`, tracked
+     * in `funnypot/ROADMAP.md`). They exist ONLY as a deliberately-inert "greed lure": this project
+     * never holds or derives their private keys — the wallet.json keystore decoy built by
+     * `scripts/build-decoys.sh` carries NONSENSE ciphertext/mac, so funds can never move through the
+     * honeypot. `ethBalance` is a point-in-time snapshot and WILL drift as the real chain moves; a
+     * periodic job should re-verify each address and swap out any that empties (same source file has
+     * the re-check method).
+     */
+    private const ETH_RESERVE = [
+        ['id' => 'eth-a', 'label' => 'Cold Reserve A', 'address' => '0x638A2f4c652DcdD671Adc9b712e0DaBF01E256C5', 'ethBalance' => 500.19185120],
+        ['id' => 'eth-b', 'label' => 'Cold Reserve B', 'address' => '0x68C936f2A0EdEd3c28293af9BEdD2E01D4A4c95C', 'ethBalance' => 500.09904015],
+        ['id' => 'eth-c', 'label' => 'Cold Reserve C', 'address' => '0xFc8bD5408d04Cd82465F929d37d8279f464e8D8F', 'ethBalance' => 500.02748191],
+        ['id' => 'eth-d', 'label' => 'Cold Reserve D', 'address' => '0x27684c1938239e09bC74c607ceCa0C718dedcaC6', 'ethBalance' => 500.00692444],
+    ];
+
+    /** Fixed display price (USD/ETH) — a point-in-time snapshot baked in at authoring time, never a
+     *  live feed fetched at request time (no external call on the request path). */
+    private const ETH_USD_PRICE = 2457.77;
+
     /** @var int */
     private $seed;
 
@@ -102,6 +141,21 @@ final class Bank
             $out .= (string) ($this->h($salt . '|d|' . $i) % 10);
         }
         return $out;
+    }
+
+    /**
+     * A masked fake phone in the reserved fictional range 555-0100..555-0199 (NANP N11/555 fictional
+     * block) — structurally never a real subscriber number, regardless of area code context. `full`
+     * exists for completeness/testing; the panel only ever renders `masked` (five dots + last three).
+     *
+     * @return array{full:string,last3:string,masked:string}
+     */
+    private function fakePhone(string $salt): array
+    {
+        $n = $this->intIn(0, 99, $salt . '|phn');
+        $block = '01' . sprintf('%02d', $n);   // always 0100-0199
+        $last3 = substr($block, -3);
+        return ['full' => '555-' . $block, 'last3' => $last3, 'masked' => '•••••' . $last3];
     }
 
     // --- civil-date arithmetic (the one shared frozen "now"; no date()/gmdate) ---
@@ -486,5 +540,272 @@ final class Bank
     public function wireRef(string $accountId, string $slot): string
     {
         return 'WIRE-2026-' . strtoupper(substr(hash('sha256', $this->seed . '|wire|' . $accountId . '|' . $slot), 0, 6));
+    }
+
+    /** The masked phone a wire/crypto-send 2FA step claims to have texted a code to. Never validated —
+     *  any code advances the gauntlet; this only supplies the display text. */
+    public function wireInitiatorPhone(string $slot): array
+    {
+        return $this->fakePhone('initiator|' . $slot);
+    }
+
+    /** A deterministic display amount for the CURRENT wire attempt (the confirm step's "sent" figure).
+     *  Bounded well under the account balance so it always reads as plausible. */
+    public function wireAttemptAmount(string $accountId): int
+    {
+        $acct = $this->account($accountId);
+        $ceiling = intdiv($acct['balance'], 100);
+        $ceiling = $ceiling < 5000 ? 5000 : $ceiling;
+        $cap = $ceiling < 400000 ? $ceiling : 400000;
+        return $this->intIn(5000, $cap, $accountId . '|wireattemptamt') * 100;
+    }
+
+    /**
+     * Recent outbound wire ATTEMPTS for an account's ledger/pending view — every one already shows as
+     * reversed/clawed back (the complete-then-reversal gauntlet: a submitted wire always "succeeds"
+     * then always reads as bounced here). DISPLAY-ONLY rows, distinct from the reconciling
+     * ledgerPage() entries, so the running-balance arithmetic invariant is untouched; always present,
+     * always reversed — the money never actually left, and the page never claims otherwise.
+     *
+     * @return list<array{date:string,ref:string,beneficiary:string,amount:int,status:string,reason:string}>
+     */
+    public function recentWireAttempts(string $accountId): array
+    {
+        $acct = $this->account($accountId);
+        $slug = $acct['slug'];
+        $ceiling = intdiv($acct['balance'], 100);
+        $ceiling = $ceiling < 6000 ? 6000 : $ceiling;
+        $cap = $ceiling < 250000 ? $ceiling : 250000;
+        $count = $this->intIn(2, 4, $slug . '|wireattemptcount');
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $amount = $this->intIn(5000, $cap, $slug . '|wireattemptamt|' . $i) * 100;
+            $out[] = [
+                'date' => $this->dateMinus($this->intIn(0, 6, $slug . '|wireattemptdate|' . $i)),
+                'ref' => $this->wireRef($accountId, 'attempt|' . $i),
+                'beneficiary' => $this->pick(self::WIRE_BENEFICIARIES, $slug . '|wireattemptben|' . $i),
+                'amount' => $amount,
+                'status' => 'Reversed — compliance hold',
+                'reason' => $this->pick(self::REVERSAL_REASONS, $slug . '|wireattemptreason|' . $i),
+            ];
+        }
+        return $out;
+    }
+
+    // --- approvers (dual-authorization roster; the 2FA-bypass illusion) ---
+
+    /**
+     * The wire-authorization roster, drawn from the ONE company org so a name never contradicts the
+     * employee directory. Every phone is fake (555-01xx); "2FA" is a display-only status, never real.
+     *
+     * @return list<array{id:string,personId:string,name:string,role:string,email:string,phoneFull:string,phoneLast3:string,phoneMasked:string,twoFa:string}>
+     */
+    public function approvers(): array
+    {
+        $count = $this->intIn(3, 6, 'approvercount');
+        $people = $this->org->people($count);
+        $out = [];
+        foreach ($people as $i => $p) {
+            $phone = $this->fakePhone('approver|' . $i);
+            $out[] = [
+                'id' => 'appr-' . (1 + $i),
+                'personId' => $p['id'],
+                'name' => $p['name'],
+                'role' => self::APPROVER_ROLES[$this->h('approverrole|' . $i) % count(self::APPROVER_ROLES)],
+                'email' => $p['email'],
+                'phoneFull' => $phone['full'],
+                'phoneLast3' => $phone['last3'],
+                'phoneMasked' => $phone['masked'],
+                'twoFa' => 'Enabled',
+            ];
+        }
+        return $out;
+    }
+
+    /** One approver by id, with a plausible fallback for an unknown/fuzzed id (never a dead end). */
+    public function approver(string $id): array
+    {
+        $list = $this->approvers();
+        foreach ($list as $a) {
+            if ($a['id'] === $id) {
+                return $a;
+            }
+        }
+        return $list[$this->h('approverfallback|' . $id) % count($list)];
+    }
+
+    /** The "new" masked phone an approver's reset-2FA flow claims to text a verification code to. */
+    public function approverNewPhone(string $apprId): array
+    {
+        return $this->fakePhone('approverreset|' . $apprId);
+    }
+
+    /** A DIFFERENT approver than $exceptApproverId — guaranteed distinct (the roster always has >= 3).
+     *  Used so a "phone updated" win still leaves the wire hold needing a signer the attacker hasn't
+     *  touched: the illusion of 2FA-bypass never actually reduces the dual-authorization requirement. */
+    public function otherApprover(string $exceptApproverId): array
+    {
+        $list = $this->approvers();
+        $idx = $this->h('otherapprover|' . $exceptApproverId) % count($list);
+        if ($list[$idx]['id'] === $exceptApproverId) {
+            $idx = ($idx + 1) % count($list);
+        }
+        return $list[$idx];
+    }
+
+    /** The approver a given wire/account cites as its outstanding second signature — deterministic
+     *  per slot, independent of anything an attacker just "fixed" on the approvers screen. */
+    public function assignedApprover(string $slot): array
+    {
+        $list = $this->approvers();
+        return $list[$this->h('assignedapprover|' . $slot) % count($list)];
+    }
+
+    // --- pending wires awaiting approval (more green; every approve is still a soft-deny) ---
+
+    /**
+     * A queue of large outbound wires "awaiting approval" across the treasury — always present, never
+     * approvable. `requestedBy` is a roster employee (not necessarily an approver, so the "OTHER
+     * approver" who must sign off always reads as a distinct dual-authorization gate).
+     *
+     * @return list<array{id:string,accountId:string,accountName:string,beneficiary:string,amount:int,currency:string,requestedDate:string,requestedBy:string}>
+     */
+    public function pendingApprovals(): array
+    {
+        $accts = $this->accounts();
+        $headcount = $this->org->headcount();
+        $count = $this->intIn(3, 6, 'pendingapprovalscount');
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $out[] = $this->buildPendingApproval('pnd-' . sprintf('%04d', 100 + $i), $accts, $headcount, 'pendapp|' . $i);
+        }
+        return $out;
+    }
+
+    /** One pending-approval row by id, with a plausible fallback for an unknown/fuzzed id. */
+    public function pendingApproval(string $id): array
+    {
+        foreach ($this->pendingApprovals() as $p) {
+            if ($p['id'] === $id) {
+                return $p;
+            }
+        }
+        return $this->buildPendingApproval($id, $this->accounts(), $this->org->headcount(), 'pendappfallback|' . $id);
+    }
+
+    /** @param list<array> $accts */
+    private function buildPendingApproval(string $id, array $accts, int $headcount, string $salt): array
+    {
+        $acct = $accts[$this->h($salt . '|acct') % count($accts)];
+        $ceiling = intdiv($acct['balance'], 100);
+        $ceiling = $ceiling < 20000 ? 20000 : $ceiling;
+        $cap = $ceiling < 900000 ? $ceiling : 900000;
+        $amount = $this->intIn(20000, $cap, $salt . '|amt') * 100;
+        $empIdx = $this->h($salt . '|by') % $headcount;
+        $requester = $this->org->person('emp-' . (1001 + $empIdx));
+        return [
+            'id' => $id,
+            'accountId' => $acct['id'],
+            'accountName' => $acct['name'],
+            'beneficiary' => $this->pick(self::WIRE_BENEFICIARIES, $salt . '|ben'),
+            'amount' => $amount,
+            'currency' => $acct['currency'],
+            'requestedDate' => $this->dateMinus($this->intIn(0, 5, $salt . '|date')),
+            'requestedBy' => $requester !== null ? $requester['name'] : 'Treasury Ops',
+        ];
+    }
+
+    // --- ETH digital asset reserve (crypto treasury; real addresses, garbage keys — see ETH_RESERVE) ---
+
+    /**
+     * The ETH cold-storage tranches — real, verifiable addresses and their real balances, framed as
+     * deliberate reserve tranching. Displayed fiat uses the fixed ETH_USD_PRICE snapshot (no live
+     * price call at request time).
+     *
+     * @return list<array{id:string,label:string,chain:string,address:string,ethBalance:float,usdCents:int}>
+     */
+    public function crypto(): array
+    {
+        $out = [];
+        foreach (self::ETH_RESERVE as $t) {
+            $out[] = [
+                'id' => $t['id'],
+                'label' => $t['label'],
+                'chain' => 'Ethereum',
+                'address' => $t['address'],
+                'ethBalance' => $t['ethBalance'],
+                'usdCents' => (int) round($t['ethBalance'] * self::ETH_USD_PRICE * 100),
+            ];
+        }
+        return $out;
+    }
+
+    /** @return array{totalEth:float,totalUsdCents:int,tranches:int} */
+    public function cryptoSummary(): array
+    {
+        $rows = $this->crypto();
+        $totalEth = 0.0;
+        $totalUsdCents = 0;
+        foreach ($rows as $r) {
+            $totalEth += $r['ethBalance'];
+            $totalUsdCents += $r['usdCents'];
+        }
+        return ['totalEth' => $totalEth, 'totalUsdCents' => $totalUsdCents, 'tranches' => count($rows)];
+    }
+
+    /** One reserve tranche by id, with a plausible fallback for an unknown/fuzzed id (always one of
+     *  the 4 real tranches — never a 5th invented address, so every id resolves to a verifiable one). */
+    public function cryptoAddress(string $id): array
+    {
+        $rows = $this->crypto();
+        foreach ($rows as $r) {
+            if ($r['id'] === $id) {
+                return $r;
+            }
+        }
+        return $rows[$this->h('cryptofallback|' . $id) % count($rows)];
+    }
+
+    /** Advertised on-chain tx depth for a tranche — a seeded constant; only the requested page is built. */
+    public function cryptoTxCount(string $addrId): int
+    {
+        $addr = $this->cryptoAddress($addrId);
+        return $this->intIn(40, 140, $addr['id'] . '|txcount');
+    }
+
+    /**
+     * A page of seeded, plausible-looking ETH transaction history for a tranche — flavor/bait only; it
+     * does not need to reconcile to the (real, externally fixed) balance the way the bank ledger does.
+     * `hash`/`counterparty` are fabricated 0x values; `counterparty` is never one of our own 4 addresses.
+     *
+     * @return list<array{date:string,hash:string,direction:string,counterparty:string,amountEth:float,status:string}>
+     */
+    public function cryptoTxHistory(string $addrId, int $offset, int $limit): array
+    {
+        $addr = $this->cryptoAddress($addrId);
+        $total = $this->cryptoTxCount($addrId);
+        $out = [];
+        for ($i = 0; $i < $limit; $i++) {
+            $g = $offset + $i;
+            if ($g >= $total) {
+                break;
+            }
+            $out[] = [
+                'date' => $this->dateMinus(intdiv($g, 2)),
+                'hash' => '0x' . hash('sha256', $this->seed . '|ethtx|' . $addr['id'] . '|' . $g),
+                'direction' => ($this->h($addr['id'] . '|txdir|' . $g) % 2) === 0 ? 'in' : 'out',
+                'counterparty' => '0x' . substr(hash('sha256', $this->seed . '|ethcp|' . $addr['id'] . '|' . $g), 0, 40),
+                'amountEth' => $this->intIn(10, 400000, $addr['id'] . '|txamt|' . $g) / 10000.0,
+                'status' => 'Confirmed',
+            ];
+        }
+        return $out;
+    }
+
+    /** The fake broadcast tx hash a crypto "Send" flow gets stuck showing — deterministic, never a
+     *  real transaction; nothing is ever actually relayed to any network. */
+    public function cryptoSendTxHash(string $addrId, string $slot): string
+    {
+        return '0x' . hash('sha256', $this->seed . '|ethsend|' . $addrId . '|' . $slot);
     }
 }
