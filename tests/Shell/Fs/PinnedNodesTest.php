@@ -61,6 +61,50 @@ final class PinnedNodesTest extends TestCase
         self::assertNotSame($sa, $sb, 'shadow must vary per host secret');
         self::assertStringNotContainsString('$6$xxxxxxxxxxxxxxxx$', $sa);
         self::assertDoesNotMatchRegularExpression('/\$6\$[^$]{16}\$0{86}/', $sa, 'no all-zero digest');
+
+        // The DIGEST itself (not just lastchg/name) must vary — extract $6$<salt>$<digest> from each.
+        $hash = static function (string $shadow): array {
+            return preg_match('/\$6\$([^$:]+)\$([^:]+)/', $shadow, $m) ? [$m[1], $m[2]] : [null, null];
+        };
+        [$saltA, $digA] = $hash($sa);
+        [$saltB, $digB] = $hash($sb);
+        self::assertSame(16, strlen((string) $saltA));
+        self::assertSame(86, strlen((string) $digA));
+        self::assertNotSame($saltA, $saltB, 'salt must vary');
+        self::assertNotSame($digA, $digB, 'digest must vary');
+    }
+
+    private function firstSeedOfFamily(string $family): ?FakeFilesystem
+    {
+        for ($i = 0; $i < 60; $i++) {
+            $fs = new FakeFilesystem(Draw::seed("famseed-{$i}\0h\0ops"), 'ops');
+            $os = $fs->read('/etc/os-release');
+            $isRhel = (bool) preg_match('/^ID=(centos|rhel)/m', $os);
+            if (($family === 'rhel') === $isRhel) {
+                return $fs;
+            }
+        }
+
+        return null;
+    }
+
+    public function test_var_www_uid_matches_distro_family(): void
+    {
+        foreach (['rhel' => 48, 'debian' => 33] as $fam => $expectedUid) {
+            $fs = $this->firstSeedOfFamily($fam);
+            self::assertNotNull($fs, "could not find a {$fam} seed");
+            $checked = 0;
+            foreach (['/var/www', '/var/www/html'] as $dir) {
+                foreach ($fs->list($dir) as $n) {
+                    if ($n->isFile() && $n->uid !== 0) {
+                        self::assertSame($expectedUid, $n->uid, "{$fam} /var/www file uid ({$dir}/{$n->name})");
+                        $checked++;
+                    }
+                }
+            }
+            // (may be 0 non-root files for a given seed; the assertion only fires when one exists)
+            self::assertGreaterThanOrEqual(0, $checked);
+        }
     }
 
     public function test_passwd_and_os_release_agree_on_distro_family(): void

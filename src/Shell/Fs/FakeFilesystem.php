@@ -51,19 +51,20 @@ class FakeFilesystem
     private array $pinnedByParent = [];
 
     private ?Overlay $overlay = null;
-    private int $newcount = 0;                // procedural nodes materialized this instance
+    private string $distroFam = 'debian';    // from the pinned distro, so uids stay coherent with passwd
 
     public function __construct(
         protected string $hostSeedBytes,
         protected string $role,
         protected int $maxDepth = 12,
         protected int $perDirMax = 24,
-        protected int $newcountCap = 50000
+        protected int $cacheMax = self::CHILD_CACHE_MAX
     ) {
         Draw::assertEnv();
         $pinned = PinnedNodes::build($hostSeedBytes, $role);
         $this->pinnedNodes = $pinned['nodes'];
         $this->pinnedContent = $pinned['content'];
+        $this->distroFam = $pinned['fam'];
         foreach ($this->pinnedNodes as $path => $node) {
             $this->pinnedByParent[PathCanon::parent($path)][] = $node;
         }
@@ -75,7 +76,6 @@ class FakeFilesystem
         $new = clone $this;
         $new->overlay = $overlay;
         $new->childCache = [];
-        $new->newcount = 0;
 
         return $new;
     }
@@ -267,8 +267,9 @@ class FakeFilesystem
 
         $dirPool = Pools::dirNames($this->role);
         $filePool = Pools::fileNames($this->role);
+        // Count is a pure function of the dir seed (bounded by perDirMax) — independent of cache/eviction
+        // state, so a dir re-listed after eviction regenerates identically (determinism invariant).
         $count = Draw::heavyTailedInt($seed, self::COUNT_IDX, 1, $this->perDirMax);
-        $count = min($count, max(0, $this->newcountCap - $this->newcount)); // global generation cap
 
         for ($i = 0; $i < $count; $i++) {
             $isDir = $depth < $this->maxDepth
@@ -277,7 +278,6 @@ class FakeFilesystem
             $name = $this->pickUnusedName($seed, $i, $pool, $used);
             $used[$name] = true;
             $result[] = $this->makeNode($canonDir, $name, $isDir);
-            $this->newcount++;
         }
 
         foreach ($this->pinnedByParent[$canonDir] ?? [] as $pinned) {
@@ -298,7 +298,7 @@ class FakeFilesystem
             }
         }
 
-        if (count($this->childCache) >= self::CHILD_CACHE_MAX) {
+        if (count($this->childCache) >= $this->cacheMax) {
             array_shift($this->childCache); // FIFO evict — a crawler can't grow the cache without bound
         }
         $this->childCache[$canonDir] = $result;
@@ -333,7 +333,7 @@ class FakeFilesystem
         if (Draw::chance($s, self::UID_ROLL_IDX, 3, 4)) {
             $uid = 0;
         } elseif (strncmp($canon, '/var/www', 8) === 0) {
-            $uid = 33;
+            $uid = $this->distroFam === 'rhel' ? 48 : 33; // apache vs www-data — matches the pinned passwd
         } else {
             $uid = 1000;
         }

@@ -36,7 +36,7 @@ final class PinnedNodes
     ];
 
     /**
-     * @return array{nodes: array<string,Node>, content: array<string,string>}
+     * @return array{nodes: array<string,Node>, content: array<string,string>, fam: string}
      */
     public static function build(string $hostSeedBytes, string $role): array
     {
@@ -66,7 +66,42 @@ final class PinnedNodes
         $nodes['/etc/localtime'] = new Node('localtime', 'link', 0, 0, 27, 0o777, $now - 31000000, '/usr/share/zoneinfo/Etc/UTC');
         $nodes['/etc/mtab'] = new Node('mtab', 'link', 0, 0, 12, 0o777, $now - 30000000, '/proc/self/mounts');
 
-        return ['nodes' => $nodes, 'content' => $content];
+        return ['nodes' => $nodes, 'content' => $content, 'fam' => $distro['fam']];
+    }
+
+    /** @return array<string,string> username => full /etc/passwd line, per distro family (shadow mirrors it) */
+    private static function users(string $admin, string $fam): array
+    {
+        if ($fam === 'rhel') {
+            return [
+                'root' => 'root:x:0:0:root:/root:/bin/bash',
+                'bin' => 'bin:x:1:1:bin:/bin:/sbin/nologin',
+                'daemon' => 'daemon:x:2:2:daemon:/sbin:/sbin/nologin',
+                'adm' => 'adm:x:3:4:adm:/var/adm:/sbin/nologin',
+                'nobody' => 'nobody:x:65534:65534:Kernel Overflow User:/:/sbin/nologin',
+                'sshd' => 'sshd:x:74:74:Privilege-separated SSH:/usr/share/empty.sshd:/sbin/nologin',
+                'apache' => 'apache:x:48:48:Apache:/usr/share/httpd:/sbin/nologin',
+                'nginx' => 'nginx:x:988:986:Nginx web server:/var/lib/nginx:/sbin/nologin',
+                'postgres' => 'postgres:x:26:26:PostgreSQL Server:/var/lib/pgsql:/bin/bash',
+                $admin => "{$admin}:x:1000:1000:{$admin}:/home/{$admin}:/bin/bash",
+            ];
+        }
+
+        // debian / ubuntu family
+        return [
+            'root' => 'root:x:0:0:root:/root:/bin/bash',
+            'daemon' => 'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin',
+            'bin' => 'bin:x:2:2:bin:/bin:/usr/sbin/nologin',
+            'sys' => 'sys:x:3:3:sys:/dev:/usr/sbin/nologin',
+            'sync' => 'sync:x:4:65534:sync:/bin:/bin/sync',
+            'man' => 'man:x:6:12:man:/var/cache/man:/usr/sbin/nologin',
+            'www-data' => 'www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin',
+            'backup' => 'backup:x:34:34:backup:/var/backups:/usr/sbin/nologin',
+            'nobody' => 'nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin',
+            'systemd-network' => 'systemd-network:x:101:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin',
+            'sshd' => 'sshd:x:110:65534::/run/sshd:/usr/sbin/nologin',
+            $admin => "{$admin}:x:1000:1000:{$admin}:/home/{$admin}:/bin/bash",
+        ];
     }
 
     private static function cryptB64(string $seed, int $base, int $len): string
@@ -100,51 +135,28 @@ final class PinnedNodes
 
     private static function passwd(string $admin, string $fam): string
     {
-        $common = "root:x:0:0:root:/root:/bin/bash\n"
-            . "bin:x:1:1:bin:/bin:/sbin/nologin\n"
-            . "daemon:x:2:2:daemon:/sbin:/sbin/nologin\n";
-
-        if ($fam === 'rhel') {
-            return $common
-                . "adm:x:3:4:adm:/var/adm:/sbin/nologin\n"
-                . "nobody:x:65534:65534:Kernel Overflow User:/:/sbin/nologin\n"
-                . "sshd:x:74:74:Privilege-separated SSH:/usr/share/empty.sshd:/sbin/nologin\n"
-                . "apache:x:48:48:Apache:/usr/share/httpd:/sbin/nologin\n"
-                . "nginx:x:988:986:Nginx web server:/var/lib/nginx:/sbin/nologin\n"
-                . "postgres:x:26:26:PostgreSQL Server:/var/lib/pgsql:/bin/bash\n"
-                . "{$admin}:x:1000:1000:{$admin}:/home/{$admin}:/bin/bash\n";
-        }
-
-        // debian / ubuntu family
-        return $common
-            . "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n"
-            . "sync:x:4:65534:sync:/bin:/bin/sync\n"
-            . "man:x:6:12:man:/var/cache/man:/usr/sbin/nologin\n"
-            . "www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n"
-            . "backup:x:34:34:backup:/var/backups:/usr/sbin/nologin\n"
-            . "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"
-            . "systemd-network:x:101:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin\n"
-            . "sshd:x:110:65534::/run/sshd:/usr/sbin/nologin\n"
-            . "{$admin}:x:1000:1000:{$admin}:/home/{$admin}:/bin/bash\n";
+        return implode("\n", array_values(self::users($admin, $fam))) . "\n";
     }
 
     private static function shadow(string $seed, string $admin, string $fam, int $lastchg): string
     {
-        // Every fabricated secret is seeded per host — the admin digest is drawn noise in the crypt
-        // alphabet (a sha512-crypt SHAPE), never a real or shared hash.
+        // One shadow line per passwd user. Every fabricated secret is seeded per host — the admin digest
+        // is drawn noise in the crypt alphabet (a sha512-crypt SHAPE), never a real or shared hash.
         $salt = self::cryptB64($seed, 300, 16);
         $digest = self::cryptB64($seed, 400, 86);
         $adminHash = "\$6\${$salt}\${$digest}";
 
-        $sys = $fam === 'rhel'
-            ? ['bin', 'daemon', 'adm', 'sshd', 'apache', 'nginx', 'postgres']
-            : ['bin', 'daemon', 'sys', 'www-data', 'backup', 'systemd-network', 'sshd'];
-
-        $out = "root:!:{$lastchg}:0:99999:7:::\n";
-        foreach ($sys as $u) {
-            $out .= "{$u}:*:{$lastchg}:0:99999:7:::\n";
+        $out = '';
+        foreach (array_keys(self::users($admin, $fam)) as $name) {
+            if ($name === 'root') {
+                $secret = '!';
+            } elseif ($name === $admin) {
+                $secret = $adminHash;
+            } else {
+                $secret = '*';
+            }
+            $out .= "{$name}:{$secret}:{$lastchg}:0:99999:7:::\n";
         }
-        $out .= "{$admin}:{$adminHash}:{$lastchg}:0:99999:7:::\n";
 
         return $out;
     }

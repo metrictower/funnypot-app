@@ -53,6 +53,19 @@ final class FakeFilesystemGenerationTest extends TestCase
         $this->fs()->list('/srv/app/nonexistent-zzz/deeper');
     }
 
+    public function test_listing_survives_cache_eviction_unchanged(): void
+    {
+        // Tiny cache forces FIFO eviction; a re-listed dir MUST regenerate identically (M5 regression:
+        // generation is a pure function of the dir seed, not of cache/newcount state).
+        $fs = new FakeFilesystem(Draw::seed("evict\0host\0dev"), 'developer', 12, 24, 4);
+        $before = $fs->list('/srv/app');
+        // list many distinct dirs to blow past the 4-entry cache
+        foreach (['/etc', '/usr', '/usr/lib', '/var', '/var/log', '/opt', '/root', '/home', '/usr/share', '/usr/local'] as $d) {
+            $fs->list($d);
+        }
+        self::assertEquals($before, $fs->list('/srv/app'), 'listing changed after cache eviction');
+    }
+
     public function test_pathological_path_is_rejected_not_fatal(): void
     {
         $fs = $this->fs();
