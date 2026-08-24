@@ -16,11 +16,14 @@ namespace Funnypot\App\Render\Fake;
  *  - ARITHMETIC CLOSES: dashboard cash on hand = Σ account balances; the ledger running balance is
  *    defined so each row's balance = the older row's balance + this row's signed amount (reconciles
  *    exactly down the page AND across pages); balances stay positive by construction.
- *  - SAFE: every banking coordinate is fabricated AND structurally invalid so nothing validates — the
- *    IBAN carries check digits "00" (never valid per ISO 13616), the routing number uses Federal
- *    Reserve prefix "00" (never assigned), the card PAN reveals with BIN "0000" and fails the Luhn
- *    check. Bank names are invented, not real institutions; no real BIN/BIC resolves. Account numbers
- *    are masked at rest to their last four.
+ *  - SAFE: every banking coordinate is fabricated and can never touch a real account. The IBAN carries
+ *    check digits "00" (never valid per ISO 13616) and the routing number uses Federal Reserve prefix
+ *    "00" (never assigned). Corporate-card PANs are the ONE deliberate exception: they are Luhn-VALID —
+ *    built on published test-card BIN ranges (network sandbox space, never issued to a real cardholder)
+ *    plus a computed Luhn check digit — with valid-FORMAT expiry + CVV, so a scanner's card detector
+ *    treats them as live numbers worth trying (that engagement is the point), yet the number can never
+ *    be a real card. Bank names are invented, not real institutions; no real BIN/BIC resolves. Account
+ *    numbers are masked at rest to their last four; full PANs appear only on the explicit card reveal.
  *  - COHERENT: card holders are the Org roster (one host = one company). Emails render at the persona
  *    domain the caller supplies.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf/intdiv, no enums/promotion/str_contains/arrow-fns) so
@@ -378,25 +381,72 @@ final class Bank
     private function buildCard(int $i, ?array $person): array
     {
         $programs = ['Purchasing', 'Travel & Expense', 'Executive'];
-        $last4 = $this->digits(4, 'card|last4|' . $i);
+        // A Luhn-VALID PAN on a published test-card BIN (network sandbox space, never issued to a real
+        // cardholder). Passes a card validator so an attacker treats it as a live number to try, yet can
+        // never be a real card. The check digit is computed; last4 derives from the full PAN.
+        $net = self::TEST_BINS[$this->h('card|net|' . $i) % count(self::TEST_BINS)];
+        $body = $net['bin'] . $this->digits($net['len'] - strlen($net['bin']) - 1, 'card|acct|' . $i);
+        $pan = $body . $this->luhnCheckDigit($body);
+        $last4 = substr($pan, -4);
         $limit = $this->intIn(2, 50, 'card|limit|' . $i) * 1000 * 100;   // integer cents
         $spent = $this->h('card|spent|' . $i) % ($limit + 1);
         $holder = $person !== null ? $person['name'] : 'Cardholder ' . ($i + 1);
         $holderId = $person !== null ? $person['id'] : 'emp-' . (1001 + $i);
         $email = $person !== null ? $person['email'] : strtolower(str_replace(' ', '.', $holder)) . '@' . $this->org->domain();
+        // Valid-format expiry in the future relative to the panel's frozen 2026 "now", + a network CVV.
+        $expiry = sprintf('%02d/%02d', 1 + ($this->h('card|expm|' . $i) % 12), 27 + ($this->h('card|expy|' . $i) % 4));
         return [
             'id' => 'card-' . sprintf('%04d', 5100 + $i),
             'holder' => $holder,
             'holderId' => $holderId,
             'email' => $email,
             'program' => $programs[$this->h('card|prog|' . $i) % count($programs)],
+            'network' => $net['name'],
+            'pan' => $pan,
             'last4' => $last4,
-            'masked' => '•••• •••• •••• ' . $last4,
+            'masked' => $this->maskPan($net['len'], $last4),
+            'expiry' => $expiry,
+            'cvv' => $this->digits($net['cvv'], 'card|cvv|' . $i),
             'limit' => $limit,
             'spentMtd' => $spent,
-            'expiry' => '••/••',
             'status' => ($this->h('card|st|' . $i) % 100) < 90 ? 'Active' : 'Suspended',
         ];
+    }
+
+    /** Published test-card BIN ranges (network sandbox space — never issued to a real cardholder). A PAN
+     *  built on one of these + a computed Luhn check digit passes a card validator but can never be real. */
+    private const TEST_BINS = [
+        ['name' => 'Visa',       'bin' => '424242', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Visa',       'bin' => '400000', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Mastercard', 'bin' => '555555', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Mastercard', 'bin' => '222300', 'len' => 16, 'cvv' => 3],
+        ['name' => 'Amex',       'bin' => '378282', 'len' => 15, 'cvv' => 4],
+    ];
+
+    /** Mask all but the last four, in the network's grouping (Amex 4-6-5, others 4-4-4-4). */
+    private function maskPan(int $len, string $last4): string
+    {
+        return $len === 15 ? '•••• •••••• •' . $last4 : '•••• •••• •••• ' . $last4;
+    }
+
+    /** The Luhn check digit that makes ($partial . digit) pass the Luhn test. */
+    private function luhnCheckDigit(string $partial): string
+    {
+        $sum = 0;
+        $alt = true;   // appended check digit is rightmost (not doubled), so $partial's last digit IS doubled
+        for ($i = strlen($partial) - 1; $i >= 0; $i--) {
+            $d = (int) $partial[$i];
+            if ($alt) {
+                $d *= 2;
+                if ($d > 9) {
+                    $d -= 9;
+                }
+            }
+            $sum += $d;
+            $alt = !$alt;
+        }
+
+        return (string) ((10 - ($sum % 10)) % 10);
     }
 
     /** One card by id, with a plausible fallback for an unknown/fuzzed id. */
@@ -419,41 +469,14 @@ final class Bank
     }
 
     /**
-     * The "reveal" a card returns: a full-length PAN that is deterministically INVALID — BIN "0000"
-     * (no issuer) and the 16 digits fail the Luhn check — yet whose last four MATCH the masked last4 the
-     * console showed everywhere else, so the reveal never contradicts the mask. Never a real or
-     * checksum-valid card number.
+     * The "reveal" a card returns: the card's full Luhn-VALID PAN, grouped for display. Built on a
+     * published test-card BIN (network sandbox space, never issued to a real cardholder), so it passes a
+     * card validator — an attacker who copies it out will try to use it — yet can never be a real card.
+     * Ends in the same last four the masked views show.
      */
     public function cardReveal(string $id): string
     {
-        $card = $this->card($id);
-        // BIN 0000 (unassigned) + 8 fabricated middle digits + the card's own shown last4.
-        $pan = '0000' . $this->digits(8, 'card|reveal|' . $id) . $card['last4'];
-        if ($this->luhnValid($pan)) {
-            // Nudge one MIDDLE digit (index 7 is a non-doubled Luhn position) by +1 so the number can
-            // never pass a Luhn check — this leaves BIN 0000 and the trailing last4 untouched.
-            $d = (int) $pan[7];
-            $pan = substr($pan, 0, 7) . (string) (($d + 1) % 10) . substr($pan, 8);
-        }
-        return trim(chunk_split($pan, 4, ' '));
-    }
-
-    private function luhnValid(string $num): bool
-    {
-        $sum = 0;
-        $alt = false;
-        for ($i = strlen($num) - 1; $i >= 0; $i--) {
-            $d = (int) $num[$i];
-            if ($alt) {
-                $d *= 2;
-                if ($d > 9) {
-                    $d -= 9;
-                }
-            }
-            $sum += $d;
-            $alt = !$alt;
-        }
-        return $sum % 10 === 0;
+        return trim(chunk_split($this->card($id)['pan'], 4, ' '));
     }
 
     /**

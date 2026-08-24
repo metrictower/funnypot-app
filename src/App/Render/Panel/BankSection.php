@@ -9,15 +9,17 @@ use Funnypot\Support\VisualPersona;
  * Bank / Treasury (spec §C.6) — the top-tier greed lure. Renders the five-rung ladder over the
  * `Fake\Bank` view: accounts landing (+ cash-on-hand tiles) -> account detail with sub-tabs
  * (overview / ledger / details / statements) -> the send-wire control leaf; plus the corporate-card
- * fleet (masked) with a per-card reveal that is a non-validating dummy, never a PAN.
+ * fleet (masked) with a per-card reveal of a full Luhn-VALID PAN (+ expiry + CVV) built on published
+ * test-card BIN space — bait an attacker will try, never a real card (see `Fake\Bank`).
  *
  * The whole surface is INERT. The scary money verbs — send wire, transfer, pay, freeze, stop-payment —
  * never return "sent"/"paid"/"done": they land on a GUARDED soft-deny (dual authorization + OFAC /
  * sanctions screening hold) carrying a deterministic wire ref that never resolves. The wire form is a
  * dead form: submitting it only routes to that guarded card. Nothing is persisted; the account detail
- * always shows its seeded balance, so the non-change reads as a pending hold, not a fake. Every
- * banking coordinate is structurally invalid (IBAN check digits 00, routing prefix 00, card PAN with
- * BIN 0000 failing Luhn) so nothing an attacker copies out will ever validate.
+ * always shows its seeded balance, so the non-change reads as a pending hold, not a fake. IBAN/routing
+ * coordinates stay structurally invalid (IBAN check digits 00, routing prefix 00) so nothing resolves;
+ * card PANs are the one deliberate exception — Luhn-valid on test-card BIN space so a scanner treats
+ * them as live, yet they can never be a real card (that engagement is the point).
  *
  * Route slots (PanelRoute): module=bank; section = ''|cards|<account-id>.
  *  - cards: entity = '' (fleet) | <card-id>; subtab = '' (detail) | reveal.
@@ -292,6 +294,7 @@ final class BankSection extends AbstractPanelSection
             ['Holder', $card['holder'] . ' (' . $card['holderId'] . ')'],
             ['Email', $card['email']],
             ['Program', $card['program']],
+            ['Network', $card['network']],
             ['Number', $card['masked']],
             ['Expiry', $card['expiry']],
             ['Limit', $this->money($card['limit'])],
@@ -305,17 +308,20 @@ final class BankSection extends AbstractPanelSection
         return $this->breadcrumbHtml($crumbs) . $this->card($card['holder'] . ' · ' . $card['id'], $kv . $reveal, $card['program']);
     }
 
-    /** The reveal leaf: a per-card, structurally INVALID PAN (BIN 0000, fails Luhn) — never a real PAN. */
+    /** The reveal leaf: the card's full Luhn-valid PAN (+ network/expiry/CVV) on test-card BIN space —
+     *  bait an attacker will try, never a real card (see Fake\Bank). */
     private function cardReveal(Bank $bank, string $navBase, array $card): string
     {
         $pan = $bank->cardReveal($card['id']);
         $body = $this->kvTableHtml([
             ['Holder', $card['holder']],
+            ['Network', $card['network']],
             ['Card number', $pan],
             ['Expiry', $card['expiry']],
+            ['CVV', $card['cvv']],
         ], ' class="fp-result-kv" style="border-collapse:collapse;width:100%"');
-        $note = 'This number is issued for reference within the treasury console only and cannot be used '
-            . 'for card-present or card-not-present transactions.';
+        $note = 'Full card details — treasury reconciliation use only. Access to this view is logged for '
+            . 'audit. Do not distribute.';
         $card2 = '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;'
             . 'border-left:4px solid #c07a1a;border-radius:4px;margin:16px 0">'
             . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;'

@@ -193,14 +193,20 @@ final class BankSectionTest extends TestCase
         }
     }
 
-    public function test_revealed_card_pan_is_invalid(): void
+    public function test_revealed_card_pan_is_luhn_valid_on_a_test_bin(): void
     {
+        // Deliberate design: the PAN passes Luhn (so a scanner treats it as a live number to try) but is
+        // built on a published test-card BIN — network sandbox space, never issued to a real cardholder —
+        // so it can never be a real card. Length is 15 (Amex) or 16 (others).
+        $testBins = ['424242', '400000', '555555', '222300', '378282'];
         for ($seed = 0; $seed < 6; $seed++) {
             $bank = Bank::fromSeed($seed);
             foreach ($bank->cards() as $c) {
                 $pan = str_replace(' ', '', $bank->cardReveal($c['id']));
-                self::assertSame('0000', substr($pan, 0, 4), "seed $seed card {$c['id']} BIN 0000");
-                self::assertFalse($this->luhn($pan), "seed $seed card {$c['id']} PAN fails Luhn");
+                self::assertMatchesRegularExpression('/^\d{15,16}$/', $pan, "seed $seed card {$c['id']} PAN is 15-16 digits");
+                self::assertTrue($this->luhn($pan), "seed $seed card {$c['id']} PAN passes Luhn");
+                $bin6 = substr($pan, 0, 6);
+                self::assertContains($bin6, $testBins, "seed $seed card {$c['id']} PAN on a test BIN ($bin6)");
             }
         }
     }
