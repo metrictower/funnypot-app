@@ -151,6 +151,42 @@ final class LlmFakeResponderTest extends TestCase
         self::assertSame(0, $calls, 'a pinned non-panel path must not reach generation');
     }
 
+    public function test_live_rewards_path_is_not_cached_but_normal_panel_is(): void
+    {
+        // The staking rewards feed renders a real-time "Nh ago"; caching it byte-identical would freeze
+        // the age (the tell it avoids). It must be re-rendered per request — never written to the cache.
+        $store = new SqliteHitStore($this->dbPath('hits'));
+        $skins = new SkinSet(
+            [new WordpressSkin(), new PhpMyAdminSkin(), new GrafanaSkin(), new AdminLteSkin()],
+            new GenericSkin()
+        );
+        $cache = new LlmFakeCache($this->dbPath('cache'));
+        $r = new LlmFakeResponder(
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $store),
+            $cache,
+            new LlmClient('http://sidecar/completion', 1500, 320, null, fn (): array => ['status' => 200, 'body' => '{}']),
+            new LlmOutputSanitizer(),
+            $store,
+            new LlmResponseProfiles('nginx', 'root ::= "<"', 'root ::= "{"', new PageShellRenderer($skins), 'root ::= "{"'),
+            'v1',
+            4,
+            7,
+            'a1',
+        );
+
+        $live = '/admin/bank/crypto/staking/rewards';
+        $resp = $r->respond(new RequestContext('GET', $live), '9.9.9.9');
+        self::assertNotNull($resp);
+        self::assertSame(200, $resp->status);
+        $liveKey = \Funnypot\Support\PathNormalizer::key('GET', $live);
+        self::assertNull($cache->get($liveKey, 'a1'), 'the live rewards path must never be cached');
+
+        // Control: an ordinary panel path IS cached (byte-identical is correct there).
+        $r->respond(new RequestContext('GET', '/admin/bank/crypto'), '9.9.9.9');
+        $normalKey = \Funnypot\Support\PathNormalizer::key('GET', '/admin/bank/crypto');
+        self::assertNotNull($cache->get($normalKey, 'a1'), 'a normal panel path should be cached');
+    }
+
     private const GOOD_HTML =
         '<!doctype html><html><head><title>Sign in</title></head><body><h1>Sign in</h1>'
         . '<form method="post" action="/x"><input name="user"><input name="pass" type="password">'

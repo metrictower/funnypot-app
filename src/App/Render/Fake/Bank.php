@@ -26,6 +26,11 @@ namespace Funnypot\App\Render\Fake;
  *    numbers are masked at rest to their last four; full PANs appear only on the explicit card reveal.
  *  - COHERENT: card holders are the Org roster (one host = one company). Emails render at the persona
  *    domain the caller supplies.
+ *  - COLD WALLETS vs everything else: the 4 real ETH_RESERVE addresses are the only crypto addresses
+ *    this class returns that the section ever shows in full (an attacker verifies them on-chain and
+ *    sees real money — the hook). Every other crypto address this class hands back — staking
+ *    validators, tx-history counterparties — is fabricated (fakeEvmAddress()) and the section masks
+ *    it before it ever reaches output; the strategy only works if a fake address is never shown full.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf/intdiv, no enums/promotion/str_contains/arrow-fns) so
  *    a fact can promote into a core template unchanged when one needs it.
  *
@@ -141,6 +146,18 @@ final class Bank
             $out .= (string) ($this->h($salt . '|d|' . $i) % 10);
         }
         return $out;
+    }
+
+    /**
+     * A deterministic, valid-FORMAT (never real) EVM address: "0x" + 40 hex digits. Every crypto
+     * address that is NOT one of the 4 real cold-wallet addresses (self::ETH_RESERVE) is built this
+     * way — staking validators, tx-history counterparties, anything else — and the section masks it
+     * at render (a fabricated value shown in full would be a verifiable on-chain mismatch; see
+     * ETH_RESERVE's docblock and BankSection::maskEvmAddress()).
+     */
+    private function fakeEvmAddress(string $salt): string
+    {
+        return '0x' . substr(hash('sha256', $this->seed . '|evmaddr|' . $salt), 0, 40);
     }
 
     /**
@@ -807,5 +824,125 @@ final class Bank
     public function cryptoSendTxHash(string $addrId, string $slot): string
     {
         return '0x' . hash('sha256', $this->seed . '|ethsend|' . $addrId . '|' . $slot);
+    }
+
+    // --- ETH staking decoy (crypto-mask-staking spec §3) ---
+    //
+    // A large fabricated staking position layered onto the (real) reserve narrative: "we also stake
+    // some of the treasury." Every validator/withdrawal address here is FAKE — a real cold wallet
+    // staking our amount would be a mismatch a chain lookup could disprove — so BankSection masks
+    // every one of them, same as it masks tx-history counterparties. Fully deterministic and
+    // time()-free like the rest of this class; the ONE exception (reward ages tracking real "now")
+    // lives entirely in BankSection, not here — see its stakingRewardAge() docblock.
+
+    /** A plausible ETH staking APR band (basis points x10, i.e. 320 = 3.20%). */
+    private const STAKING_APR_BP = [320, 410, 480];
+
+    private const STAKING_REWARD_TYPES = ['Attestation reward', 'Proposer reward', 'Sync committee reward'];
+
+    /** Reasons an unstake request reads as failed — never a real compliance policy/body name. */
+    private const STAKING_UNSTAKE_FAILURE_REASONS = [
+        'Validator exit rejected — signature mismatch',
+        'Slashing-risk hold — pending review',
+        'Withdrawal credentials mismatch',
+    ];
+
+    /**
+     * The fake validators the "staked" ETH is spread across. Amounts sit near the real 32 ETH
+     * deposit size plus a seeded amount of accrued (unwithdrawn) reward, so a scanner sees numbers
+     * shaped like genuine validators, not round bait figures.
+     *
+     * @return list<array{id:string,address:string,stakedEth:float,status:string}>
+     */
+    public function stakingValidators(): array
+    {
+        $count = $this->intIn(40, 96, 'staking|validatorcount');
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $out[] = [
+                'id' => 'val-' . sprintf('%04d', 7000 + $i),
+                'address' => $this->fakeEvmAddress('validator|' . $i),
+                'stakedEth' => 32.0 + ($this->intIn(0, 3500, 'staking|amt|' . $i) / 1000.0),
+                'status' => 'Active',
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Staking overview totals — totalStakedEth is the exact Σ of the validator amounts (arithmetic
+     * closes, same rule the account balances follow).
+     *
+     * @return array{totalStakedEth:float,validatorCount:int,apr:float,usdCents:int,status:string}
+     */
+    public function stakingSummary(): array
+    {
+        $validators = $this->stakingValidators();
+        $total = 0.0;
+        foreach ($validators as $v) {
+            $total += $v['stakedEth'];
+        }
+        $aprBp = self::STAKING_APR_BP[$this->h('staking|apr') % count(self::STAKING_APR_BP)];
+        return [
+            'totalStakedEth' => $total,
+            'validatorCount' => count($validators),
+            'apr' => $aprBp / 100.0,
+            'usdCents' => (int) round($total * self::ETH_USD_PRICE * 100),
+            'status' => 'Active',
+        ];
+    }
+
+    /**
+     * Seeded staking-reward rows: validator, type, amount, and a fixed seeded `ageOffsetSeconds` the
+     * SECTION turns into a live "Nh ago" string at render (see BankSection::stakingRewardAge()). This
+     * method itself is 100% deterministic — no time()/date() — the offset is just a display input,
+     * not a clock reading. Ordered oldest-offset-first-is-last (ascending offset = newest first), and
+     * that order never reshuffles between requests since it does not depend on any live clock.
+     *
+     * @return list<array{validatorId:string,validatorAddress:string,type:string,amountEth:float,ageOffsetSeconds:int}>
+     */
+    public function stakingRewards(): array
+    {
+        $validators = $this->stakingValidators();
+        $count = $this->intIn(10, 18, 'staking|rewardcount');
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $v = $validators[$this->h('staking|rewardval|' . $i) % count($validators)];
+            $out[] = [
+                'validatorId' => $v['id'],
+                'validatorAddress' => $v['address'],
+                'type' => self::STAKING_REWARD_TYPES[$this->h('staking|rewardtype|' . $i) % count(self::STAKING_REWARD_TYPES)],
+                'amountEth' => $this->intIn(1, 240, 'staking|rewardamt|' . $i) / 10000.0,
+                'ageOffsetSeconds' => $this->intIn(600, 4 * 86400, 'staking|rewardage|' . $i),
+            ];
+        }
+        usort($out, static function (array $a, array $b): int {
+            return $a['ageOffsetSeconds'] <=> $b['ageOffsetSeconds'];
+        });
+        return $out;
+    }
+
+    /** The deterministic reference an unstake request is assigned — same idiom as wireRef(). */
+    public function stakingUnstakeRef(string $slot): string
+    {
+        return 'UNSTK-2026-' . strtoupper(substr(hash('sha256', $this->seed . '|unstake|' . $slot), 0, 6));
+    }
+
+    /** A large seeded exit-queue position — always deep enough to read as a genuine backlog. */
+    public function stakingUnstakeQueuePosition(): int
+    {
+        return $this->intIn(800, 4200, 'staking|queuepos');
+    }
+
+    /** A seeded estimated exit wait, in days. */
+    public function stakingUnstakeWaitDays(): int
+    {
+        return $this->intIn(9, 46, 'staking|waitdays');
+    }
+
+    /** Why the unstake request reads as failed — deterministic, never a real policy/body name. */
+    public function stakingUnstakeFailureReason(): string
+    {
+        return self::STAKING_UNSTAKE_FAILURE_REASONS[$this->h('staking|failreason') % count(self::STAKING_UNSTAKE_FAILURE_REASONS)];
     }
 }

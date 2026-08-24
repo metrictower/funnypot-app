@@ -564,6 +564,7 @@ final class BankSectionTest extends TestCase
             '/admin/bank/crypto/', '/admin/bank/crypto/eth-a/send/',
             '/admin/bank/approvers/', '/admin/bank/approvers/appr-1/reset-2fa/',
             '/admin/bank/approvals/',
+            '/admin/bank/crypto/staking/', '/admin/bank/crypto/staking/unstake/',
         ];
         foreach ($bases as $base) {
             foreach ($fuzz as $f) {
@@ -588,6 +589,10 @@ final class BankSectionTest extends TestCase
             '/admin/bank/approvals', '/admin/bank/approvals/pnd-0100/approve',
             '/admin/bank/acct-reserve/wire', '/admin/bank/acct-reserve/wire/2fa',
             '/admin/bank/acct-reserve/wire/confirm', '/admin/bank/acct-reserve/ledger',
+            // Staking: everything except /staking/rewards, which deliberately calls time() (spec §3)
+            // and is covered separately by test_staking_rewards_seeded_parts_are_deterministic().
+            '/admin/bank/crypto/staking', '/admin/bank/crypto/staking/unstake',
+            '/admin/bank/crypto/staking/unstake/2fa', '/admin/bank/crypto/staking/unstake/pending',
         ];
         foreach ($paths as $p) {
             self::assertSame($this->render($p, 11), $this->render($p, 11), "stable: $p");
@@ -600,11 +605,187 @@ final class BankSectionTest extends TestCase
             '/admin/bank/crypto', '/admin/bank/crypto/eth-a', '/admin/bank/approvers',
             '/admin/bank/approvers/appr-1', '/admin/bank/approvals',
             '/admin/bank/acct-reserve/wire/2fa', '/admin/bank/acct-reserve/wire/confirm',
+            '/admin/bank/crypto/staking', '/admin/bank/crypto/staking/rewards',
+            '/admin/bank/crypto/staking/unstake', '/admin/bank/crypto/staking/unstake/pending',
         ];
         for ($seed = 0; $seed < 5; $seed++) {
             foreach ($paths as $p) {
                 self::assertDoesNotMatchRegularExpression(self::PUBLIC_IP, $this->render($p, $seed), "seed $seed path $p");
             }
+        }
+    }
+
+    // ================= Crypto address masking (crypto-mask-staking spec §1) =================
+
+    /** On any rendered crypto page, the ONLY full 40-hex EVM addresses present are the real
+     *  cold-wallet allowlist; every other address is masked; and no full 64-hex tx hash ever appears. */
+    public function test_only_cold_wallet_addresses_appear_full_everywhere_else_is_masked(): void
+    {
+        $bank = Bank::fromSeed(7, VisualPersona::fromSeed(7)->domain());
+        $txId = $bank->crypto()[0]['id'];
+        $paths = [
+            '/admin/bank/crypto', '/admin/bank/crypto/' . $txId, '/admin/bank/crypto/' . $txId . '/send',
+            '/admin/bank/crypto/' . $txId . '/send/2fa', '/admin/bank/crypto/' . $txId . '/send/broadcast',
+            '/admin/bank/crypto/staking', '/admin/bank/crypto/staking/rewards',
+            '/admin/bank/crypto/staking/unstake', '/admin/bank/crypto/staking/unstake/2fa',
+            '/admin/bank/crypto/staking/unstake/pending',
+        ];
+        foreach ($paths as $p) {
+            $html = $this->render($p, 7);
+            preg_match_all('/0x[0-9a-fA-F]{40}\b/', $html, $m);
+            foreach ($m[0] as $addr) {
+                self::assertContains($addr, self::REAL_ETH_ADDRESSES, "$p: full address $addr must be a real cold wallet");
+            }
+            self::assertDoesNotMatchRegularExpression('/0x[0-9a-fA-F]{64}\b/', $html, "$p: no full 64-hex tx hash");
+        }
+    }
+
+    /** The reserve list/detail pages are the intended exception — they DO show the 4 real addresses
+     *  in full (that is the hook: an attacker can verify them on-chain). */
+    public function test_reserve_pages_still_show_the_real_cold_wallet_addresses_in_full(): void
+    {
+        $html = $this->render('/admin/bank/crypto');
+        foreach (self::REAL_ETH_ADDRESSES as $addr) {
+            self::assertStringContainsString($addr, $html);
+        }
+        $bank = Bank::fromSeed(7, VisualPersona::fromSeed(7)->domain());
+        foreach ($bank->crypto() as $t) {
+            $detail = $this->render('/admin/bank/crypto/' . $t['id'], 7);
+            self::assertStringContainsString($t['address'], $detail, $t['id']);
+        }
+    }
+
+    public function test_crypto_tx_history_hash_and_counterparty_are_masked(): void
+    {
+        $html = $this->render('/admin/bank/crypto/eth-a');
+        // The MetaMask/Etherscan-style truncation shape: 0x + 6 hex, an ellipsis, then 4 hex.
+        self::assertMatchesRegularExpression('/0x[0-9a-fA-F]{6}…[0-9a-fA-F]{4}/u', $html);
+    }
+
+    public function test_crypto_send_broadcast_tx_hash_is_masked(): void
+    {
+        $bank = Bank::fromSeed(7, VisualPersona::fromSeed(7)->domain());
+        $id = $bank->crypto()[0]['id'];
+        $hash = $bank->cryptoSendTxHash($id, 'broadcast');
+        $html = $this->render('/admin/bank/crypto/' . $id . '/send/broadcast', 7);
+        self::assertStringNotContainsString($hash, $html);
+        self::assertStringContainsString(substr($hash, 0, 8) . '…' . substr($hash, -4), $html);
+    }
+
+    // ================= ETH staking decoy (crypto-mask-staking spec §3) =================
+
+    public function test_crypto_section_links_to_staking(): void
+    {
+        $html = $this->render('/admin/bank/crypto');
+        self::assertStringContainsString('href="/admin/bank/crypto/staking"', $html);
+    }
+
+    public function test_staking_overview_lists_fake_masked_validators_and_links_rewards_and_unstake(): void
+    {
+        $html = $this->render('/admin/bank/crypto/staking');
+        self::assertStringContainsString('ETH staking', $html);
+        self::assertStringContainsString('href="/admin/bank/crypto/staking/rewards"', $html);
+        self::assertStringContainsString('href="/admin/bank/crypto/staking/unstake"', $html);
+
+        $bank = Bank::fromSeed(7, VisualPersona::fromSeed(7)->domain());
+        $validators = $bank->stakingValidators();
+        self::assertGreaterThan(0, count($validators));
+        foreach ($validators as $v) {
+            self::assertNotContains($v['address'], self::REAL_ETH_ADDRESSES, 'staking validator is never a real cold wallet');
+        }
+        // Total staked = the exact sum of the individual validators (arithmetic closes).
+        $summary = $bank->stakingSummary();
+        $sum = 0.0;
+        foreach ($validators as $v) {
+            $sum += $v['stakedEth'];
+        }
+        self::assertEqualsWithDelta($sum, $summary['totalStakedEth'], 1e-9);
+    }
+
+    public function test_staking_unstake_gauntlet_accepts_any_code_and_never_reaches_withdrawn_or_settled(): void
+    {
+        $base = '/admin/bank/crypto/staking/unstake';
+
+        $form = $this->render($base);
+        self::assertStringContainsString('<form', $form);
+        self::assertStringContainsString('action="' . $base . '/2fa"', $form);
+
+        $twoFa = $this->render($base . '/2fa');
+        self::assertStringContainsStringIgnoringCase('one-time code was sent by sms', $twoFa);
+        self::assertStringContainsString('action="' . $base . '/pending"', $twoFa);
+        // Dead form: the code field has no name attribute; nothing is ever validated server-side.
+        self::assertStringNotContainsString('name=', $twoFa);
+
+        $pending = $this->render($base . '/pending');
+        self::assertStringContainsString('Failed', $pending);
+        self::assertStringContainsStringIgnoringCase('exit queue position', $pending);
+
+        // Across every reachable step, the ETH is never shown as withdrawn/settled/released.
+        foreach ([$form, $twoFa, $pending] as $html) {
+            self::assertStringNotContainsStringIgnoringCase('withdrawn', $html);
+            self::assertStringNotContainsStringIgnoringCase('settled', $html);
+            self::assertStringNotContainsStringIgnoringCase('unstaked successfully', $html);
+        }
+    }
+
+    public function test_staking_unstake_unknown_step_falls_back_to_the_form(): void
+    {
+        $html = $this->render('/admin/bank/crypto/staking/unstake/some-garbage-step');
+        self::assertStringContainsString('<form', $html);
+        self::assertStringContainsString('Request exit', $html);
+    }
+
+    public function test_staking_rewards_render_with_live_relative_ages(): void
+    {
+        $html = $this->render('/admin/bank/crypto/staking/rewards');
+        self::assertStringContainsString('Staking rewards', $html);
+        self::assertMatchesRegularExpression('/(just now|\d+[mhd] ago)/', $html);
+    }
+
+    /** The seeded parts (validator ids, amounts) are identical across two renders taken back to back;
+     *  only the age text is live (spec §3 / §4). We compare the data layer directly (not full-page
+     *  byte-equality) so the assertion can never flake on a real clock-second boundary. */
+    public function test_staking_rewards_seeded_parts_are_deterministic(): void
+    {
+        $a = Bank::fromSeed(9)->stakingRewards();
+        $b = Bank::fromSeed(9)->stakingRewards();
+        self::assertSame($a, $b, 'seeded reward rows (validator/amount/type/order) are stable');
+
+        // The rendered page carries every seeded validator id, twice in a row.
+        $html1 = $this->render('/admin/bank/crypto/staking/rewards', 9);
+        $html2 = $this->render('/admin/bank/crypto/staking/rewards', 9);
+        foreach ($a as $r) {
+            self::assertStringContainsString($r['validatorId'], $html1);
+            self::assertStringContainsString($r['validatorId'], $html2);
+            self::assertStringContainsString(number_format($r['amountEth'], 5), $html1);
+        }
+    }
+
+    public function test_staking_addresses_are_never_a_real_cold_wallet(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $bank = Bank::fromSeed($seed);
+            foreach ($bank->stakingValidators() as $v) {
+                self::assertMatchesRegularExpression('/^0x[0-9a-f]{40}$/', $v['address'], "seed $seed validator address is valid-format");
+                self::assertNotContains($v['address'], self::REAL_ETH_ADDRESSES, "seed $seed validator address is never a cold wallet");
+            }
+            foreach ($bank->stakingRewards() as $r) {
+                self::assertNotContains($r['validatorAddress'], self::REAL_ETH_ADDRESSES, "seed $seed reward validator address is never a cold wallet");
+            }
+        }
+    }
+
+    public function test_staking_breadcrumbs_present_on_every_leaf(): void
+    {
+        $paths = [
+            '/admin/bank/crypto/staking', '/admin/bank/crypto/staking/rewards',
+            '/admin/bank/crypto/staking/unstake', '/admin/bank/crypto/staking/unstake/2fa',
+            '/admin/bank/crypto/staking/unstake/pending',
+        ];
+        foreach ($paths as $p) {
+            $html = $this->render($p);
+            self::assertStringContainsString('fp-breadcrumb', $html, $p);
+            self::assertStringContainsString('Staking', $html, $p);
         }
     }
 }

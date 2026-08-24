@@ -12,8 +12,18 @@ use Funnypot\Support\VisualPersona;
  * per-card reveal of a full Luhn-VALID PAN (+ expiry + CVV) on published test-card BIN space; a wire
  * gauntlet that appears to COMPLETE then reads as reversed; a wire-approvers roster with a 2FA-bypass
  * illusion that never actually removes dual authorization; an ETH "Digital Asset Reserve" of 4 real,
- * verifiable cold-storage addresses (garbage keys — funds unspendable via this honeypot); and a
- * pending-wires-awaiting-approval queue. See `Fake\Bank` for the SAFE/DETERMINISTIC data rules.
+ * verifiable cold-storage addresses (garbage keys — funds unspendable via this honeypot); an ETH
+ * staking decoy layered on the reserve (fake masked validators, a stuck-forever unstake gauntlet, a
+ * live-aging rewards feed); and a pending-wires-awaiting-approval queue. See `Fake\Bank` for the
+ * SAFE/DETERMINISTIC data rules.
+ *
+ * Cold wallets vs everything else (crypto-mask-staking spec §1): the 4 real ETH_RESERVE addresses are
+ * the ONLY crypto addresses ever shown in full anywhere in this section — an attacker who verifies one
+ * on-chain finds real money (unspendable via this honeypot, but genuine), which is the hook. Every
+ * OTHER crypto address (staking validators, tx-history counterparties, the crypto-send broadcast tx
+ * hash) is fabricated and MUST go through maskEvmAddress()/maskTxHash() before it reaches output — a
+ * fabricated address shown in full would be a verifiable, disprovable mismatch and break the illusion
+ * for every fake address around it.
  *
  * The whole surface is INERT. Every money-movement path (wire, transfer, pay, freeze, stop-payment,
  * crypto send, wire approval) either lands on a GUARDED soft-deny (dual authorization + OFAC /
@@ -29,8 +39,13 @@ use Funnypot\Support\VisualPersona;
  *
  * Route slots (PanelRoute): module=bank; section = ''|cards|crypto|approvers|approvals|<account-id>.
  *  - cards: entity = '' (fleet) | <card-id>; subtab = '' (detail) | reveal.
- *  - crypto: entity = '' (reserve list) | <tranche-id>; subtab = '' (detail) | send (2FA-gauntlet
- *    leaf: action = '' form | 2fa | broadcast — broadcast is a dead end, stuck at 0/12 forever).
+ *  - crypto: entity = '' (reserve list) | staking | <tranche-id>; subtab = '' (detail) | send
+ *    (2FA-gauntlet leaf: action = '' form | 2fa | broadcast — broadcast is a dead end, stuck at 0/12
+ *    forever). entity=staking is checked BEFORE the tranche lookup so it never falls into
+ *    cryptoAddress()'s any-id-resolves fallback:
+ *      - staking: subtab = '' (overview: fake masked validators) | rewards (LIVE ages — see
+ *        stakingRewardAge()) | unstake (gauntlet: action = '' form | 2fa | pending — pending is the
+ *        stuck-forever failed end state, never a withdrawn/settled success).
  *  - approvers: entity = '' (roster) | <approver-id>; subtab = '' (detail) | reset-2fa (dead-form
  *    gauntlet: action = '' form | verify | confirm).
  *  - approvals: entity = '' (queue) | <wire-id>; subtab = approve (soft-deny; needs the OTHER approver).
@@ -45,6 +60,9 @@ final class BankSection extends AbstractPanelSection
 
     /** Detail sub-tabs in the account's entity slot — everything else there is a control verb. */
     private const SUBTABS = ['overview', 'ledger', 'details', 'statements'];
+
+    /** The staking-rewards feed's rolling display window, in seconds — see stakingRewardAge(). */
+    private const STAKING_REWARD_CYCLE_SECONDS = 86400;
 
     private const PAGE_SIZE = 50;
 
@@ -658,6 +676,35 @@ final class BankSection extends AbstractPanelSection
         return number_format($eth, 4) . ' ETH';
     }
 
+    /**
+     * MetaMask/Etherscan-style truncation: "0x" + first 6 hex digits, an ellipsis, then the last 4 hex
+     * digits. Shared by maskEvmAddress()/maskTxHash() (crypto-mask-staking spec §1) — every crypto
+     * value that reaches this that is NOT one of the 4 real cold-wallet addresses is fabricated, so
+     * showing it in full would be a verifiable, disprovable on-chain mismatch. Short/malformed input
+     * (a fuzzed value) is returned as-is rather than truncated into something misleadingly short.
+     */
+    private function truncateHex(string $hex): string
+    {
+        if (strlen($hex) <= 12) {
+            return $hex;
+        }
+        return substr($hex, 0, 8) . '…' . substr($hex, -4);
+    }
+
+    /** Masks a fake EVM address (0x + 40 hex). Never call this on a real cold-wallet address — those
+     *  are shown in full, on purpose (see the class docblock). */
+    private function maskEvmAddress(string $addr): string
+    {
+        return $this->truncateHex($addr);
+    }
+
+    /** Masks a fake tx hash (0x + 64 hex). Every tx hash in this section is fabricated, so this is
+     *  called unconditionally — there is no "real" tx hash to leave unmasked. */
+    private function maskTxHash(string $hash): string
+    {
+        return $this->truncateHex($hash);
+    }
+
     // ================= Digital asset reserve (ETH; spec §3) =================
 
     private function cryptoRouter(Bank $bank, string $navBase, array $route): string
@@ -665,6 +712,12 @@ final class BankSection extends AbstractPanelSection
         $id = $route['entity'];
         if ($id === '') {
             return $this->cryptoList($bank, $navBase);
+        }
+        // Checked BEFORE the tranche lookup: 'staking' is not a tranche id, and cryptoAddress()
+        // resolves ANY unknown id to one of the 4 real tranches (never a dead end) — so without this
+        // check, /crypto/staking would render as if it were a cold-wallet detail page.
+        if ($id === 'staking') {
+            return $this->stakingRouter($bank, $navBase, $route);
         }
         $addr = $bank->cryptoAddress($id);
         if ($route['subtab'] === 'send') {
@@ -699,11 +752,14 @@ final class BankSection extends AbstractPanelSection
         $note = '<p class="fp-muted" style="margin-top:8px">Cold-storage reserve, split across tranches '
             . 'for custody policy. Addresses are read-only from this console; signing keys are held in '
             . 'offline cold storage.</p>';
+        $links = '<div class="alte-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
+            . $this->actionLink($navBase . '/bank/crypto/staking', 'ETH staking', false)
+            . '</div>';
 
         $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'], ['Digital Asset Reserve', '']];
         return $this->breadcrumbHtml($crumbs)
             . $tiles
-            . $this->card('Digital Asset Reserve', $table . $note, $this->ethAmount($summary['totalEth']) . ' total');
+            . $this->card('Digital Asset Reserve', $table . $note . $links, $this->ethAmount($summary['totalEth']) . ' total');
     }
 
     private function cryptoDetail(Bank $bank, string $navBase, array $addr): string
@@ -726,11 +782,13 @@ final class BankSection extends AbstractPanelSection
         $txRows = '';
         foreach ($bank->cryptoTxHistory($addr['id'], 0, 25) as $tx) {
             $sign = $tx['direction'] === 'in' ? '+' : '-';
+            // Fabricated tx history (spec §2): hash + counterparty are fake, so both are masked —
+            // never shown in full, unlike the tranche's own (real, cold-wallet) address above.
             $txRows .= '<tr>'
                 . '<td>' . $this->esc($tx['date']) . '</td>'
-                . '<td><code>' . $this->esc(substr($tx['hash'], 0, 18) . '…') . '</code></td>'
+                . '<td><code>' . $this->esc($this->maskTxHash($tx['hash'])) . '</code></td>'
                 . '<td>' . $this->esc(strtoupper($tx['direction'])) . '</td>'
-                . '<td><code>' . $this->esc(substr($tx['counterparty'], 0, 14) . '…') . '</code></td>'
+                . '<td><code>' . $this->esc($this->maskEvmAddress($tx['counterparty'])) . '</code></td>'
                 . '<td>' . $this->esc($sign . number_format($tx['amountEth'], 4) . ' ETH') . '</td>'
                 . '<td>' . $this->pillHtml($tx['status'], 'ok') . '</td>'
                 . '</tr>';
@@ -807,7 +865,7 @@ final class BankSection extends AbstractPanelSection
         $hash = $bank->cryptoSendTxHash($addr['id'], 'broadcast');
         $detail = [
             ['Tranche', $addr['label']],
-            ['Tx hash', $hash],
+            ['Tx hash', $this->maskTxHash($hash)],
             ['Confirmations', '0 / 12'],
             ['Status', 'Broadcasting — pending network relay'],
         ];
@@ -818,6 +876,234 @@ final class BankSection extends AbstractPanelSection
                    ['Digital Asset Reserve', $navBase . '/bank/crypto'],
                    [$addr['label'], $addrBase], ['Send', $addrBase . '/send'], ['Broadcasting', '']];
         return $this->breadcrumbHtml($crumbs) . $card;
+    }
+
+    // ================= ETH staking decoy (crypto-mask-staking spec §3) =================
+
+    private function stakingRouter(Bank $bank, string $navBase, array $route): string
+    {
+        $subtab = $route['subtab'];
+        if ($subtab === 'rewards') {
+            return $this->stakingRewardsCard($bank, $navBase);
+        }
+        if ($subtab === 'unstake') {
+            return $this->stakingUnstakeGauntlet($bank, $navBase, $route['action']);
+        }
+        return $this->stakingOverview($bank, $navBase);
+    }
+
+    private function stakingOverview(Bank $bank, string $navBase): string
+    {
+        $stakingBase = $navBase . '/bank/crypto/staking';
+        $summary = $bank->stakingSummary();
+        $tiles = $this->statCardsHtml([
+            ['label' => 'Total staked', 'value' => $this->ethAmount($summary['totalStakedEth']), 'sub' => $this->money($summary['usdCents'])],
+            ['label' => 'Validators', 'value' => (string) $summary['validatorCount']],
+            ['label' => 'APR', 'value' => number_format($summary['apr'], 2) . '%'],
+            ['label' => 'Status', 'value' => $summary['status']],
+        ], 'fp-tiles', 'fp-tile');
+
+        $rows = '';
+        foreach ($bank->stakingValidators() as $v) {
+            // Fake validator — never one of the 4 real cold wallets — so the withdrawal address is masked.
+            $rows .= '<tr>'
+                . '<td><code>' . $this->esc($v['id']) . '</code></td>'
+                . '<td><code>' . $this->esc($this->maskEvmAddress($v['address'])) . '</code></td>'
+                . '<td>' . $this->esc($this->ethAmount($v['stakedEth'])) . '</td>'
+                . '<td>' . $this->pillHtml($v['status'], 'ok') . '</td>'
+                . '</tr>';
+        }
+        $table = '<div style="overflow-x:auto"><table class="alte-table">'
+            . '<thead><tr><th>Validator</th><th>Withdrawal address</th><th>Staked</th><th>Status</th></tr></thead>'
+            . '<tbody>' . $rows . '</tbody></table></div>';
+
+        $links = '<div class="alte-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
+            . $this->actionLink($stakingBase . '/rewards', 'View rewards', false)
+            . $this->actionLink($stakingBase . '/unstake', 'Unstake', true)
+            . '</div>';
+        $note = '<p class="fp-muted" style="margin-top:8px">Validators are custodied under the Digital '
+            . 'Asset Reserve; withdrawal credentials point back to cold storage. Exiting a validator '
+            . 'requires the unstake request below and is subject to network exit-queue and '
+            . 'slashing-risk review.</p>';
+
+        $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
+                   ['Digital Asset Reserve', $navBase . '/bank/crypto'], ['Staking', '']];
+        return $this->breadcrumbHtml($crumbs)
+            . $tiles
+            . $this->card('ETH staking', $table . $links . $note,
+                $this->ethAmount($summary['totalStakedEth']) . ' staked · ' . $summary['validatorCount'] . ' validators');
+    }
+
+    /**
+     * The rewards feed — the ONE deliberate, documented exception to this class's frozen-clock rule
+     * (mirrors the 4 real ETH addresses being the one deliberate exception to "every address is fake":
+     * see Fake\Bank's ETH_RESERVE docblock). Every other view in this section is 100% deterministic per
+     * seed; this one calls time() so a reward's displayed age actually advances between visits instead
+     * of freezing at whatever it read on first render — a "2h ago" that never moves is itself a tell.
+     *
+     * The underlying data (validator, type, amount, order) still comes entirely from
+     * Bank::stakingRewards(), which is fully seeded and time()-free; only the age TEXT is live —
+     * see stakingRewardAge().
+     *
+     * RUNTIME CAVEAT (cannot be fixed inside this file — flagged for the owner of
+     * `src/App/Llm/LlmFakeResponder.php`): panel pages are rendered once and cached byte-identical
+     * forever (`LlmFakeResponder::attempt()`, step 2, `$this->cache->put(...)`). Unless this view's
+     * cache key is exempted from that cache (or given a short TTL) before this ships, the very first
+     * render's age freezes in the cache exactly like a non-live view would, defeating the point of
+     * this exception.
+     */
+    private function stakingRewardsCard(Bank $bank, string $navBase): string
+    {
+        $stakingBase = $navBase . '/bank/crypto/staking';
+        $rows = '';
+        foreach ($bank->stakingRewards() as $r) {
+            $rows .= '<tr>'
+                . '<td>' . $this->esc($this->stakingRewardAge($r['ageOffsetSeconds'])) . '</td>'
+                . '<td>' . $this->esc($r['type']) . '</td>'
+                . '<td><code>' . $this->esc($r['validatorId']) . '</code></td>'
+                . '<td><code>' . $this->esc($this->maskEvmAddress($r['validatorAddress'])) . '</code></td>'
+                . '<td>' . $this->esc(number_format($r['amountEth'], 5) . ' ETH') . '</td>'
+                . '</tr>';
+        }
+        $table = '<div style="overflow-x:auto"><table class="alte-table">'
+            . '<thead><tr><th>Received</th><th>Type</th><th>Validator</th><th>Address</th><th>Amount</th></tr></thead>'
+            . '<tbody>' . $rows . '</tbody></table></div>';
+        $note = '<p class="fp-muted" style="margin-top:8px">Rewards accrue automatically and compound '
+            . 'into the staked balance; nothing here is withdrawable without completing a validator '
+            . 'exit (see Unstake).</p>';
+
+        $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
+                   ['Digital Asset Reserve', $navBase . '/bank/crypto'],
+                   ['Staking', $stakingBase], ['Rewards', '']];
+        return $this->breadcrumbHtml($crumbs)
+            . $this->card('Staking rewards', $table . $note, count($bank->stakingRewards()) . ' recent rewards');
+    }
+
+    /**
+     * Turns a reward's seeded, time()-free offset into a live "Nh ago"-style string. Anchored to a
+     * rolling 1-day window (elapsed seconds since the most recent UTC midnight, plus the seeded
+     * offset) rather than a fixed historical instant, so the feed keeps reading as recently-earned no
+     * matter how long the honeypot has been deployed — a validator that has been "staking" for months
+     * would otherwise accumulate reward ages in the tens of days, which reads as stale, not enticing.
+     */
+    private function stakingRewardAge(int $offsetSeconds): string
+    {
+        $cyclePos = time() % self::STAKING_REWARD_CYCLE_SECONDS;
+        return $this->formatAge($cyclePos + $offsetSeconds);
+    }
+
+    /** Coarse "N unit ago" bucketing — matches the spec's own examples ('2h ago', '1d ago', '3d ago'). */
+    private function formatAge(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return 'just now';
+        }
+        if ($seconds < 3600) {
+            return intdiv($seconds, 60) . 'm ago';
+        }
+        if ($seconds < 86400) {
+            return intdiv($seconds, 3600) . 'h ago';
+        }
+        return intdiv($seconds, 86400) . 'd ago';
+    }
+
+    private function stakingUnstakeGauntlet(Bank $bank, string $navBase, string $step): string
+    {
+        switch ($step) {
+            case '2fa':
+                return $this->stakingUnstakeTwoFa($bank, $navBase);
+            case 'pending':
+                return $this->stakingUnstakePending($bank, $navBase);
+            default:
+                return $this->stakingUnstakeForm($navBase);
+        }
+    }
+
+    /** The inert unstake-request form. Submitting it (any method) only routes to the 2FA step. */
+    private function stakingUnstakeForm(string $navBase): string
+    {
+        $stakingBase = $navBase . '/bank/crypto/staking';
+        $action = $this->esc($stakingBase . '/unstake/2fa');
+        $form = '<form method="get" action="' . $action . '" style="max-width:440px">'
+            . $this->field('Validator ID', 'text')
+            . $this->field('Amount to unstake (ETH)', 'text')
+            . '<button class="alte-btn" type="submit" style="display:inline-block;padding:8px 16px;border:0;'
+            . 'border-radius:4px;background:#b23b3b;color:#fff;font-size:.9em;font-weight:600;cursor:pointer">'
+            . 'Request exit</button></form>';
+        $note = '<p class="fp-muted" style="margin-top:10px">Exiting a validator requires two-factor '
+            . 'verification and is subject to the network exit queue.</p>';
+        $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
+                   ['Digital Asset Reserve', $navBase . '/bank/crypto'],
+                   ['Staking', $stakingBase], ['Unstake', '']];
+        return $this->breadcrumbHtml($crumbs)
+            . $this->card('Unstake', $form . $note, 'Validator exit request');
+    }
+
+    /** The unstake 2FA step: a dead form — ANY code advances; nothing is ever validated, no SMS is
+     *  ever sent (same idiom as wireTwoFa()/cryptoSendTwoFa()). */
+    private function stakingUnstakeTwoFa(Bank $bank, string $navBase): string
+    {
+        $stakingBase = $navBase . '/bank/crypto/staking';
+        $phone = $bank->wireInitiatorPhone('staking|unstake');
+        $action = $this->esc($stakingBase . '/unstake/pending');
+        $form = '<form method="get" action="' . $action . '" style="max-width:320px">'
+            . $this->field('One-time verification code', 'text')
+            . '<button class="alte-btn" type="submit" style="display:inline-block;padding:8px 16px;border:0;'
+            . 'border-radius:4px;background:#3b7ea1;color:#fff;font-size:.9em;font-weight:600;cursor:pointer">'
+            . 'Verify &amp; submit</button></form>';
+        $note = '<p class="fp-muted">For security, a one-time code was sent by SMS to '
+            . $this->esc($phone['masked']) . '.</p>';
+        $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
+                   ['Digital Asset Reserve', $navBase . '/bank/crypto'],
+                   ['Staking', $stakingBase], ['Unstake', $stakingBase . '/unstake'], ['Verify', '']];
+        return $this->breadcrumbHtml($crumbs)
+            . $this->card('Verify identity — unstake', $note . $form, 'Step 2 of 2');
+    }
+
+    /**
+     * The unstake gauntlet's terminal state: reads as initiated (queued, with a queue position and an
+     * estimated wait — the momentary illusion of progress) then FAILED — never a withdrawn/settled
+     * success, and no ETH ever moves. This is the only step reachable after 2FA; there is no further
+     * "retry succeeded" state (mirrors the wire/crypto-send gauntlets always dead-ending short of a
+     * persistent success).
+     */
+    private function stakingUnstakePending(Bank $bank, string $navBase): string
+    {
+        $stakingBase = $navBase . '/bank/crypto/staking';
+        $ref = $bank->stakingUnstakeRef('pending');
+        $queuePos = $bank->stakingUnstakeQueuePosition();
+        $waitDays = $bank->stakingUnstakeWaitDays();
+        $reason = $bank->stakingUnstakeFailureReason();
+        $detail = [
+            ['Reference', $ref],
+            ['Exit queue position', '~' . number_format($queuePos)],
+            ['Estimated wait', $waitDays . ' days'],
+            ['Status', 'Failed — ' . $reason],
+        ];
+        $note = 'Unstaking initiated — queued at exit position ~' . number_format($queuePos) . ', '
+            . 'estimated wait ' . $waitDays . ' days. The request then failed: ' . $reason . '. No ETH '
+            . 'has moved; the validator remains active and staked.';
+        $card = $this->failedCard('Unstake — request failed', $detail, $note);
+        $crumbs = [['Corevance', $navBase], ['Bank & Treasury', $navBase . '/bank'],
+                   ['Digital Asset Reserve', $navBase . '/bank/crypto'],
+                   ['Staking', $stakingBase], ['Unstake', $stakingBase . '/unstake'], ['Failed', '']];
+        return $this->breadcrumbHtml($crumbs) . $card;
+    }
+
+    /** A guarded-FAILURE card: same shape as softDenyCard() but with a "Failed" pill — this is a
+     *  request that was rejected/held, not one that needs a second approver's sign-off. */
+    private function failedCard(string $title, array $detailPairs, string $note): string
+    {
+        return '<div class="fp-result-card" style="background:#fff;border:1px solid #d7dbdf;'
+            . 'border-left:4px solid #b23b3b;border-radius:4px;margin:16px 0">'
+            . '<div class="fp-result-head" style="padding:10px 14px;border-bottom:1px solid #eef1f3;'
+            . 'display:flex;align-items:center;gap:8px">'
+            . $this->pillHtml('Failed', 'crit')
+            . '<span class="fp-result-title" style="font-weight:600;color:#2c3136">' . $this->esc($title) . '</span></div>'
+            . '<div class="fp-result-body" style="padding:12px 14px">'
+            . $this->kvTableHtml($detailPairs, ' class="fp-result-kv" style="border-collapse:collapse;width:100%"')
+            . '<p class="fp-muted" style="margin:10px 0 0">' . $this->esc($note) . '</p>'
+            . '</div></div>';
     }
 
     // ================= Approvers & 2FA (spec §2) =================

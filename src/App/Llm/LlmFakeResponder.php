@@ -75,11 +75,19 @@ final class LlmFakeResponder
             ? $this->htmlArtifactVersion
             : $this->promptVersion;
 
+        // A "live" panel view renders a real-time value on every request (the staking rewards feed's
+        // "Nh ago" ages). It must be re-rendered per request — neither served from nor written to the
+        // byte-identical panel cache below, since caching would freeze the live value (the tell it avoids).
+        $isLive = $profile->renderer !== null && $profile->renderer->isLivePath($context->path);
+
         // 1. Cache hit — the common case, served byte-identical, no model call, no gate query. The
         //    stored Content-Type is authoritative (a path's kind is fixed), so serve it, not a guess.
-        $hit = $this->cache->get($key, $version);
-        if ($hit !== null) {
-            return $this->build($hit['status'], $hit['content_type'], $hit['body']);
+        //    Skipped for live paths (they must re-render).
+        if (!$isLive) {
+            $hit = $this->cache->get($key, $version);
+            if ($hit !== null) {
+                return $this->build($hit['status'], $hit['content_type'], $hit['body']);
+            }
         }
 
         // A coherent product panel (admin/wp/phpmyadmin/grafana chrome) is the honeypot's deep-engagement
@@ -104,7 +112,9 @@ final class LlmFakeResponder
             if (!$this->sanitizer->pageBodyOk($body, true)) {
                 return null;                                  // defensive: our own chrome should always pass
             }
-            $this->cache->put($key, 200, $profile->contentType, $body, $version);
+            if (!$isLive) {                                   // a live view re-renders every request; never cache it
+                $this->cache->put($key, 200, $profile->contentType, $body, $version);
+            }
 
             return $this->build(200, $profile->contentType, $body);
         }

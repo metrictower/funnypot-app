@@ -28,6 +28,16 @@ final class PageShellRenderer
         return $this->skins->hasProductMatch($path);
     }
 
+    /** True for panel views that render a real-time value on every request (the staking rewards feed's
+     *  relative "Nh ago" ages) and therefore must NOT be served from — or written to — the byte-identical
+     *  panel cache: caching would freeze the live value, which is the exact tell it exists to avoid. The
+     *  LLM tier re-renders these per request. Kept here (the panel's render entry) so the generic responder
+     *  never hardcodes a panel path. */
+    public function isLivePath(string $path): bool
+    {
+        return (bool) preg_match('#/bank/crypto/staking/rewards(/|$)#', $path);
+    }
+
     public function render(PageSlots $slots, VisualPersona $persona, RequestContext $ctx): string
     {
         try {
