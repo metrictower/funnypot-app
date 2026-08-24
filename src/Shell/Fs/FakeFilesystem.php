@@ -26,6 +26,7 @@ class FakeFilesystem
     private const NAME_BASE = 4000;
     private const MTIME_IDX = 11;
     protected const SIZE_IDX = 12;
+    private const CONTENT_BASE = 5000000;    // content block counter namespace (stays < 2^32)
 
     private const TWO_YEARS = 63072000;      // seconds; mtimes fall within the last ~2y, never future
     private const BASE_DIR_PERCENT = 35;     // ~35% of children are dirs at depth 0, decaying by depth
@@ -56,6 +57,43 @@ class FakeFilesystem
         }
 
         return $this->buildChildren($canon);
+    }
+
+    public function stat(string $path): Node
+    {
+        $canon = PathCanon::canonical($path);
+        if ($canon === '/') {
+            return new Node('/', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null);
+        }
+        $node = $this->resolveNode($canon);
+        if ($node === null) {
+            throw PathNotFound::for($path);
+        }
+
+        return $node;
+    }
+
+    /** Regenerate exactly stat()->size bytes from the file's own seed (metadata and content agree). */
+    public function read(string $path): string
+    {
+        $node = $this->stat($path);
+        if ($node->isDir()) {
+            throw IsADirectory::for($path);
+        }
+        $size = $node->size;
+        if ($size <= 0) {
+            return '';
+        }
+        $seed = $this->nodeSeed(PathCanon::canonical($path));
+        $out = '';
+        $b = 0;
+        while (strlen($out) < $size) {
+            // base64 keeps it printable/text-ish; deterministic per (seed, block).
+            $out .= base64_encode(hash('fnv1a64', $seed . pack('N', self::CONTENT_BASE + $b), true));
+            $b++;
+        }
+
+        return substr($out, 0, $size);
     }
 
     public function isValidChild(string $dir, string $name): bool
