@@ -75,8 +75,37 @@ final class PinnedNodes
         return $out;
     }
 
+    /** Service accounts the reused process pool runs as — added so every `ps` user has a passwd entry. */
+    private const SERVICES = [
+        'mysql' => 'mysql:x:110:110:MySQL Server,,,:/nonexistent:/bin/false',
+        'redis' => 'redis:x:111:111:redis server,,,:/var/lib/redis:/usr/sbin/nologin',
+        'postgres' => 'postgres:x:112:112:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash',
+        'mongodb' => 'mongodb:x:113:113:MongoDB server,,,:/var/lib/mongodb:/usr/sbin/nologin',
+        'prometheus' => 'prometheus:x:114:114:Prometheus daemon,,,:/var/lib/prometheus:/usr/sbin/nologin',
+        'chrony' => 'chrony:x:115:115:chrony daemon,,,:/var/lib/chrony:/usr/sbin/nologin',
+        'messagebus' => 'messagebus:x:116:116::/nonexistent:/usr/sbin/nologin',
+        'systemd-resolve' => 'systemd-resolve:x:117:117:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin',
+    ];
+
     /** @return array<string,string> username => full /etc/passwd line, per distro family (shadow mirrors it) */
     private static function users(string $admin, string $fam): array
+    {
+        $base = self::baseUsers($admin, $fam);
+        // Insert the service accounts before the admin line (admin stays last), skipping any already present.
+        $adminLine = $base[$admin];
+        unset($base[$admin]);
+        foreach (self::SERVICES as $name => $line) {
+            if (!isset($base[$name])) {
+                $base[$name] = $line;
+            }
+        }
+        $base[$admin] = $adminLine;
+
+        return $base;
+    }
+
+    /** @return array<string,string> */
+    private static function baseUsers(string $admin, string $fam): array
     {
         if ($fam === 'rhel') {
             return [

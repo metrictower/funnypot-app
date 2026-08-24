@@ -60,6 +60,12 @@ final class HostFacts
         return $this->sp->uptimeDays();
     }
 
+    /** @return array{cpuPct:int,memUsedGib:float,load1:float,load5:float,load15:float,inletC:int,pkgC:int} */
+    public function liveStats(int $bucket = 0): array
+    {
+        return $this->sp->liveStats($bucket);
+    }
+
     public function uname(): string
     {
         // Same kernel + UTS /proc/version uses; distro-correct arch suffix (Debian's is the short form).
@@ -75,11 +81,23 @@ final class HostFacts
      */
     public function processTable(): array
     {
-        return $this->cron->processes([
+        $rows = $this->cron->processes([
             'algo' => $this->miner['algo'] ?? '',
             'pool' => $this->miner['pool'] ?? '',
             'wallet' => $this->miner['wallet'] ?? '',
         ]);
+        // The reused (Debian-flavored) process pool runs nginx as www-data; on a RHEL-family host the web
+        // user is apache — remap so `ps` agrees with /etc/passwd (which has apache, not www-data, on rhel).
+        if ($this->id->family() === 'rhel') {
+            foreach ($rows as &$r) {
+                if ($r['user'] === 'www-data') {
+                    $r['user'] = 'apache';
+                }
+            }
+            unset($r);
+        }
+
+        return $rows;
     }
 
     /** @return int[] PIDs backing /proc/<pid>, matching the process table */
@@ -242,19 +260,42 @@ final class HostFacts
      */
     public function netstat(): array
     {
+        // Derive sockets from the ACTUAL process table so netstat and ps never contradict: only a
+        // running daemon opens a LISTEN, only a process-backed client shows ESTABLISHED. The attacker's
+        // own :22 connection is appended by the shell adapter (it knows the peer), not here.
         $ip = $this->sp->primaryIp();
+        $cmds = implode("\n", array_map(static fn (array $p): string => $p['command'], $this->processTable()));
+        $rows = [];
+        $listen = static function (string $local) use (&$rows): void {
+            $rows[] = ['proto' => 'tcp', 'local' => $local, 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'];
+        };
+        $listen('0.0.0.0:22'); // sshd — we're logged in over it
+        if (strpos($cmds, 'nginx') !== false) {
+            $listen('0.0.0.0:80');
+            $listen('0.0.0.0:443');
+        }
+        if (strpos($cmds, 'mariadbd') !== false || strpos($cmds, 'mysqld') !== false) {
+            $listen('127.0.0.1:3306');
+        }
+        if (strpos($cmds, 'redis-server') !== false) {
+            $listen('127.0.0.1:6379');
+        }
+        if (strpos($cmds, 'prometheus') !== false) {
+            $listen('0.0.0.0:9090');
+        }
+        if (strpos($cmds, 'mongod') !== false) {
+            $listen('127.0.0.1:27017');
+        }
+        if (strpos($cmds, 'server.js') !== false || strpos($cmds, '/usr/bin/node') !== false) {
+            $listen('0.0.0.0:3000');
+        }
+        if (strpos($cmds, 'postgres') !== false) {
+            $listen('0.0.0.0:5432');
+            if (strpos($cmds, 'app_production') !== false || strpos($cmds, ' idle') !== false) {
+                $rows[] = ['proto' => 'tcp', 'local' => $ip . ':5432', 'foreign' => '10.0.0.9:51324', 'state' => 'ESTABLISHED'];
+            }
+        }
 
-        return [
-            ['proto' => 'tcp', 'local' => '0.0.0.0:22', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => '0.0.0.0:80', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => '0.0.0.0:443', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => '127.0.0.1:3306', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => '127.0.0.1:6379', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            // 5432 reachable (a remote client shows in ps), so bound beyond loopback.
-            ['proto' => 'tcp', 'local' => '0.0.0.0:5432', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => $ip . ':5432', 'foreign' => '10.0.0.9:51324', 'state' => 'ESTABLISHED'],
-            // Phase 3 replaces this with the attacker's OWN session peer (not seeing your own conn = a tell).
-            ['proto' => 'tcp', 'local' => $ip . ':22', 'foreign' => '10.0.0.5:51334', 'state' => 'ESTABLISHED'],
-        ];
+        return $rows;
     }
 }

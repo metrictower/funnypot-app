@@ -33,30 +33,43 @@ final class ShellInterpreter
     ) {
     }
 
-    /** Run a command line (may chain with ; && || / newlines) and return combined output. */
+    /** Run a command line (may chain with ; && || / newlines) with real short-circuit on exit status. */
     public function run(string $line, ShellSession $s): string
     {
         $trimmed = trim($line);
         if ($trimmed !== '') {
             $s->history[] = $trimmed;
         }
+        // Split keeping the operators, so && / || can gate the next statement on $?.
+        $tokens = preg_split('/\s*(&&|\|\||;|\r?\n)\s*/', $trimmed, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [];
         $out = '';
-        foreach ($this->split($line) as $stmt) {
-            $out .= $this->runStatement($stmt, $s);
+        $pendingOp = ';';
+        $count = 0;
+        foreach ($tokens as $tok) {
+            $t = trim($tok);
+            if ($t === '&&' || $t === '||') {
+                $pendingOp = $t;
+                continue;
+            }
+            if ($t === ';' || $t === '') { // ';' or a captured newline delimiter
+                $pendingOp = ';';
+                continue;
+            }
+            if (++$count > 64) {
+                break;
+            }
+            $shouldRun = $pendingOp === '&&' ? $s->lastExit === 0
+                : ($pendingOp === '||' ? $s->lastExit !== 0 : true);
+            if ($shouldRun) {
+                $out .= $this->runStatement($t, $s);
+            }
+            $pendingOp = ';';
             if ($s->close || strlen($out) > $this->maxOutput) {
                 break;
             }
         }
 
         return strlen($out) > $this->maxOutput ? substr($out, 0, $this->maxOutput) : $out;
-    }
-
-    /** @return string[] statements split on ; && || and newlines (top level only) */
-    private function split(string $line): array
-    {
-        $parts = preg_split('/\s*(?:&&|\|\||;|\r?\n)\s*/', trim($line)) ?: [];
-
-        return array_slice(array_values(array_filter($parts, static fn (string $p): bool => trim($p) !== '')), 0, 64);
     }
 
     private function runStatement(string $line, ShellSession $s): string
@@ -178,13 +191,25 @@ final class ShellInterpreter
             case 'chmod':
             case 'chown':
                 return '';
+            case 'true':
+                return '';
+            case 'false':
+                $s->lastExit = 1;
+                return '';
+            case 'test':
+                return $this->testCmd($args, $s);
+            case '[':
+                if (end($args) === ']') {
+                    array_pop($args);
+                }
+                return $this->testCmd($args, $s);
             case 'wget':
             case 'curl':
                 return $this->fetch($cmd, $args);
             case 'clear':
                 return "\033[H\033[2J";
             case 'nproc':
-                return $this->facts->os() ? ($this->serverCores() . "\n") : "1\n";
+                return $this->serverCores() . "\n";
             default:
                 $s->lastExit = 127;
                 return "bash: {$cmd}: command not found\n";
@@ -251,8 +276,9 @@ final class ShellInterpreter
         $out = '';
         foreach ($paths as $p) {
             $target = $this->resolve($p, $s);
-            if ($fs->isFile($target)) {
-                $out .= $p . "\n"; // ls of a single file prints its name
+            if ($fs->exists($target) && !$fs->isDir($target)) {
+                // a single file/symlink: -l => full detail line, else just the given name
+                $out .= $long ? $this->longLine($fs->stat($target), $target, $fs) : $p . "\n";
                 continue;
             }
             try {
@@ -272,40 +298,48 @@ final class ShellInterpreter
     private function renderListing(array $nodes, string $dir, bool $long, bool $all, FakeFilesystem $fs): string
     {
         if ($all) {
-            // Real ls -a always leads with . and .. (even in an empty dir).
-            $self = new Node('.', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null);
-            $parent = new Node('..', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null);
-            $nodes = array_merge([$self, $parent], $nodes);
+            $nodes = array_merge([
+                new Node('.', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null),
+                new Node('..', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null),
+            ], $nodes);
         }
+        // GNU ls sorts by name ('.'/dotfiles sort first in byte order, like a C-locale server).
+        usort($nodes, static fn (Node $a, Node $b): int => strcmp($a->name, $b->name));
+
         if (!$long) {
             $names = array_map(static fn (Node $n): string => $n->name, $nodes);
             return $names === [] ? '' : implode('  ', $names) . "\n";
         }
-        $subdirs = 0;
         $blocks = 0;
         foreach ($nodes as $n) {
-            if ($n->isDir()) {
-                $subdirs++;
-            }
-            $blocks += (int) (ceil(max($n->size, 1) / 512));
+            $blocks += $n->isDir() ? 4 : (int) (ceil(max($n->size, 1) / 4096) * 4); // 1K-block units, 4K alloc
         }
         $out = 'total ' . $blocks . "\n";
         foreach ($nodes as $n) {
-            $links = $n->isDir() ? 2 + $this->countChildDirs($n, $dir, $fs) : 1;
-            $out .= sprintf(
-                "%s %d %-8s %-8s %8d %s %s%s\n",
-                $this->modeStr($n),
-                $links,
-                $this->userName($n->uid),
-                $this->userName($n->gid),
-                $n->size,
-                gmdate('M j H:i', $n->mtime),
-                $n->name,
-                $n->isLink() && $n->target !== null ? ' -> ' . $n->target : ''
-            );
+            $out .= $this->longLine($n, $dir === '/' ? '/' . $n->name : $dir . '/' . $n->name, $fs, $dir);
         }
 
         return $out;
+    }
+
+    /** One `ls -l` detail line for a node. $childCanon is the node's full path; $parentDir aids link count. */
+    private function longLine(Node $n, string $childCanon, FakeFilesystem $fs, ?string $parentDir = null): string
+    {
+        $links = $n->isDir() ? 2 + $this->countChildDirs($n, $parentDir ?? PathCanon::parent($childCanon), $fs) : 1;
+        $t = $n->mtime;
+        $date = gmdate('M', $t) . ' ' . sprintf('%2d', (int) gmdate('j', $t)) . ' ' . gmdate('H:i', $t);
+
+        return sprintf(
+            "%s %d %-8s %-8s %8d %s %s%s\n",
+            $this->modeStr($n),
+            $links,
+            $this->userName($n->uid),
+            $this->userName($n->gid),
+            $n->size,
+            $date,
+            $n->name,
+            $n->isLink() && $n->target !== null ? ' -> ' . $n->target : ''
+        );
     }
 
     private function countChildDirs(Node $n, string $parentDir, FakeFilesystem $fs): int
@@ -338,16 +372,26 @@ final class ShellInterpreter
         return $type . $rwx($perm >> 6 & 7) . $rwx($perm >> 3 & 7) . $rwx($perm & 7);
     }
 
+    /** @var array<int,string>|null uid -> name, parsed once from the pinned /etc/passwd */
+    private ?array $uidNames = null;
+
     private function userName(int $uid): string
     {
-        if ($uid === 0) {
-            return 'root';
-        }
-        if ($uid === 33 || $uid === 48) {
-            return $uid === 33 ? 'www-data' : 'apache';
+        if ($this->uidNames === null) {
+            $this->uidNames = [0 => 'root'];
+            try {
+                foreach (explode("\n", $this->baseFs->read('/etc/passwd')) as $line) {
+                    $f = explode(':', $line);
+                    if (count($f) >= 3 && $f[0] !== '') {
+                        $this->uidNames[(int) $f[2]] = $f[0];
+                    }
+                }
+            } catch (\RuntimeException $e) {
+                // fall back to numeric
+            }
         }
 
-        return (string) $uid;
+        return $this->uidNames[$uid] ?? (string) $uid;
     }
 
     /** @param string[] $args */
@@ -442,18 +486,31 @@ final class ShellInterpreter
     /** @param string[] $args */
     private function echo(array $args, ShellSession $s): string
     {
+        $noNewline = false;
+        if (($args[0] ?? '') === '-n') {
+            $noNewline = true;
+            array_shift($args);
+        }
+        if (($args[0] ?? '') === '-e') {
+            array_shift($args); // escape-interpretation flag — drop it, we don't process escapes
+        }
         $parts = [];
         foreach ($args as $a) {
-            if ($a === '$?') {
-                $parts[] = (string) $s->lastExit;
-            } elseif ($a !== '' && $a[0] === '$' && isset($s->env[substr($a, 1)])) {
-                $parts[] = $s->env[substr($a, 1)];
-            } else {
-                $parts[] = trim($a, '"\'');
-            }
+            $parts[] = $this->expandVars(trim($a, "\"'"), $s);
         }
 
-        return implode(' ', $parts) . "\n";
+        return implode(' ', $parts) . ($noNewline ? '' : "\n");
+    }
+
+    private function expandVars(string $t, ShellSession $s): string
+    {
+        $t = str_replace('$?', (string) $s->lastExit, $t);
+
+        return (string) preg_replace_callback(
+            '/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/',
+            static fn (array $m): string => $s->env[$m[1]] ?? '',
+            $t
+        );
     }
 
     private function id(ShellSession $s): string
@@ -467,6 +524,45 @@ final class ShellInterpreter
             : "uid={$uid}({$u}) gid={$gid}({$u}) groups={$gid}({$u}),27(sudo)\n";
     }
 
+    /** `test` / `[ … ]` — sets $? only (no output). Supports the common file + string + integer tests. */
+    private function testCmd(array $args, ShellSession $s): string
+    {
+        $fs = $this->fs($s);
+        $unq = static fn (string $v): string => trim($v, "\"'");
+        $ok = false;
+        if (count($args) === 2) {
+            $op = $args[0];
+            $v = $unq($args[1]);
+            $p = $this->resolve($v, $s);
+            switch ($op) {
+                case '-f': $ok = $fs->isFile($p); break;
+                case '-d': $ok = $fs->isDir($p); break;
+                case '-e': case '-a': case '-s': case '-r': case '-w': case '-x': $ok = $fs->exists($p); break;
+                case '-z': $ok = $v === ''; break;
+                case '-n': $ok = $v !== ''; break;
+            }
+        } elseif (count($args) === 3) {
+            $a = $unq($args[0]);
+            $op = $args[1];
+            $b = $unq($args[2]);
+            switch ($op) {
+                case '=': case '==': $ok = $a === $b; break;
+                case '!=': $ok = $a !== $b; break;
+                case '-eq': $ok = (int) $a === (int) $b; break;
+                case '-ne': $ok = (int) $a !== (int) $b; break;
+                case '-lt': $ok = (int) $a < (int) $b; break;
+                case '-gt': $ok = (int) $a > (int) $b; break;
+                case '-le': $ok = (int) $a <= (int) $b; break;
+                case '-ge': $ok = (int) $a >= (int) $b; break;
+            }
+        } elseif (count($args) === 1) {
+            $ok = $unq($args[0]) !== '';
+        }
+        $s->lastExit = $ok ? 0 : 1;
+
+        return '';
+    }
+
     /** @param string[] $args */
     private function uname(array $args): string
     {
@@ -474,12 +570,39 @@ final class ShellInterpreter
         if (strpos($flags, 'a') !== false) {
             return $this->facts->uname() . "\n";
         }
-        $os = $this->facts->os();
+        if ($flags === '') {
+            $flags = 's'; // bare `uname` == `uname -s`
+        }
+        // Non-x86_64 -p/-i report "unknown" on the distros whose uname omits the triple (e.g. Debian).
+        $triple = substr_count($this->facts->identity()->archSuffix(), 'x86_64') >= 3;
+        $unknown = $triple ? 'x86_64' : 'unknown';
+        $out = [];
+        if (strpos($flags, 's') !== false) {
+            $out[] = 'Linux';
+        }
+        if (strpos($flags, 'n') !== false) {
+            $out[] = $this->facts->hostname();
+        }
         if (strpos($flags, 'r') !== false) {
-            return $os['kernel'] . "\n";
+            $out[] = $this->facts->os()['kernel'];
+        }
+        if (strpos($flags, 'v') !== false) {
+            $out[] = $this->facts->identity()->uts();
+        }
+        if (strpos($flags, 'm') !== false) {
+            $out[] = 'x86_64';
+        }
+        if (strpos($flags, 'p') !== false) {
+            $out[] = $unknown;
+        }
+        if (strpos($flags, 'i') !== false) {
+            $out[] = $unknown;
+        }
+        if (strpos($flags, 'o') !== false) {
+            $out[] = 'GNU/Linux';
         }
 
-        return "Linux\n";
+        return ($out === [] ? 'Linux' : implode(' ', $out)) . "\n";
     }
 
     // ---- host-fact commands (through HostFacts) ----
@@ -520,13 +643,34 @@ final class ShellInterpreter
 
     private function top(ShellSession $s): string
     {
-        $rows = array_slice($this->facts->processTable(), 0, 12);
-        $out = $this->uptime()
-            . "Tasks: " . (count($this->facts->processTable()) + 90) . " total\n"
-            . "%Cpu(s): busy\nMiB Mem : " . ($this->facts->free()['mem'][0]) . " total\n\n"
-            . "  PID USER      %CPU %MEM COMMAND\n";
-        foreach ($rows as $p) {
-            $out .= sprintf("%5d %-8s %5s %5s %s\n", (int) $p['pid'], $p['user'], $p['cpu'], $p['mem'], $p['command']);
+        $live = $this->facts->liveStats();
+        $mem = $this->facts->free()['mem'];   // [total,used,free,shared,buffcache,available] MiB
+        $sw = $this->facts->free()['swap'];   // [total,used,free]
+        $procs = $this->facts->processTable();
+        $cpu = (int) $live['cpuPct'];
+        $total = count($procs) + 90;
+        $running = 1 + ((int) $live['load1'] % 3);
+
+        $out = 'top - ' . ltrim($this->uptime())
+            . sprintf("Tasks: %d total,   %d running, %d sleeping,   0 stopped,   0 zombie\n", $total, $running, $total - $running)
+            . sprintf("%%Cpu(s): %4.1f us, %4.1f sy,  0.0 ni, %5.1f id,  0.7 wa,  0.0 hi,  0.0 si\n", $cpu * 0.78, $cpu * 0.18, max(0.0, 100 - $cpu * 0.97))
+            . sprintf("MiB Mem : %9.1f total, %9.1f free, %9.1f used, %9.1f buff/cache\n", (float) $mem[0], (float) $mem[2], (float) $mem[1], (float) $mem[4])
+            . sprintf("MiB Swap: %9.1f total, %9.1f free, %9.1f used. %9.1f avail Mem\n\n", (float) $sw[0], (float) $sw[2], (float) $sw[1], (float) $mem[5])
+            . "    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n";
+        foreach (array_slice($procs, 0, 15) as $p) {
+            $out .= sprintf(
+                "%7d %-8s  20   0 %7d %6d %5d S %5s %5s   0:%02d.%02d %s\n",
+                (int) $p['pid'],
+                $p['user'],
+                120000 + ((int) $p['pid'] * 37 % 400000),
+                8000 + ((int) $p['pid'] * 13 % 90000),
+                2000 + ((int) $p['pid'] * 7 % 8000),
+                $p['cpu'],
+                $p['mem'],
+                (int) $p['pid'] % 60,
+                (int) $p['pid'] % 100,
+                $p['command']
+            );
         }
 
         return $out;
@@ -689,32 +833,111 @@ final class ShellInterpreter
     /** @param string[] $args */
     private function grepFiles(array $args, ShellSession $s): string
     {
+        $ci = false;
+        $inv = false;
+        $rec = false;
         $pattern = null;
         $files = [];
         foreach ($args as $a) {
-            if ($a !== '' && $a[0] === '-') {
+            if ($a !== '' && $a[0] === '-' && strlen($a) > 1) {
+                $ci = $ci || strpos($a, 'i') !== false;
+                $inv = $inv || strpos($a, 'v') !== false;
+                $rec = $rec || strpos($a, 'r') !== false || strpos($a, 'R') !== false;
                 continue;
             }
             if ($pattern === null) {
-                $pattern = trim($a, '"\'');
+                $pattern = trim($a, "\"'");
             } else {
                 $files[] = $a;
             }
         }
-        if ($pattern === null || $files === []) {
+        if ($pattern === null) {
             return '';
         }
         $fs = $this->fs($s);
-        $out = '';
+        /** @var list<array{0:string,1:string}> $pairs [canonPath, displayLabel] */
+        $pairs = [];
         foreach ($files as $f) {
+            $t = $this->resolve($f, $s);
+            if ($rec && $fs->isDir($t)) {
+                foreach ($this->walkFiles($t, $fs, self::FIND_BUDGET) as $ff) {
+                    $pairs[] = [$ff, $ff];
+                }
+            } else {
+                $pairs[] = [$t, $f];
+            }
+        }
+        if ($pairs === []) {
+            return '';
+        }
+        $multi = count($pairs) > 1 || $rec;
+        $out = '';
+        foreach ($pairs as [$canon, $display]) {
             try {
-                $text = $fs->read($this->resolve($f, $s));
+                $text = $fs->read($canon);
             } catch (\RuntimeException $e) {
                 continue;
             }
             foreach (explode("\n", $text) as $l) {
-                if ($l !== '' && stripos($l, $pattern) !== false) {
-                    $out .= (count($files) > 1 ? $f . ':' : '') . $l . "\n";
+                if ($l === '') {
+                    continue;
+                }
+                if ($this->grepMatch($l, $pattern, $ci) !== $inv) {
+                    $out .= ($multi ? $display . ':' : '') . $l . "\n";
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /** Case-sensitive by default (like real grep); honors ^ / $ anchors; -i lowercases both sides. */
+    private function grepMatch(string $line, string $pattern, bool $ci): bool
+    {
+        if ($pattern === '') {
+            return true;
+        }
+        $anchStart = $pattern[0] === '^';
+        $anchEnd = substr($pattern, -1) === '$';
+        $needle = substr($pattern, $anchStart ? 1 : 0, strlen($pattern) - ($anchStart ? 1 : 0) - ($anchEnd ? 1 : 0));
+        $h = $ci ? strtolower($line) : $line;
+        $n = $ci ? strtolower($needle) : $needle;
+        if ($n === '') {
+            return true;
+        }
+        if ($anchStart && $anchEnd) {
+            return $h === $n;
+        }
+        if ($anchStart) {
+            return strncmp($h, $n, strlen($n)) === 0;
+        }
+        if ($anchEnd) {
+            return substr($h, -strlen($n)) === $n;
+        }
+
+        return strpos($h, $n) !== false;
+    }
+
+    /** @return string[] file paths under $dir (bounded) */
+    private function walkFiles(string $dir, FakeFilesystem $fs, int $budget): array
+    {
+        $out = [];
+        $stack = [$dir];
+        $seen = 0;
+        while ($stack !== [] && $seen < $budget) {
+            $d = array_pop($stack);
+            try {
+                $nodes = $fs->list($d);
+            } catch (PathNotFound $e) {
+                continue;
+            }
+            foreach ($nodes as $n) {
+                $seen++;
+                $p = $d === '/' ? '/' . $n->name : $d . '/' . $n->name;
+                if ($n->isDir()) {
+                    $stack[] = $p;
+                } elseif ($n->isFile()) {
+                    $out[] = $p;
                 }
             }
         }
@@ -890,6 +1113,10 @@ final class ShellInterpreter
             $s->lastExit = 1;
             return "mv: cannot stat '{$files[0]}': No such file or directory\n";
         }
+        if ($deny = $this->denyWrite($dst)) {
+            $s->lastExit = 1;
+            return "mv: cannot move '{$files[0]}' to '{$files[1]}': {$deny}\n";
+        }
         $bytes = '';
         try {
             $bytes = $fs->read($src);
@@ -917,6 +1144,10 @@ final class ShellInterpreter
         } catch (\RuntimeException $e) {
             $s->lastExit = 1;
             return "cp: cannot stat '{$files[0]}': No such file or directory\n";
+        }
+        if ($deny = $this->denyWrite($dst)) {
+            $s->lastExit = 1;
+            return "cp: cannot create regular file '{$files[1]}': {$deny}\n";
         }
         $s->overlay = $s->overlay->withFile($dst, $bytes);
 
@@ -978,17 +1209,22 @@ final class ShellInterpreter
             case 'grep':
             case 'egrep':
                 $inv = in_array('-v', $args, true);
+                $ci = false;
                 $pat = '';
                 foreach ($args as $a) {
-                    if ($a !== '' && $a[0] !== '-') {
-                        $pat = trim($a, '"\'');
-                        break;
+                    if ($a !== '' && $a[0] === '-') {
+                        $ci = $ci || strpos($a, 'i') !== false;
+                        continue;
                     }
+                    $pat = trim($a, "\"'");
+                    break;
                 }
                 $out = '';
                 foreach (explode("\n", rtrim($input, "\n")) as $l) {
-                    $hit = $pat !== '' && stripos($l, $pat) !== false;
-                    if ($hit !== $inv) {
+                    if ($l === '') {
+                        continue;
+                    }
+                    if ($this->grepMatch($l, $pat, $ci) !== $inv) {
                         $out .= $l . "\n";
                     }
                 }

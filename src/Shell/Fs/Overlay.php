@@ -66,6 +66,12 @@ final class Overlay
         return isset($this->removed[$canon]);
     }
 
+    /** True if the attacker created this dir this session — it must list only its overlay children. */
+    public function isCreatedDir(string $canon): bool
+    {
+        return isset($this->dirs[$canon]);
+    }
+
     public function fileBytes(string $canon): ?string
     {
         return $this->files[$canon] ?? null;

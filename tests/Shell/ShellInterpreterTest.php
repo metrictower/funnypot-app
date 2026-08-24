@@ -145,4 +145,98 @@ final class ShellInterpreterTest extends TestCase
         self::assertStringContainsString('whoami', $out);
         self::assertStringContainsString('id', $out);
     }
+
+    // ---- fable review regressions ----
+
+    public function test_top_renders_real_values_not_a_stub(): void
+    {
+        $out = $this->interp()->run('top', $this->session());
+        self::assertStringContainsString('%Cpu(s):', $out);
+        self::assertStringContainsString('MiB Mem :', $out);
+        self::assertStringNotContainsString('busy', $out);
+        self::assertMatchesRegularExpression('/\d+\.\d+ us/', $out);
+    }
+
+    public function test_ls_is_sorted_by_name(): void
+    {
+        $line = trim($this->interp()->run('ls /', $this->session()));
+        $names = preg_split('/\s+/', $line);
+        $sorted = $names;
+        sort($sorted, SORT_STRING);
+        self::assertSame($sorted, $names, 'ls output must be name-sorted');
+    }
+
+    public function test_mkdir_then_ls_is_empty(): void
+    {
+        $i = $this->interp();
+        $s = $this->session();
+        $i->run('mkdir /root/brandnew', $s);
+        self::assertStringContainsString('brandnew', $i->run('ls /root', $s));
+        self::assertSame('', $i->run('ls /root/brandnew', $s), 'a just-created dir must be empty');
+    }
+
+    public function test_uname_flags(): void
+    {
+        $i = $this->interp();
+        self::assertSame("x86_64\n", $i->run('uname -m', $this->session()));
+        self::assertSame("GNU/Linux\n", $i->run('uname -o', $this->session()));
+        self::assertSame($i->run('hostname', $this->session()), $i->run('uname -n', $this->session()));
+    }
+
+    public function test_netstat_has_one_ssh_established_and_no_phantom(): void
+    {
+        $out = $this->interp()->run('netstat -tn', $this->session());
+        self::assertStringContainsString('203.0.113.9', $out);            // the attacker's own peer
+        self::assertStringNotContainsString('10.0.0.5:51334', $out);      // the old hardcoded phantom is gone
+    }
+
+    public function test_cp_and_mv_to_proc_denied(): void
+    {
+        $i = $this->interp();
+        $s = $this->session();
+        self::assertStringContainsString('Read-only file system', $i->run('cp /etc/hostname /proc/evil', $s));
+        self::assertStringContainsString('Read-only file system', $i->run('mv /etc/hostname /sys/x', $s));
+    }
+
+    public function test_grep_is_case_sensitive_with_i_flag(): void
+    {
+        $i = $this->interp();
+        self::assertSame('', $i->run('grep Root /etc/passwd', $this->session()));       // case-sensitive: no match
+        self::assertStringContainsString('root', $i->run('grep root /etc/passwd', $this->session()));
+        self::assertStringContainsString('root', $i->run('grep -i Root /etc/passwd', $this->session()));
+    }
+
+    public function test_ls_l_on_a_file_shows_detail_line(): void
+    {
+        $out = $this->interp()->run('ls -l /etc/passwd', $this->session());
+        self::assertStringContainsString('-rw-r--r--', $out);
+        self::assertStringContainsString('passwd', $out);
+        self::assertStringContainsString('root', $out);
+    }
+
+    public function test_short_circuit_operators(): void
+    {
+        $i = $this->interp();
+        $s = $this->session();
+        self::assertStringNotContainsString('SHOULDNOT', $i->run('cat /nonexistent-zzz && echo SHOULDNOT', $s));
+        self::assertStringContainsString('YES', $i->run('true && echo YES', $s));
+        self::assertStringContainsString('REC', $i->run('false || echo REC', $s));
+        self::assertStringNotContainsString('NOPE', $i->run('true || echo NOPE', $s));
+    }
+
+    public function test_bracket_test_gates_next_command(): void
+    {
+        $i = $this->interp();
+        $s = $this->session();
+        self::assertStringContainsString('FOUND', $i->run('[ -f /etc/passwd ] && echo FOUND', $s));
+        self::assertStringNotContainsString('NOPE', $i->run('[ -f /nope-zzz ] && echo NOPE', $s));
+    }
+
+    public function test_ls_l_resolves_named_users_not_bare_uids(): void
+    {
+        // /etc is root-owned; ls -l must show "root", never a bare uid, from the /etc/passwd map.
+        $out = $this->interp()->run('ls -l /etc', $this->session());
+        self::assertStringContainsString('root', $out);
+        self::assertDoesNotMatchRegularExpression('/^\S+\s+\d+\s+0\s+0\s/m', $out, 'uid 0 must render as root, not 0');
+    }
 }

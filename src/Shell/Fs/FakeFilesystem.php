@@ -261,24 +261,30 @@ class FakeFilesystem
         $result = [];
         $used = [];
 
-        foreach (Scaffold::childrenOf($canonDir) ?? [] as $name) {
-            $result[] = $this->makeNode($canonDir, $name, true);
-            $used[$name] = true;
-        }
+        // A dir the attacker just created (overlay withDir) has NO scaffold/procedural content — only what
+        // they put in it. Skipping generation here is what makes `mkdir foo && ls foo` show an empty dir.
+        $overlayCreated = $this->overlay !== null && $this->overlay->isCreatedDir($canonDir);
 
-        $dirPool = Pools::dirNames($this->role);
-        $filePool = Pools::fileNames($this->role);
-        // Count is a pure function of the dir seed (bounded by perDirMax) — independent of cache/eviction
-        // state, so a dir re-listed after eviction regenerates identically (determinism invariant).
-        $count = Draw::heavyTailedInt($seed, self::COUNT_IDX, 1, $this->perDirMax);
+        if (!$overlayCreated) {
+            foreach (Scaffold::childrenOf($canonDir) ?? [] as $name) {
+                $result[] = $this->makeNode($canonDir, $name, true);
+                $used[$name] = true;
+            }
 
-        for ($i = 0; $i < $count; $i++) {
-            $isDir = $depth < $this->maxDepth
-                && Draw::chance($seed, self::TYPE_BASE + $i, max(1, self::BASE_DIR_PERCENT - $depth), 100);
-            $pool = $isDir ? $dirPool : $filePool;
-            $name = $this->pickUnusedName($seed, $i, $pool, $used);
-            $used[$name] = true;
-            $result[] = $this->makeNode($canonDir, $name, $isDir);
+            $dirPool = Pools::dirNames($this->role);
+            $filePool = Pools::fileNames($this->role);
+            // Count is a pure function of the dir seed (bounded by perDirMax) — independent of cache/eviction
+            // state, so a dir re-listed after eviction regenerates identically (determinism invariant).
+            $count = Draw::heavyTailedInt($seed, self::COUNT_IDX, 1, $this->perDirMax);
+
+            for ($i = 0; $i < $count; $i++) {
+                $isDir = $depth < $this->maxDepth
+                    && Draw::chance($seed, self::TYPE_BASE + $i, max(1, self::BASE_DIR_PERCENT - $depth), 100);
+                $pool = $isDir ? $dirPool : $filePool;
+                $name = $this->pickUnusedName($seed, $i, $pool, $used);
+                $used[$name] = true;
+                $result[] = $this->makeNode($canonDir, $name, $isDir);
+            }
         }
 
         foreach ($this->pinnedByParent[$canonDir] ?? [] as $pinned) {

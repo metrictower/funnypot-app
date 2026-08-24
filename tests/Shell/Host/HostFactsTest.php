@@ -7,6 +7,8 @@ namespace Funnypot\Tests\Shell\Host;
 use Funnypot\App\Render\Fake\FakeCron;
 use Funnypot\App\Render\Fake\MinerRig;
 use Funnypot\App\Render\Fake\ServerProfile;
+use Funnypot\Shell\Fs\Draw;
+use Funnypot\Shell\Fs\FakeFilesystem;
 use Funnypot\Shell\Host\HostFacts;
 use PHPUnit\Framework\TestCase;
 
@@ -19,12 +21,18 @@ final class HostFactsTest extends TestCase
         $rows = $hf->processTable();
         self::assertNotEmpty($rows);
 
-        // identical to what the panel's ProcessesSection renders from the same seed (coherence).
+        // Same generators as the panel's ProcessesSection — the command set is identical (the shell may
+        // remap the web user to apache on rhel for its own passwd coherence, so compare commands, not the
+        // full rows).
         $sum = MinerRig::fromSeed($seed)->summary();
         $expected = FakeCron::fromSeed($seed)->processes(
             ['algo' => $sum['algo'], 'pool' => $sum['pool'], 'wallet' => $sum['wallet']]
         );
-        self::assertSame($expected, $rows);
+        self::assertSame(
+            array_map(static fn ($p) => $p['command'], $expected),
+            array_map(static fn ($p) => $p['command'], $rows)
+        );
+        self::assertSame(count($expected), count($rows));
 
         // the miner line is present and coherent with the miner summary.
         $cmds = implode("\n", array_map(fn ($p) => $p['command'], $rows));
@@ -117,5 +125,37 @@ final class HostFactsTest extends TestCase
     {
         self::assertEquals((new HostFacts(9))->processTable(), (new HostFacts(9))->processTable());
         self::assertSame((new HostFacts(9))->proc('meminfo'), (new HostFacts(9))->proc('meminfo'));
+    }
+
+    public function test_every_ps_user_has_a_passwd_entry(): void
+    {
+        // ps and /etc/passwd must agree for the same host (spanning both distro families).
+        foreach ([1, 7, 42, 99, 1000, 4242] as $seed) {
+            $hf = new HostFacts($seed);
+            $fs = new FakeFilesystem(Draw::seed("cohere\0" . $seed), 'ops', $seed);
+            $passwd = [];
+            foreach (explode("\n", $fs->read('/etc/passwd')) as $l) {
+                $f = explode(':', $l);
+                if (($f[0] ?? '') !== '') {
+                    $passwd[$f[0]] = true;
+                }
+            }
+            foreach ($hf->processTable() as $p) {
+                $u = $p['user'];
+                if (substr($u, -1) === '+') { // ps truncates long names to 7 chars + '+'
+                    $prefix = substr($u, 0, -1);
+                    $match = false;
+                    foreach (array_keys($passwd) as $pu) {
+                        if (strncmp($pu, $prefix, strlen($prefix)) === 0) {
+                            $match = true;
+                            break;
+                        }
+                    }
+                    self::assertTrue($match, "truncated ps user '{$u}' has no passwd match (seed {$seed})");
+                } else {
+                    self::assertArrayHasKey($u, $passwd, "ps user '{$u}' missing from /etc/passwd (seed {$seed})");
+                }
+            }
+        }
     }
 }

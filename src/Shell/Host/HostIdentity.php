@@ -167,7 +167,9 @@ final class HostIdentity
         $offset = (30 + crc32('kdate|' . $this->hostname) % 370) * 86400 + crc32('ktime|' . $this->hostname) % 86400;
         $t = FrozenClock::epoch() - $offset;
 
-        return gmdate('D M j H:i:s', $t) . ' UTC ' . gmdate('Y', $t);
+        // Space-pad single-digit day of month, like a real kernel UTS ("Fri Aug  6 ...").
+        return gmdate('D M', $t) . ' ' . sprintf('%2d', (int) gmdate('j', $t))
+            . ' ' . gmdate('H:i:s', $t) . ' UTC ' . gmdate('Y', $t);
     }
 
     /** crc32(base) sliced into role/style/env/region/seq/letter arrays (operator's scheme). */
