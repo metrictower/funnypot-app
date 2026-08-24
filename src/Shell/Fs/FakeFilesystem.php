@@ -35,6 +35,13 @@ class FakeFilesystem
     /** @var array<string,Node[]> buildChildren cache, keyed by canonical dir path */
     private array $childCache = [];
 
+    /** @var array<string,Node> pinned nodes keyed by canonical path */
+    private array $pinnedNodes = [];
+    /** @var array<string,string> pinned file content keyed by canonical path */
+    private array $pinnedContent = [];
+    /** @var array<string,Node[]> pinned nodes grouped by parent dir */
+    private array $pinnedByParent = [];
+
     public function __construct(
         protected string $hostSeedBytes,
         protected string $role,
@@ -42,6 +49,12 @@ class FakeFilesystem
         protected int $perDirMax = 24
     ) {
         Draw::assertEnv();
+        $pinned = PinnedNodes::build($hostSeedBytes, $role);
+        $this->pinnedNodes = $pinned['nodes'];
+        $this->pinnedContent = $pinned['content'];
+        foreach ($this->pinnedNodes as $path => $node) {
+            $this->pinnedByParent[PathCanon::parent($path)][] = $node;
+        }
     }
 
     /** @return Node[] */
@@ -76,6 +89,10 @@ class FakeFilesystem
     /** Regenerate exactly stat()->size bytes from the file's own seed (metadata and content agree). */
     public function read(string $path): string
     {
+        $canon = PathCanon::canonical($path);
+        if (isset($this->pinnedContent[$canon])) {
+            return $this->pinnedContent[$canon];
+        }
         $node = $this->stat($path);
         if ($node->isDir()) {
             throw IsADirectory::for($path);
@@ -135,6 +152,9 @@ class FakeFilesystem
         if ($canon === '/') {
             return new Node('/', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null);
         }
+        if (isset($this->pinnedNodes[$canon])) {
+            return $this->pinnedNodes[$canon];
+        }
         $parent = PathCanon::parent($canon);
         $parentNode = $this->resolveNode($parent);
         if ($parentNode === null || !$parentNode->isDir()) {
@@ -182,6 +202,12 @@ class FakeFilesystem
             $name = $this->pickUnusedName($seed, $i, $pool, $used);
             $used[$name] = true;
             $result[] = $this->makeNode($canonDir, $name, $isDir);
+        }
+
+        // Pinned children win over scaffold/procedural entries with the same name.
+        foreach ($this->pinnedByParent[$canonDir] ?? [] as $pinned) {
+            $result = array_values(array_filter($result, fn (Node $n) => $n->name !== $pinned->name));
+            $result[] = $pinned;
         }
 
         $this->childCache[$canonDir] = $result;
