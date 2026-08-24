@@ -12,7 +12,7 @@ final class PinnedNodesTest extends TestCase
 {
     private function fs(): FakeFilesystem
     {
-        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer');
+        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer', 7);
     }
 
     public function test_etc_passwd_is_pinned_and_listed(): void
@@ -64,8 +64,8 @@ final class PinnedNodesTest extends TestCase
     {
         // B4 regression: the admin shadow line must NOT be a byte-identical constant across installs,
         // and must not be the old '$6$xxxxxxxxxxxxxxxx$0000...' literal.
-        $a = new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer');
-        $b = new FakeFilesystem(Draw::seed("secretB\0h\0dev"), 'developer');
+        $a = new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer', 7);
+        $b = new FakeFilesystem(Draw::seed("secretB\0h\0dev"), 'developer', 7);
         $sa = $a->read('/etc/shadow');
         $sb = $b->read('/etc/shadow');
         self::assertNotSame($sa, $sb, 'shadow must vary per host secret');

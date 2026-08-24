@@ -13,7 +13,7 @@ final class OverlayTest extends TestCase
 {
     private function base(): FakeFilesystem
     {
-        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer');
+        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer', 7);
     }
 
     public function test_overlay_reflects_writes_without_perturbing_siblings(): void

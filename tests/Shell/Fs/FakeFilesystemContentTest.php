@@ -14,7 +14,7 @@ final class FakeFilesystemContentTest extends TestCase
 {
     private function fs(): FakeFilesystem
     {
-        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer');
+        return new FakeFilesystem(Draw::seed("s\0h\0dev"), 'developer', 7);
     }
 
     /** @param string[] $dirs @return array<string,\Funnypot\Shell\Fs\Node> canonical file path => node */

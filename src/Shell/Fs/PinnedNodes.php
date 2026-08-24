@@ -38,7 +38,7 @@ final class PinnedNodes
     /**
      * @return array{nodes: array<string,Node>, content: array<string,string>, fam: string}
      */
-    public static function build(string $hostSeedBytes, string $role, int $identitySeed = 0): array
+    public static function build(string $hostSeedBytes, string $role, int $identitySeed): array
     {
         $seed = Draw::seed($hostSeedBytes . "\0pinned\0" . $role);
         $now = FrozenClock::epoch();
@@ -66,7 +66,7 @@ final class PinnedNodes
             $i++;
         }
         $nodes['/etc/localtime'] = new Node('localtime', 'link', 0, 0, 27, 0o777, $now - 31000000, '/usr/share/zoneinfo/Etc/UTC');
-        $nodes['/etc/mtab'] = new Node('mtab', 'link', 0, 0, 12, 0o777, $now - 30000000, '/proc/self/mounts');
+        $nodes['/etc/mtab'] = new Node('mtab', 'link', 0, 0, 17, 0o777, $now - 30000000, '/proc/self/mounts');
 
         return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam];
     }

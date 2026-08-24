@@ -7,6 +7,7 @@ namespace Funnypot\Shell\Host;
 use Funnypot\App\Render\Fake\FakeCron;
 use Funnypot\App\Render\Fake\MinerRig;
 use Funnypot\App\Render\Fake\ServerProfile;
+use Funnypot\Shell\Fs\Draw;
 
 /**
  * The single per-host coherence source for the fake shell + fleet console. Every host fact — the process
@@ -17,6 +18,26 @@ use Funnypot\App\Render\Fake\ServerProfile;
  */
 final class HostFacts
 {
+    /** Per-distro kernel UTS + toolchain, so uname and /proc/version share ONE string and match os-release. */
+    private const KERNEL_META = [
+        'Ubuntu 22.04.4 LTS' => [
+            'uts' => '#123-Ubuntu SMP Mon Jun 10 12:59:33 UTC 2024',
+            'gcc' => 'gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38',
+            'builder' => 'buildd@lcy02-amd64-054',
+        ],
+        'Debian GNU/Linux 12 (bookworm)' => [
+            'uts' => '#1 SMP PREEMPT_DYNAMIC Debian 6.1.90-1 (2024-05-03)',
+            'gcc' => 'gcc-12 (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40',
+            'builder' => 'debian-kernel@lists.debian.org',
+        ],
+        'Rocky Linux 9.4 (Blue Onyx)' => [
+            'uts' => '#1 SMP PREEMPT_DYNAMIC Thu Apr 4 08:12:31 UTC 2024',
+            'gcc' => 'gcc (GCC) 11.4.1 20231218 (Red Hat 11.4.1-3)',
+            'builder' => 'mockbuild@iad1-prod-build001.bld.equ.rockylinux.org',
+        ],
+    ];
+
+    private int $seed;
     private ServerProfile $sp;
     private FakeCron $cron;
     /** @var array<string,mixed> */
@@ -24,9 +45,22 @@ final class HostFacts
 
     public function __construct(int $identitySeed)
     {
+        $this->seed = $identitySeed;
         $this->sp = ServerProfile::fromSeed($identitySeed);
         $this->cron = FakeCron::fromSeed($identitySeed);
         $this->miner = MinerRig::fromSeed($identitySeed)->summary();
+    }
+
+    /** @return array{uts:string,gcc:string,builder:string} */
+    private function kernelMeta(): array
+    {
+        $distro = $this->sp->os()['distro'];
+
+        return self::KERNEL_META[$distro] ?? [
+            'uts' => '#1 SMP PREEMPT_DYNAMIC',
+            'gcc' => 'gcc (GCC) 11.4.0',
+            'builder' => 'builder@localhost',
+        ];
     }
 
     public function hostname(): string
@@ -52,10 +86,9 @@ final class HostFacts
 
     public function uname(): string
     {
-        $os = $this->sp->os();
-
-        return 'Linux ' . $this->sp->hostname() . ' ' . $os['kernel']
-            . ' #1 SMP x86_64 x86_64 x86_64 GNU/Linux';
+        // Same kernel + UTS string /proc/version uses — on a real box they come from one kernel constant.
+        return 'Linux ' . $this->sp->hostname() . ' ' . $this->sp->os()['kernel'] . ' '
+            . $this->kernelMeta()['uts'] . ' x86_64 x86_64 x86_64 GNU/Linux';
     }
 
     /**
@@ -187,8 +220,11 @@ final class HostFacts
 
     private function procUptime(): string
     {
-        $secs = $this->sp->uptimeDays() * 86400;
-        $idle = (int) round($secs * $this->sp->cpu()['cores'] * 0.88);
+        // Intra-day seconds so uptime is never an exact multiple of 86400 (that's an arithmetic tell).
+        $intraday = Draw::intBelow(Draw::seed('uptime|' . $this->seed), 0, 86400);
+        $secs = $this->sp->uptimeDays() * 86400 + $intraday;
+        $idlePerCpu = 0.6 + (100 - $this->sp->liveStats()['cpuPct']) / 100 * 0.35; // idle tracks cpu%
+        $idle = (int) round($secs * $this->sp->cpu()['threads'] * $idlePerCpu);
 
         return sprintf("%d.%02d %d.%02d\n", $secs, 12, $idle, 47);
     }
@@ -196,9 +232,10 @@ final class HostFacts
     private function procVersion(): string
     {
         $k = $this->sp->os()['kernel'];
+        $m = $this->kernelMeta();
 
-        return "Linux version {$k} (build@{$this->sp->hostname()}) "
-            . "(gcc (Ubuntu 11.4.0) 11.4.0) #1 SMP PREEMPT_DYNAMIC\n";
+        // Same kernel + UTS as uname(); distro-correct compiler + a distro build host (not the honeypot).
+        return "Linux version {$k} ({$m['builder']}) ({$m['gcc']}) {$m['uts']}\n";
     }
 
     /**
@@ -239,7 +276,10 @@ final class HostFacts
             ['proto' => 'tcp', 'local' => '0.0.0.0:443', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
             ['proto' => 'tcp', 'local' => '127.0.0.1:3306', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
             ['proto' => 'tcp', 'local' => '127.0.0.1:6379', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
-            ['proto' => 'tcp', 'local' => '127.0.0.1:5432', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            // 5432 reachable (a remote client shows in ps), so bound beyond loopback.
+            ['proto' => 'tcp', 'local' => '0.0.0.0:5432', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => $ip . ':5432', 'foreign' => '10.0.0.9:51324', 'state' => 'ESTABLISHED'],
+            // Phase 3 replaces this with the attacker's OWN session peer (not seeing your own conn = a tell).
             ['proto' => 'tcp', 'local' => $ip . ':22', 'foreign' => '10.0.0.5:51334', 'state' => 'ESTABLISHED'],
         ];
     }

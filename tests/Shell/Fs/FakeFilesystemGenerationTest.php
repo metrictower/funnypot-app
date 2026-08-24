@@ -13,7 +13,7 @@ final class FakeFilesystemGenerationTest extends TestCase
 {
     private function fs(): FakeFilesystem
     {
-        return new FakeFilesystem(Draw::seed("secret\0host\0dev"), 'developer');
+        return new FakeFilesystem(Draw::seed("secret\0host\0dev"), 'developer', 42);
     }
 
     public function test_scaffold_dirs_always_present_and_nonempty(): void

@@ -216,7 +216,8 @@ final class FingerprintSafetyTest extends TestCase
     {
         $fs = new \Funnypot\Shell\Fs\FakeFilesystem(
             \Funnypot\Shell\Fs\Draw::seed("fp-safety-secret\0host\0" . $role),
-            $role
+            $role,
+            77
         );
         $lsLa = static function (array $nodes): string {
             $out = '';
@@ -253,5 +254,38 @@ final class FingerprintSafetyTest extends TestCase
         }
 
         self::assertClean($blob, "fake-filesystem output for role {$role}");
+    }
+
+    /** @return array<string,array{0:int}> label => identity seed (a spread of host identities) */
+    public static function hostFactsSeeds(): array
+    {
+        return ['id-1' => [1], 'id-7' => [7], 'id-42' => [42], 'id-1000' => [1000]];
+    }
+
+    /**
+     * HostFacts output (uname, /proc/cpuinfo|meminfo|loadavg|uptime|version, df, netstat, ps) is
+     * runtime-generated and equally unseen by the compiled-artifact CI gate — scan it too.
+     *
+     * @dataProvider hostFactsSeeds
+     */
+    public function test_host_facts_output_carries_no_denylisted_signature(int $seed): void
+    {
+        $hf = new \Funnypot\Shell\Host\HostFacts($seed);
+        $blob = $hf->uname() . "\n"
+            . (string) $hf->proc('cpuinfo')
+            . (string) $hf->proc('meminfo')
+            . (string) $hf->proc('loadavg')
+            . (string) $hf->proc('uptime')
+            . (string) $hf->proc('version');
+        foreach ($hf->processTable() as $p) {
+            $blob .= $p['user'] . ' ' . $p['command'] . "\n";
+        }
+        foreach ($hf->df() as $d) {
+            $blob .= implode(' ', $d) . "\n";
+        }
+        foreach ($hf->netstat() as $n) {
+            $blob .= implode(' ', $n) . "\n";
+        }
+        self::assertClean($blob, "HostFacts output for identity seed {$seed}");
     }
 }

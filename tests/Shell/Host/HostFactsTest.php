@@ -64,6 +64,48 @@ final class HostFactsTest extends TestCase
         self::assertNull($hf->proc('proc/nonsense'));
     }
 
+    public function test_kernel_version_coherent_across_uname_procversion_and_distro(): void
+    {
+        // Per-distro UTS token that must appear in BOTH uname and /proc/version (one kernel constant),
+        // plus the distro-correct compiler in /proc/version.
+        $token = [
+            'Ubuntu 22.04.4 LTS' => ['uts' => '#123-Ubuntu SMP', 'gcc' => 'Ubuntu'],
+            'Debian GNU/Linux 12 (bookworm)' => ['uts' => 'Debian 6.1.90-1', 'gcc' => 'Debian'],
+            'Rocky Linux 9.4 (Blue Onyx)' => ['uts' => 'PREEMPT_DYNAMIC Thu Apr', 'gcc' => 'Red Hat'],
+        ];
+        $seen = [];
+        for ($i = 0; $i < 90 && count($seen) < 3; $i++) {
+            $hf = new HostFacts($i);
+            $distro = $hf->os()['distro'];
+            if (isset($seen[$distro]) || !isset($token[$distro])) {
+                continue;
+            }
+            $seen[$distro] = true;
+            $uname = $hf->uname();
+            $ver = (string) $hf->proc('version');
+            self::assertStringContainsString($hf->os()['kernel'], $uname);
+            self::assertStringContainsString($hf->os()['kernel'], $ver);
+            self::assertStringContainsString($token[$distro]['uts'], $uname, "$distro uname UTS");
+            self::assertStringContainsString($token[$distro]['uts'], $ver, "$distro version UTS");
+            self::assertStringContainsString($token[$distro]['gcc'], $ver, "$distro compiler");
+        }
+        self::assertCount(3, $seen, 'should observe all 3 ServerProfile distros');
+    }
+
+    public function test_uptime_not_exact_multiple_of_day(): void
+    {
+        $found = false;
+        for ($i = 0; $i < 20; $i++) {
+            $up = (string) (new HostFacts($i))->proc('uptime');
+            $secs = (int) explode('.', $up)[0];
+            if ($secs % 86400 !== 0) {
+                $found = true;
+                break;
+            }
+        }
+        self::assertTrue($found, 'uptime should carry intra-day seconds, not land on an exact day boundary');
+    }
+
     public function test_deterministic(): void
     {
         self::assertEquals((new HostFacts(9))->processTable(), (new HostFacts(9))->processTable());
