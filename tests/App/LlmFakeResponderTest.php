@@ -226,6 +226,18 @@ final class LlmFakeResponderTest extends TestCase
         self::assertNotEmpty($logged, 'the served LLM response body should be logged');
     }
 
+    public function test_panel_hit_is_logged_as_its_own_event_category(): void
+    {
+        // Deep-panel navigation logs event='panel' so the operator can filter all fake-admin-panel
+        // activity as a unit (like SSH commands) instead of it hiding in the generic 'llm-fake' tail.
+        [$r, $store] = $this->makeWithRenderer(fn (): array => ['status' => 200, 'body' => json_encode([])]);
+        $r->respond(new RequestContext('GET', '/admin/bank/crypto'), '9.9.9.9');
+        $rows = $store->delta(0)['rows'];
+        $panel = array_values(array_filter($rows, static fn (array $row): bool => ($row['path'] ?? '') === '/admin/bank/crypto'));
+        self::assertNotEmpty($panel, 'the panel hit should be logged');
+        self::assertSame('panel', $panel[0]['event'] ?? null, "a deep-panel hit's event is 'panel'");
+    }
+
     public function test_gate_declines_probe_path_without_generating(): void
     {
         $calls = 0;

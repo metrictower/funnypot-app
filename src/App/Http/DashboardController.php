@@ -230,6 +230,7 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"method":"TELNET","event":"command"}\'>telnet commands</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"login"}\'>credential attempts</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"trap"}\'>spider trap</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"event":"panel"}\'>admin panel</button>';
         echo '<button class=\'btn qv\' data-f=\'{"known":"1"}\'>known attackers</button>';
         echo '<button class=\'btn qv\' data-f=\'{"served":"1"}\'>fakes served</button>';
         echo '<button class=\'btn qv\' data-f=\'{"severity":"critical"}\'>critical</button>';

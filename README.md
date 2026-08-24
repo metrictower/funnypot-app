@@ -28,7 +28,9 @@ the box. This app depends on it.
 ## Dashboard
 
 Every hit streams onto a live dashboard: HTTP probes, and SSH, telnet, redis and other connections, with
-top talkers, which templates fired, hourly activity and a GeoIP attacker map.
+top talkers, which templates fired, hourly activity and a GeoIP attacker map. One-click quick-filters slice
+the stream by category — SSH/telnet commands, credential attempts, spider-trap hits, and **fake-admin-panel
+navigation** (`event=panel`) — and a free-text path search drills into any section (`/admin/bank`, …).
 
 ![funnypot dashboard](docs/img/dashboard.png)
 

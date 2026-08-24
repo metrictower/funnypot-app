@@ -209,16 +209,23 @@ final class LlmFakeResponder
 
     private function logServed(RequestContext $context, string $clientIp, SynthesizedResponse $response): void
     {
+        // Tag deep-panel navigation as its own dashboard category ('panel') so the operator can filter all
+        // fake-admin-panel activity as a unit — the same way SSH/telnet commands are filtered — instead of
+        // it disappearing into the generic 'llm-fake' long tail. The logged path still drills down by
+        // section (a `q` search on `/admin/bank` etc.). A non-panel LLM fake stays 'llm-fake'.
+        $profile = $this->profiles->resolve($context->path);
+        $isPanel = $profile->renderer !== null && $profile->renderer->matchesProductSkin($context->path);
+
         $this->store->append([
             'ts' => gmdate('c'),
             'ip' => $clientIp,
             'method' => $context->method,
             'path' => substr($context->path, 0, 200),
-            'event' => 'llm-fake',
+            'event' => $isPanel ? 'panel' : 'llm-fake',
             'matched' => true,
             'severity' => 'info',
             'served' => true,
-            'templates' => ['llm-fake'],
+            'templates' => $isPanel ? ['panel'] : ['llm-fake'],
             // The exact HTML the attacker received, so the operator can review what the model wrote.
             // The store escapes non-printable bytes; the dashboard must render this as text, not HTML.
             'body' => $response->body,
