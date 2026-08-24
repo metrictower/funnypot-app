@@ -381,8 +381,9 @@ final class FacilitiesSection extends AbstractPanelSection
         $body = $this->card($room['name'], $kv . $controls, $room['type'] . ' · ' . $this->statusLabel($room['status']));
 
         // A faulty room points at its work order (the map's amber dot leads here) — the fault-chain start.
+        // The order is chosen so its own derived room is THIS room, so the linked detail agrees.
         if ($room['status'] === 'fault') {
-            $wo = $fac->workOrder('WO-2026-' . sprintf('%06d', $this->faultWoNumber($room['id'])));
+            $wo = $fac->workOrderForRoom($room['id']);
             $woHref = $this->esc($navBase . '/facilities/work-orders/' . strtolower($wo['id']));
             $note = '<p style="margin:0">Open fault on this room — work order '
                 . '<a class="alte-dl" href="' . $woHref . '">' . $this->esc($wo['id']) . '</a> ('
@@ -413,12 +414,6 @@ final class FacilitiesSection extends AbstractPanelSection
             . '<thead><tr><th>Device</th><th>Type</th><th>Controller</th><th>State</th><th>Last seen</th></tr></thead>'
             . '<tbody>' . $rows . '</tbody></table></div>';
         return $this->card('Devices in room', $table, count($devices) . ' devices · cross-linked to their controllers');
-    }
-
-    /** A deterministic work-order number for a faulty room, so the map dot and detail agree. */
-    private function faultWoNumber(string $roomId): int
-    {
-        return 4000 + (int) hexdec(substr(hash('sha256', $roomId . '|faultwo'), 0, 8)) % 6000;
     }
 
     private function roomControl(string $navBase, array $room, string $verb, int $seed): string

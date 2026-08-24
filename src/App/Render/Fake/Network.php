@@ -264,6 +264,36 @@ final class Network
     }
 
     /**
+     * The ids of the access switches this estate actually created on a floor (honouring the same host-
+     * range cap as devices()), so a module that cross-references a switch only ever points at one that
+     * exists here — the CMDB cabling map keys off this rather than guessing a suffix range.
+     *
+     * @return list<string>
+     */
+    public function accessSwitchIdsForFloor(string $floorCode): array
+    {
+        $out = [];
+        foreach ($this->devices() as $d) {
+            if ($d['kind'] === 'Access switch' && $d['floor'] === $floorCode) {
+                $out[] = $d['id'];
+            }
+        }
+        return $out;
+    }
+
+    /** Every access switch id in the estate, order stable — the fallback pool for a floor with none. */
+    public function accessSwitchIds(): array
+    {
+        $out = [];
+        foreach ($this->devices() as $d) {
+            if ($d['kind'] === 'Access switch') {
+                $out[] = $d['id'];
+            }
+        }
+        return $out;
+    }
+
+    /**
      * A page of the device estate.
      *
      * @return list<array>
@@ -445,6 +475,7 @@ final class Network
         return [
             ['id' => '10', 'name' => 'Servers', 'subnet' => '10.0.10.0/24', 'gateway' => '10.0.10.1'],
             ['id' => '20', 'name' => 'Employees', 'subnet' => '10.0.20.0/23', 'gateway' => '10.0.20.1'],
+            ['id' => '24', 'name' => 'Printers', 'subnet' => '10.0.24.0/24', 'gateway' => '10.0.24.1'],
             ['id' => '30', 'name' => 'Voice', 'subnet' => '10.0.30.0/24', 'gateway' => '10.0.30.1'],
             ['id' => '40', 'name' => 'Guest', 'subnet' => '10.0.40.0/24', 'gateway' => '10.0.40.1'],
             ['id' => '50', 'name' => 'Mgmt', 'subnet' => '10.0.50.0/24', 'gateway' => '10.0.50.1'],
@@ -457,8 +488,10 @@ final class Network
     /** Canned, inert traceroute output toward a target — a fixed RFC1918 hop path, executes nothing. */
     public function tracerouteHops(): array
     {
+        // Each hop is a distinct RFC1918 address: the client's employee-VLAN gateway, a core switch, the
+        // perimeter firewall, then the edge router (fw-01 owns the Mgmt gateway .1, so no hop repeats it).
         return [
-            ['1', 'gw-mgmt (10.0.50.1)', '0.4 ms'],
+            ['1', 'gw-emp (10.0.20.1)', '0.4 ms'],
             ['2', 'sw-core-01 (10.0.50.2)', '0.9 ms'],
             ['3', 'fw-01 (10.0.50.1)', '1.3 ms'],
             ['4', 'rtr-01 (10.0.50.254)', '2.1 ms'],

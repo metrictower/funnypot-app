@@ -45,6 +45,9 @@ final class Integrations
     /** @var array<string,int>|null id -> registry index */
     private $index = null;
 
+    /** @var Network|null lazily built so switch refs come from the one Network estate (no phantoms) */
+    private $net = null;
+
     private function __construct(int $seed)
     {
         $this->seed = $seed;
@@ -54,6 +57,15 @@ final class Integrations
     public static function fromSeed(int $seed): self
     {
         return new self($seed);
+    }
+
+    /** The Network estate, so the SNMP switch rows reference switches that actually exist there. */
+    private function net(): Network
+    {
+        if ($this->net === null) {
+            $this->net = Network::fromSeed($this->seed);
+        }
+        return $this->net;
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---
@@ -173,20 +185,20 @@ final class Integrations
         //    building, and the switch ids match the CMDB switch-port naming (sw-acc-<floor>-NN).
         foreach ($this->bld->floors() as $f) {
             $fslug = strtolower($f['code']);
-            $switches = $this->intIn(1, 2, 'swn|' . $f['code']);
-            for ($s = 1; $s <= $switches; $s++) {
-                $id = 'snmp-sw-acc-' . $fslug . '-' . sprintf('%02d', $s);
+            // Access switches come straight from the Network estate so this SNMP registry never names a
+            // switch that isn't in Network Devices (the CMDB cabling map keys off the same source).
+            foreach ($this->net()->accessSwitchIdsForFloor((string) $f['code']) as $swId) {
                 $rows[] = $this->baseRow(
-                    $id,
-                    'sw-acc-' . $fslug . '-' . sprintf('%02d', $s),
+                    'snmp-' . $swId,
+                    $swId,
                     'SNMP',
-                    '10.0.50.' . (100 + $this->h('swip|' . $f['code'] . '|' . $s) % 140),
+                    '10.0.50.' . (100 + $this->h('swip|' . $swId) % 140),
                     161,
                     'udp',
                     'Network',
                     'switch',
                     '',
-                    $this->firmware('swfw|' . $f['code'] . '|' . $s)
+                    $this->firmware('swfw|' . $swId)
                 );
             }
             $meters = $this->intIn(1, 2, 'mbn|' . $f['code']);

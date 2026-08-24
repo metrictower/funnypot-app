@@ -257,4 +257,39 @@ final class FacilitiesSectionTest extends TestCase
         self::assertSame($a->workOrderPage(0, 20), $b->workOrderPage(0, 20));
         self::assertSame($a->roomsPage(0, 20), $b->roomsPage(0, 20));
     }
+
+    public function test_fault_room_work_order_names_that_same_room(): void
+    {
+        // The room detail claims "Open fault on this room — work order WO-…"; the linked order derives its
+        // room from its id alone, so the order chosen for a fault room must resolve back to that room.
+        $seenFault = false;
+        for ($seed = 0; $seed < 8; $seed++) {
+            $fac = Facilities::fromSeed($seed);
+            foreach ($fac->floors() as $f) {
+                foreach ($fac->roomsOnFloor($f['code']) as $r) {
+                    if ($r['status'] !== 'fault') {
+                        continue;
+                    }
+                    $seenFault = true;
+                    $wo = $fac->workOrderForRoom($r['id']);
+                    self::assertSame($r['id'], $wo['assetRoomId'], "seed $seed WO for {$r['id']} names that room");
+                }
+            }
+        }
+        self::assertTrue($seenFault, 'at least one fault room must exist across the sampled seeds');
+    }
+
+    public function test_work_order_list_ids_are_all_distinct(): void
+    {
+        // workOrderIdAt() must be injective — duplicate ids across list rows would be an obvious tell.
+        for ($seed = 0; $seed < 4; $seed++) {
+            $fac = Facilities::fromSeed($seed);
+            $total = $fac->workOrderCount();
+            $ids = [];
+            foreach ($fac->workOrderPage(0, $total) as $row) {
+                $ids[$row['id']] = true;
+            }
+            self::assertCount($total, $ids, "seed $seed work-order ids all distinct");
+        }
+    }
 }

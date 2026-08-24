@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Fake\Helpdesk;
 use Funnypot\App\Render\Fake\ItServices;
+use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\ItServicesSection;
 use Funnypot\App\Render\PanelRoute;
@@ -275,6 +276,44 @@ final class ItServicesSectionTest extends TestCase
                 self::assertSame($roster[$i % $n]['ip'], $d['ip'], "seed $seed device $i ip == owner VLAN ip");
             }
         }
+    }
+
+    public function test_every_printer_ip_falls_in_a_declared_vlan_subnet(): void
+    {
+        // "One IP fabric": a printer's address must sit inside a subnet Network actually declares, or it is
+        // an undeclared segment that contradicts the VLAN plan rendered elsewhere.
+        for ($seed = 0; $seed < 6; $seed++) {
+            $it = ItServices::fromSeed($seed, 'example.test');
+            $subnets = [];
+            foreach (Network::fromSeed($seed, 'example.test')->vlans() as $v) {
+                $subnets[] = $v['subnet'];
+            }
+            for ($i = 0; $i < $it->printerCount(); $i++) {
+                $ip = $it->printerAt($i)['ip'];
+                $inSome = false;
+                foreach ($subnets as $cidr) {
+                    if ($this->ipInCidr($ip, $cidr)) {
+                        $inSome = true;
+                        break;
+                    }
+                }
+                self::assertTrue($inSome, "seed $seed printer $i ip $ip in a declared VLAN subnet");
+            }
+        }
+    }
+
+    /** True when an IPv4 dotted address sits inside a CIDR block (used to check the one-fabric invariant). */
+    private function ipInCidr(string $ip, string $cidr): bool
+    {
+        $parts = explode('/', $cidr);
+        $net = ip2long($parts[0]);
+        $bits = (int) $parts[1];
+        $addr = ip2long($ip);
+        if ($net === false || $addr === false) {
+            return false;
+        }
+        $mask = $bits === 0 ? 0 : (-1 << (32 - $bits)) & 0xFFFFFFFF;
+        return ($addr & $mask) === ($net & $mask);
     }
 
     public function test_magnitudes_reconcile_with_headcount(): void

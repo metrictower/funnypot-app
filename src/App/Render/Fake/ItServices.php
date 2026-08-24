@@ -104,6 +104,17 @@ final class ItServices
         return implode(':', $parts);
     }
 
+    /**
+     * Short host prefix derived from the persona domain stem — identical to the CMDB rule, so MDM and the
+     * asset inventory name endpoints in the same namespace.
+     */
+    private function hostPrefix(): string
+    {
+        $stem = strtoupper((string) preg_replace('/[^a-z]/', '', strtolower($this->org->domain())));
+        $stem = substr($stem, 0, 3);
+        return $stem !== '' ? $stem : 'COR';
+    }
+
     /** The one flat room list across every floor — a printer's physical location. */
     private function rooms(): array
     {
@@ -313,16 +324,22 @@ final class ItServices
         $r = $this->h('mdm-comp|' . $i) % 100;
         $compliance = $r < 82 ? 'Compliant' : ($r < 95 ? 'At risk' : 'Non-compliant');
 
+        // Hostname + serial follow the CMDB naming scheme (same host prefix, LT/PH/TB type codes, same
+        // serial shape) so the managed fleet reconciles with the asset inventory instead of reading as a
+        // second, disjoint population an attacker could diff.
+        $typeCode = $osIdx <= 1 ? 'LT' : ($osIdx === 4 ? 'TB' : 'PH');
+
         return [
             'index' => $i,
             'id' => 'dev-' . sprintf('%05d', 20001 + $i),
-            'hostname' => strtoupper($owner['dept'][0]) . 'LT-' . sprintf('%05d', 1001 + $i),
+            'hostname' => $this->hostPrefix() . '-' . $typeCode . '-' . sprintf('%05d', 1001 + $i),
             'owner' => $owner['name'],
             'ownerEmail' => $owner['email'],
             'os' => $osList[$osIdx],
             'osVersion' => $verList[$osIdx],
             'model' => $modelList[$this->h('mdm-md|' . $i) % count($modelList)],
-            'serial' => 'C02' . strtoupper(substr(hash('sha256', $this->seed . '|mdmsn|' . $i), 0, 9)),
+            'serial' => strtoupper(substr(hash('sha256', $this->seed . '|mdmsn|' . $i), 0, 3))
+                . sprintf('%07d', $this->intIn(0, 9999999, 'mdmsn2|' . $i)),
             'compliance' => $compliance,
             'ip' => $owner['ip'],
             'lastSync' => $this->intIn(1, 2880, 'mdm-ls|' . $i) . ' min ago',

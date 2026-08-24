@@ -32,7 +32,7 @@ final class ItServicesSection extends AbstractPanelSection
     private const PAGE_SIZE = 50;
 
     /** Module slugs that root the tickets-first landing; anything else entering here is an area alias. */
-    private const HELPDESK_FAMILY = ['helpdesk', 'it', 'itsm', ''];
+    private const HELPDESK_FAMILY = ['helpdesk', 'itsm', ''];
 
     public function render(array $route, VisualPersona $persona, string $navBase): string
     {

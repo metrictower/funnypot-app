@@ -52,7 +52,7 @@ final class AdminLteSkin extends AbstractSkin
             ['Logs', 'logs'],
             ['Files', 'files'],
         ],
-        'IT & Platform 2' => [
+        'IT Operations' => [
             ['IT Assets', 'it'],
             ['Network', 'network'],
             ['IT Services', 'helpdesk'],

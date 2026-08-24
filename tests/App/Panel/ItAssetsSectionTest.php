@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Fake\Cmdb;
 use Funnypot\App\Render\Fake\Integrations;
+use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\ItAssetsSection;
 use Funnypot\App\Render\PanelRoute;
@@ -117,6 +118,27 @@ final class ItAssetsSectionTest extends TestCase
         for ($seed = 0; $seed < 10; $seed++) {
             $blob = json_encode(Cmdb::fromSeed($seed, 'example.test')->assets());
             self::assertDoesNotMatchRegularExpression(self::PUBLIC_IP, (string) $blob, "seed $seed");
+        }
+    }
+
+    public function test_every_cmdb_switch_ref_resolves_to_a_real_network_switch(): void
+    {
+        // The asset "Network" card claims the cabling maps to a switch in Network Devices — so every wired
+        // asset's switch-port must name a device the Network estate actually created (no phantom suffix).
+        for ($seed = 0; $seed < 6; $seed++) {
+            $cmdb = Cmdb::fromSeed($seed, 'example.test');
+            $net = Network::fromSeed($seed, 'example.test');
+            $ids = [];
+            foreach ($net->devices() as $d) {
+                $ids[$d['id']] = true;
+            }
+            foreach ($cmdb->assets() as $a) {
+                if ($a['switchPort'] === '—') {
+                    continue;
+                }
+                $switchId = substr($a['switchPort'], 0, strpos($a['switchPort'], ' '));
+                self::assertArrayHasKey($switchId, $ids, "seed $seed switch ref $switchId resolves in Network");
+            }
         }
     }
 

@@ -43,6 +43,9 @@ final class Cmdb
     /** @var Building */
     private $bld;
 
+    /** @var Network|null network estate, built lazily — the source of truth for wired switch refs. */
+    private $net = null;
+
     /** @var list<array<string,mixed>>|null memoised asset estate (built once per instance) */
     private $cache = null;
 
@@ -334,7 +337,6 @@ final class Cmdb
         }
         // Synthetic asset from a fuzzed slug: derive a stable type + pseudo-index from the slug itself.
         $type = $this->typeForSlug($id);
-        $cat = $this->catalog()[$type];
         $pseudo = $this->h('synidx|' . $id) % 100000;
         $rec = $this->recordFor($id, strtoupper($id), $type, $pseudo, $this->rooms(), $this->serverRooms(), $this->org->headcount());
         return $rec;
@@ -403,9 +405,10 @@ final class Cmdb
         $mdmEnrolled = $type === 'monitor' ? false : ($this->h('mdm|' . $salt) % 100) >= 6; // ~6% not enrolled
 
         $vlanIp = $this->lastIp($cat['vlan'], $salt);
-        $floorSlug = strtolower((string) $room['floor']);
+        // The cabling map points at a switch that actually exists in the Network estate for this floor, so
+        // "maps to the access switch in Network Devices" always resolves (never a phantom suffix).
         $switchPort = $cat['wired']
-            ? 'sw-acc-' . $floorSlug . '-' . sprintf('%02d', 1 + ($this->h('sw|' . $salt) % 4))
+            ? $this->accessSwitchFor($room, $salt)
                 . ' Gi1/0/' . (1 + ($this->h('port|' . $salt) % 48))
             : '—';
 
@@ -442,6 +445,32 @@ final class Cmdb
             'patchGapDays' => $patchGap,
             'mdmEnrolled' => $mdmEnrolled,
         ];
+    }
+
+    /** The Network estate, built lazily and memoised (its cabling refs must resolve against this). */
+    private function net(): Network
+    {
+        if ($this->net === null) {
+            $this->net = Network::fromSeed($this->seed, $this->personaDomain);
+        }
+        return $this->net;
+    }
+
+    /**
+     * Pick a real access switch for a wired asset's room: prefer one on the asset's own floor, fall back
+     * to any access switch in the estate, and finally to the core switch — so a referenced switch always
+     * exists in Network Devices.
+     */
+    private function accessSwitchFor(array $room, string $salt): string
+    {
+        $switches = $this->net()->accessSwitchIdsForFloor((string) $room['floor']);
+        if ($switches === []) {
+            $switches = $this->net()->accessSwitchIds();
+        }
+        if ($switches === []) {
+            return 'sw-core-01';
+        }
+        return $switches[$this->h('sw|' . $salt) % count($switches)];
     }
 
     /** Patch-gap in days: most current, a budgeted minority far behind (the stale-box bait). */

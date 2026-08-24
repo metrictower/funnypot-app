@@ -474,10 +474,15 @@ final class Facilities
         return $out;
     }
 
-    /** The work-order id at a list index — a fabricated `WO-2026-NNNNNN` stable per deploy. */
+    /**
+     * The work-order id at a list index — a fabricated `WO-2026-NNNNNN` stable per deploy. The number is
+     * an injective map of the index (stride 2237 is coprime to 6000, plus a per-seed offset), so no two
+     * list rows collide onto one id while the sequence still varies across deploys (never a fingerprint).
+     */
     private function workOrderIdAt(int $i): string
     {
-        return 'WO-2026-' . sprintf('%06d', 4000 + ($this->h('woid|' . $i) % 6000));
+        $offset = $this->h('woidbase') % 6000;
+        return 'WO-2026-' . sprintf('%06d', 4000 + ((($i * 2237) + $offset) % 6000));
     }
 
     /**
@@ -575,6 +580,33 @@ final class Facilities
             'seeAlso' => $seeAlso,
             'description' => $description,
         );
+    }
+
+    /**
+     * A work order whose linked room IS this room, found by a bounded, seeded, deterministic scan over the
+     * id space (workOrder() derives its room from the id alone, so the section cannot just mint an id and
+     * claim a room). Lets a "fault on this room" cross-link resolve to an order that names the same room.
+     * Falls back to a plain seeded id-derived order if the scan finds none, so it never dead-ends.
+     */
+    public function workOrderForRoom(string $roomId): array
+    {
+        for ($i = 0; $i < 4096; $i++) {
+            $cand = 'WO-2026-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId . '|' . $i) % 6000));
+            if ($this->derivedRoomId($cand) === $roomId) {
+                return $this->workOrder($cand);
+            }
+        }
+        return $this->workOrder('WO-2026-' . sprintf('%06d', 4000 + ($this->h('woroom|' . $roomId) % 6000)));
+    }
+
+    /** The room id workOrder() would derive for a canonical WO id — cheap, so the scan stays bounded. */
+    private function derivedRoomId(string $woId): string
+    {
+        $rooms = $this->building->roomsFor($this->pickFloorCode($woId));
+        if ($rooms === []) {
+            return '';
+        }
+        return $rooms[$this->h($woId . '|room') % count($rooms)]['id'];
     }
 
     /**
