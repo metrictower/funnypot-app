@@ -55,6 +55,10 @@ final class AdminLteSkin extends AbstractSkin
         'Building · Smart Office' => [
             ['HVAC', 'hvac'],
             ['Access', 'access'],
+            ['Lighting', 'lighting'],
+            ['Appliances', 'appliances'],
+            ['Sensors', 'sensors'],
+            ['Energy', 'energy'],
         ],
         'Security & Safety' => [
             ['Fire & Life-Safety', 'fire'],
@@ -86,6 +90,10 @@ final class AdminLteSkin extends AbstractSkin
         'finance' => 'Finance', 'invoices' => 'Finance', 'ap' => 'Finance', 'accounts-payable' => 'Finance',
         'bank' => 'Bank', 'treasury' => 'Bank', 'banking' => 'Bank',
         'vendors' => 'Vendors', 'suppliers' => 'Vendors', 'payments' => 'Vendors',
+        'lighting' => 'Lighting & Shades', 'lights' => 'Lighting & Shades', 'covers' => 'Lighting & Shades', 'blinds' => 'Lighting & Shades',
+        'appliances' => 'Appliances & AV', 'coffee' => 'Appliances & AV', 'elevator' => 'Appliances & AV', 'av' => 'Appliances & AV',
+        'sensors' => 'Environment Sensors', 'environment' => 'Environment Sensors', 'climate-sensors' => 'Environment Sensors',
+        'energy' => 'Energy & Metering', 'power' => 'Energy & Metering', 'metering' => 'Energy & Metering',
     ];
 
     /** @var PanelRegistry */

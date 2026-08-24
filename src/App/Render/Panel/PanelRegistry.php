@@ -45,6 +45,10 @@ final class PanelRegistry
             'finance' => new FinanceSection(),
             'bank' => new BankSection(),
             'vendors' => new VendorsSection(),
+            'lighting' => new LightingSection(),
+            'appliances' => new AppliancesSection(),
+            'sensors' => new SensorsSection(),
+            'energy' => new EnergySection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -64,6 +68,10 @@ final class PanelRegistry
             'invoices' => 'finance', 'ap' => 'finance', 'accounts-payable' => 'finance',
             'treasury' => 'bank', 'banking' => 'bank',
             'suppliers' => 'vendors', 'payments' => 'vendors',
+            'lights' => 'lighting', 'covers' => 'lighting', 'blinds' => 'lighting',
+            'coffee' => 'appliances', 'elevator' => 'appliances', 'av' => 'appliances',
+            'environment' => 'sensors', 'climate-sensors' => 'sensors',
+            'power' => 'energy', 'metering' => 'energy',
         ];
         $this->fallback = $dashboard;
     }
