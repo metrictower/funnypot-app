@@ -252,9 +252,39 @@ final class HoneypotController
     }
 
     /**
-     * Serve a nested decoy archive for a .zip / .tar.gz probe that would otherwise 404. The decoys
-     * are prebuilt static assets named after what was asked for. Off-switch: decoyArchive=false.
-     * GET only. Returns true when it served one.
+     * Map a probed path's suffix to a static decoy asset. Longest suffix first so .tar.gz wins over
+     * .gz and .tar.bz2 over a bare .tar. Text formats (.sql/.pem/.cer) serve plausible text — never a
+     * relabeled archive — so the byte content matches the extension a scanner asked for.
+     *
+     * @return array{0:string,1:string}|null [decoyFile, contentType], or null for an unmapped suffix.
+     */
+    private static function decoyForPath(string $path): ?array
+    {
+        $map = [
+            '.tar.gz' => ['backup.tar.gz', 'application/gzip'],
+            '.tar.bz2' => ['backup.tar.bz2', 'application/x-bzip2'],
+            '.tbz2' => ['backup.tar.bz2', 'application/x-bzip2'],
+            '.tgz' => ['backup.tar.gz', 'application/gzip'],
+            '.tar' => ['backup.tar', 'application/x-tar'],
+            '.gz' => ['backup.tar.gz', 'application/gzip'],
+            '.zip' => ['backup.zip', 'application/zip'],
+            '.sql' => ['backup.sql', 'application/sql'],
+            '.pem' => ['backup.pem', 'application/x-pem-file'],
+            '.cer' => ['backup.cer', 'application/x-x509-ca-cert'],
+        ];
+        $path = strtolower($path);
+        foreach ($map as $ext => $decoy) {
+            if (substr($path, -strlen($ext)) === $ext) {
+                return $decoy;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Serve a decoy archive/dump/cert for a probe (.zip / .tar.gz / .sql / .pem …) that would
+     * otherwise 404. The decoys are prebuilt static assets named after what was asked for.
+     * Off-switch: decoyArchive=false. GET only. Returns true when it served one.
      */
     private function serveDecoyArchive(RequestContext $r, string $clientIp): bool
     {
@@ -262,26 +292,11 @@ final class HoneypotController
             return false;
         }
 
-        // Longest suffix first so .tar.gz wins over .gz.
-        $map = [
-            '.tar.gz' => ['backup.tar.gz', 'application/gzip'],
-            '.tgz' => ['backup.tar.gz', 'application/gzip'],
-            '.gz' => ['backup.tar.gz', 'application/gzip'],
-            '.zip' => ['backup.zip', 'application/zip'],
-        ];
-        $path = strtolower($r->path);
-        $decoy = null;
-        $ctype = '';
-        foreach ($map as $ext => [$file, $type]) {
-            if (substr($path, -strlen($ext)) === $ext) {
-                $decoy = $file;
-                $ctype = $type;
-                break;
-            }
-        }
-        if ($decoy === null) {
+        $mapped = self::decoyForPath($r->path);
+        if ($mapped === null) {
             return false;
         }
+        [$decoy, $ctype] = $mapped;
 
         $full = $this->decoyDir . '/' . $decoy;
         if (!is_file($full)) {
