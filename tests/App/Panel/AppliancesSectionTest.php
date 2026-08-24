@@ -250,6 +250,26 @@ final class AppliancesSectionTest extends TestCase
         }
     }
 
+    public function test_elevator_trip_floors_are_all_real_building_floors(): void
+    {
+        $s = new AppliancesSection();
+        foreach ([1, 2, 3, 7, 15] as $seed) {
+            $appl = Appliances::fromSeed($seed);
+            $valid = $appl->floorCodes();
+            self::assertNotEmpty($valid, "seed $seed must have a floor stack");
+            foreach ($appl->elevatorCars() as $car) {
+                $html = $s->render($this->route('elevators', $car['id'], 'trips'), VisualPersona::fromSeed($seed), '/panel');
+                self::assertStringContainsString('Recent trips', $html);
+                preg_match_all('/call (\S+) → (\S+) /u', $html, $m);
+                $floors = array_merge($m[1], $m[2]);
+                self::assertNotEmpty($floors, "seed $seed car {$car['id']} must log trips");
+                foreach ($floors as $f) {
+                    self::assertContains($f, $valid, "seed $seed: elevator trip names floor '$f' which is not in the building's floor stack");
+                }
+            }
+        }
+    }
+
     public function test_deep_pages_render_without_php_warnings(): void
     {
         set_error_handler(static function (int $severity, string $message): bool {

@@ -299,6 +299,11 @@ final class Sensors
     {
         $floorSlug = strtolower($floor['code']);
         $zoneSlug = strtolower($room['zone']);
+        // The sensor id's per-class sequence tail. Floor+zone+class alone repeat across rooms, so the
+        // tail is what keeps every entity_id unique — HA entity_ids are unique by definition, and two
+        // sensors sharing one would unmask the page.
+        $idPos = strrpos($id, '-');
+        $idTail = $idPos === false ? $id : substr($id, $idPos + 1);
         $controller = $ctrl[$this->h($id . '|ctrl') % count($ctrl)];
         $reading = $this->reading($id, $class, $room, $plantedLeak);
 
@@ -314,7 +319,7 @@ final class Sensors
 
         return [
             'id' => $id,
-            'entityId' => $cat['domain'] . '.' . $floorSlug . '_' . $zoneSlug . '_' . $cat['idslug'],
+            'entityId' => $cat['domain'] . '.' . $floorSlug . '_' . $zoneSlug . '_' . $cat['idslug'] . '_' . $idTail,
             'class' => $class,
             'classLabel' => $cat['label'],
             'kind' => $cat['kind'],

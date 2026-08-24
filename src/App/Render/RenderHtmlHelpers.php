@@ -426,6 +426,56 @@ trait RenderHtmlHelpers
             . '</div></div>';
     }
 
+    /**
+     * A list pager with reachable prev/next sibling links, so a link-following crawl can walk every
+     * page of a deep list — and so a "page X / N" claim always carries a matching link (a claimed page
+     * with no way to reach it is a tell). Prev/next point at `"$basePath/pN"`, the path-based page
+     * grammar PanelRoute parses; page 1 has no prev and the last page no next, and $page is clamped into
+     * [1, $totalPages]. The href is a per-segment slugged sibling path (navBase-style: no scheme, quote,
+     * `//host`, or breakout survives) then escaped, so it can only ever be another path the honeypot
+     * answers. $summary is trusted pre-assembled markup (e.g. "Showing 1&ndash;25 of 169 meters"), built
+     * by the caller through these helpers; '' omits it. Deterministic: pure string arithmetic, no clock.
+     */
+    protected function pagerHtml(string $basePath, int $page, int $totalPages, string $summary = ''): string
+    {
+        if ($totalPages < 1) {
+            $totalPages = 1;
+        }
+        if ($page < 1) {
+            $page = 1;
+        }
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+        $prev = $page > 1
+            ? '<a class="alte-dl" href="' . $this->esc($this->pagerHref($basePath, $page - 1)) . '">‹ prev</a>'
+            : '<span style="color:#c9ccd1">‹ prev</span>';
+        $next = $page < $totalPages
+            ? '<a class="alte-dl" href="' . $this->esc($this->pagerHref($basePath, $page + 1)) . '">next ›</a>'
+            : '<span style="color:#c9ccd1">next ›</span>';
+        $mid = $summary !== '' ? $summary . ' · ' : '';
+        return '<div class="alte-pager">' . $prev . ' &nbsp; ' . $mid . 'page ' . $page . ' / '
+            . $totalPages . ' &nbsp; ' . $next . '</div>';
+    }
+
+    /** The pager's sibling target: the base path per-segment slugged (the exact navBase rule, so the
+     *  href is structurally inert) with the page peeled on as `/pN`. */
+    private function pagerHref(string $basePath, int $page): string
+    {
+        $segs = [];
+        foreach (explode('/', $basePath) as $seg) {
+            if ($seg === '') {
+                continue;
+            }
+            $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($seg)), '-');
+            if ($slug !== '') {
+                $segs[] = $slug;
+            }
+        }
+        $prefix = $segs === [] ? '' : '/' . implode('/', $segs);
+        return $prefix . '/p' . $page;
+    }
+
     /** Formats a finite number as a compact coordinate/length string (max 2 dp, no trailing zeros). */
     private function num(float $v): string
     {

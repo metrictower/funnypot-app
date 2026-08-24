@@ -105,7 +105,7 @@ final class LightingSection extends AbstractPanelSection
             . '<th>Scene</th><th>Power</th><th>Occupancy</th></tr></thead>';
         $table = $this->searchBox()
             . '<table class="alte-table" id="lgt-groups">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . $this->pager($total, $page, $pages, 'groups');
+            . $this->pager($navBase . '/lighting', $total, $page, $pages, 'groups');
 
         $body = $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Lighting & Covers'))
             . $tiles
@@ -381,7 +381,10 @@ final class LightingSection extends AbstractPanelSection
             ['Gateway', 'bacnet://' . $g['controllerIp'] . ':' . Lighting::BACNET_PORT],
             ['Fixtures', (string) $g['fixtures']],
             ['Lamp hours', number_format((int) $g['lampUsed']) . ' / ' . number_format((int) $g['lampRated'])],
-            ['Commissioned', \Funnypot\App\Render\Fake\FrozenClock::todayYmd()],
+            ['Commissioned', \Funnypot\App\Render\Fake\FrozenClock::ymdFromDays(
+                \Funnypot\App\Render\Fake\FrozenClock::nowDays()
+                - (500 + ((int) hexdec(substr(hash('sha256', 'lgt-comm|' . $g['id']), 0, 8))) % 2400)
+            )],
         ], ' class="alte-kv"');
         $ctrlHref = $this->esc($navBase . '/hvac');
         $link = '<p style="margin:8px 0">Shares the BMS gateway with '
@@ -538,7 +541,7 @@ final class LightingSection extends AbstractPanelSection
             . '<th>Battery</th><th>Interlock</th></tr></thead>';
         $table = $this->searchBox()
             . '<table class="alte-table" id="lgt-groups">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . $this->pager($total, $page, $pages, 'covers');
+            . $this->pager($navBase . '/lighting/covers', $total, $page, $pages, 'covers');
         $crumbs = [['Corevance', $navBase], ['Lighting & Covers', $navBase . '/lighting'], ['Blinds & shades', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Blinds & shades', $table, $total . ' covers')
@@ -739,12 +742,12 @@ final class LightingSection extends AbstractPanelSection
         return $html . '</div>';
     }
 
-    private function pager(int $total, int $page, int $pages, string $noun): string
+    private function pager(string $base, int $total, int $page, int $pages, string $noun): string
     {
         $from = $total === 0 ? 0 : (($page - 1) * self::PER_PAGE) + 1;
         $to = min($page * self::PER_PAGE, $total);
-        return '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
-            . ' ' . $this->esc($noun) . ' · page ' . $page . ' / ' . $pages . '</div>';
+        $summary = 'Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total) . ' ' . $this->esc($noun);
+        return $this->pagerHtml($base, $page, $pages, $summary);
     }
 
     private function searchBox(): string

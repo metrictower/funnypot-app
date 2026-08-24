@@ -396,14 +396,8 @@ final class SensorsSection extends AbstractPanelSection
     {
         $from = $total === 0 ? 0 : (($page - 1) * self::PER_PAGE) + 1;
         $to = min($page * self::PER_PAGE, $total);
-        $prev = $page > 1
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page - 1)) . '">‹ prev</a>'
-            : '<span style="color:#c9ccd1">‹ prev</span>';
-        $next = $page < $pages
-            ? '<a class="alte-dl" href="' . $this->esc($base . '/p' . ($page + 1)) . '">next ›</a>'
-            : '<span style="color:#c9ccd1">next ›</span>';
-        return '<div class="alte-pager">' . $prev . ' &nbsp; Showing ' . $from . '&ndash;' . $to
-            . ' of ' . number_format($total) . ' · page ' . $page . ' / ' . $pages . ' &nbsp; ' . $next . '</div>';
+        $summary = 'Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total);
+        return $this->pagerHtml($base, $page, $pages, $summary);
     }
 
     /** Progressive-enhancement search box (client-side row filter); degrades to showing all rows. */

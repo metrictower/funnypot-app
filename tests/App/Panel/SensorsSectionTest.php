@@ -78,6 +78,25 @@ final class SensorsSectionTest extends TestCase
         }
     }
 
+    public function test_entity_ids_are_unique_per_floor(): void
+    {
+        // HA entity_ids are unique by definition — two sensors sharing one would unmask the page. The
+        // id must stay distinct within a floor (where floor+zone+class alone used to collide across rooms).
+        for ($seed = 0; $seed < 6; $seed++) {
+            $byFloor = [];
+            foreach (Sensors::fromSeed($seed)->sensors() as $s) {
+                $byFloor[$s['floor']][] = $s['entityId'];
+            }
+            foreach ($byFloor as $floor => $ids) {
+                self::assertSame(
+                    count($ids),
+                    count(array_unique($ids)),
+                    "seed $seed floor $floor has duplicate entity_ids"
+                );
+            }
+        }
+    }
+
     public function test_numeric_units_match_device_class(): void
     {
         $sensors = Sensors::fromSeed(5);

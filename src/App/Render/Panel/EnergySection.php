@@ -240,7 +240,7 @@ final class EnergySection extends AbstractPanelSection
             . '<th>PF</th><th>Controller</th><th>Comms</th></tr></thead>';
         $table = $this->searchBox('energy-meter-search', 'Filter meters…')
             . '<table class="alte-table" id="energy-meters">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . $this->pager($total, $page, $pages, 'meters');
+            . $this->pager($navBase . '/energy/meters', $total, $page, $pages);
 
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'], ['Sub-metering', '']])
             . $this->card('Sub-meters', $table, $total . ' meters · last poll ' . $energy->lastPollAge())
@@ -323,7 +323,7 @@ final class EnergySection extends AbstractPanelSection
         $board = $energy->board($entity);
         // Control leaf: /breakers/<board>/toggle/<way> -> canned "awaiting second operator".
         if ($route['subtab'] === 'toggle') {
-            return $this->breakerToggle($board, $route['action'], $persona, $navBase);
+            return $this->breakerToggle($energy, $board, $route['action'], $persona, $navBase);
         }
         return $this->boardSchedule($energy, $board, $navBase);
     }
@@ -352,7 +352,6 @@ final class EnergySection extends AbstractPanelSection
         foreach ($energy->breakers($board) as $bk) {
             $pill = $bk['state'] === 'ON' ? $this->pillHtml('ON', 'ok')
                 : ($bk['state'] === 'TRIPPED' ? $this->pillHtml('TRIPPED', 'crit') : $this->pillHtml('OFF', 'idle'));
-            $way = str_replace('/', '-', $bk['id']);
             $toggleHref = $this->esc($navBase . '/energy/breakers/' . $board['id'] . '/toggle/' . $bk['way']);
             $action = '<a class="alte-btn" href="' . $toggleHref . '" style="display:inline-block;padding:3px 10px;border:1px solid #c9ccd1;border-radius:4px;color:#2c3136;text-decoration:none;font-size:.82em">Toggle</a>';
             $rows .= '<tr>'
@@ -374,16 +373,25 @@ final class EnergySection extends AbstractPanelSection
     }
 
     /** Toggle a breaker -> guarded, never done: queued to the FC, awaiting a second operator (spec §C.8). */
-    private function breakerToggle(array $board, string $way, VisualPersona $persona, string $navBase): string
+    private function breakerToggle(Energy $energy, array $board, string $way, VisualPersona $persona, string $navBase): string
     {
         $way = $way === '' ? '1' : $way;
         $breakerId = $board['id'] . '/' . $way;
+        // Reflect the way's actual state: an ON way would OPEN, an OFF/TRIPPED way would CLOSE.
+        $state = '';
+        foreach ($energy->breakers($board) as $bk) {
+            if ($bk['way'] === $way) {
+                $state = $bk['state'];
+                break;
+            }
+        }
+        $intent = $state === 'ON' ? 'OPEN' : 'CLOSE';
         $req = 'SW-' . strtoupper(substr(hash('sha256', $persona->seed() . '|brk|' . $breakerId), 0, 8));
         return $this->breadcrumbHtml([['Corevance', $navBase], [self::MODULE_TITLE, $navBase . '/energy'],
                     ['Breaker schedule', $navBase . '/energy/breakers'],
                     [$board['id'], $navBase . '/energy/breakers/' . $board['id']], ['Switch', '']])
             . $this->softDenyCard('Breaker switch held — ' . $breakerId, [
-                ['Requested', 'Toggle breaker ' . $breakerId . ' → OPEN'],
+                ['Requested', 'Toggle breaker ' . $breakerId . ' → ' . $intent],
                 ['Board', $board['id'] . ' (' . $board['floorLabel'] . ')'],
                 ['Queued to', $board['controller'] . ' (' . $board['controllerIp'] . ')'],
                 ['Result', 'HELD — awaiting second authorised operator (two-person rule)'],
@@ -933,12 +941,12 @@ final class EnergySection extends AbstractPanelSection
             . $this->esc($label) . '</a>';
     }
 
-    private function pager(int $total, int $page, int $pages, string $section): string
+    private function pager(string $base, int $total, int $page, int $pages): string
     {
         $from = $total === 0 ? 0 : (($page - 1) * self::METERS_PER_PAGE) + 1;
         $to = min($page * self::METERS_PER_PAGE, $total);
-        return '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
-            . ' meters · page ' . $page . ' / ' . $pages . '</div>';
+        $summary = 'Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total) . ' meters';
+        return $this->pagerHtml($base, $page, $pages, $summary);
     }
 
     /** Progressive-enhancement search box (client-side row filter); degrades to showing all rows. */

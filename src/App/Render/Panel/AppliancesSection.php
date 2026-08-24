@@ -196,7 +196,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Machine</th><th>Floor</th><th>Boiler / set</th><th>Beans</th><th>Water</th><th>Descale</th><th>Cups today</th><th>State</th></tr></thead>';
-        $table = $this->searchBox('coffee') . '<table class="alte-table" id="appl-coffee">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($total, $page, $pages, 'machines');
+        $table = $this->searchBox('coffee') . '<table class="alte-table" id="appl-coffee">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($navBase . '/appliances/coffee', $total, $page, $pages, 'machines');
         $crumbs = [['Corevance', $navBase], ['Appliances & AV', $navBase . '/appliances'], ['Coffee machines', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Coffee machines', $table, $total . ' machines · one BMS/IoT gateway ' . Appliances::IOT_GATEWAY)
@@ -343,7 +343,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Machine</th><th>Kind</th><th>Temp</th><th>Stock</th><th>Slots</th><th>State</th></tr></thead>';
-        $table = $this->searchBox('vending') . '<table class="alte-table" id="appl-vending">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($total, $page, $pages, 'machines');
+        $table = $this->searchBox('vending') . '<table class="alte-table" id="appl-vending">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($navBase . '/appliances/vending', $total, $page, $pages, 'machines');
         $crumbs = [['Corevance', $navBase], ['Appliances & AV', $navBase . '/appliances'], ['Vending', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Vending machines', $table, $total . ' machines')
@@ -467,7 +467,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Appliance</th><th>Location</th><th>Reading</th><th>Setpoint</th><th>Status</th></tr></thead>';
-        $table = $this->searchBox('kitchen') . '<table class="alte-table" id="appl-kitchen">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($total, $page, $pages, 'appliances');
+        $table = $this->searchBox('kitchen') . '<table class="alte-table" id="appl-kitchen">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($navBase . '/appliances/kitchen', $total, $page, $pages, 'appliances');
         $crumbs = [['Corevance', $navBase], ['Appliances & AV', $navBase . '/appliances'], ['Kitchen appliances', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Kitchen appliances', $table, $total . ' units')
@@ -744,21 +744,25 @@ final class AppliancesSection extends AbstractPanelSection
 
     private function carTrips(Appliances $appl, array $c): string
     {
-        // A deterministic recent-trips log tail (recon-flavoured floor calls; never time()).
+        // A deterministic recent-trips log tail (recon-flavoured floor calls; never time()). Floors are
+        // drawn from the building's real stack, so a trip never names a floor this seed doesn't have.
         $lines = [];
         $seed = $c['id'];
+        $floors = $appl->floorCodes();
         for ($i = 0; $i < 12; $i++) {
             $mins = ($i + 1) * 7 + ($this->slotHash($seed . '|t|' . $i) % 5);
-            $from = strtoupper(substr($seed, -1)) === '' ? 'G' : 'G';
-            $lines[] = str_pad((string) $mins, 3, ' ', STR_PAD_LEFT) . ' min ago · call ' . $this->tripFloor($seed, $i) . ' → ' . $this->tripFloor($seed, $i + 30) . ' · ' . ($this->slotHash($seed . '|d|' . $i) % 2 ? 'up' : 'down');
+            $lines[] = str_pad((string) $mins, 3, ' ', STR_PAD_LEFT) . ' min ago · call ' . $this->tripFloor($floors, $seed, $i) . ' → ' . $this->tripFloor($floors, $seed, $i + 30) . ' · ' . ($this->slotHash($seed . '|d|' . $i) % 2 ? 'up' : 'down');
         }
         return $this->card('Recent trips', $this->preScrollHtml($lines, 'alte-log'), 'car buffer · ' . $c['tripsToday'] . ' today');
     }
 
-    private function tripFloor(string $seed, int $i): string
+    /** @param list<string> $codes the building's real floor codes */
+    private function tripFloor(array $codes, string $seed, int $i): string
     {
-        $codes = ['B1', 'G', 'M', '1', '2', '3', '4', '5', 'Roof'];
-        return $codes[$this->slotHash($seed . '|floor|' . $i) % count($codes)];
+        if ($codes === []) {
+            return 'G';
+        }
+        return (string) $codes[$this->slotHash($seed . '|floor|' . $i) % count($codes)];
     }
 
     private function carControlLeaf(Appliances $appl, string $id, string $verb, string $arg, string $navBase): string
@@ -820,7 +824,7 @@ final class AppliancesSection extends AbstractPanelSection
                 . '</tr>';
         }
         $head = '<thead><tr><th>Screen</th><th>Content</th><th>Display</th><th>Power</th><th>Last sync</th></tr></thead>';
-        $table = $this->searchBox('signage') . '<table class="alte-table" id="appl-signage">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($total, $page, $pages, 'screens');
+        $table = $this->searchBox('signage') . '<table class="alte-table" id="appl-signage">' . $head . '<tbody>' . $rows . '</tbody></table>' . $this->pager($navBase . '/appliances/signage', $total, $page, $pages, 'screens');
         $crumbs = [['Corevance', $navBase], ['Appliances & AV', $navBase . '/appliances'], ['Digital signage', '']];
         return $this->breadcrumbHtml($crumbs)
             . $this->card('Digital signage', $table, $total . ' screens · AV controller ' . Appliances::AV_CONTROLLER)
@@ -1089,12 +1093,12 @@ final class AppliancesSection extends AbstractPanelSection
         return [$slice, $page, $pages, $total];
     }
 
-    private function pager(int $total, int $page, int $pages, string $noun): string
+    private function pager(string $base, int $total, int $page, int $pages, string $noun): string
     {
         $from = $total === 0 ? 0 : (($page - 1) * self::PER_PAGE) + 1;
         $to = min($page * self::PER_PAGE, $total);
-        return '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
-            . ' ' . $this->esc($noun) . ' · page ' . $page . ' / ' . $pages . '</div>';
+        $summary = 'Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total) . ' ' . $this->esc($noun);
+        return $this->pagerHtml($base, $page, $pages, $summary);
     }
 
     /** A sub-tab strip; the active tab is plain, the rest link to their sibling sub-path. */

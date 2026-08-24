@@ -98,7 +98,7 @@ final class HvacSection extends AbstractPanelSection
             . '<th>Fan</th><th>RH</th><th>CO₂</th><th>Filter</th></tr></thead>';
         $table = $this->zoneSearchBox()
             . '<table class="alte-table" id="hvac-zones">' . $head . '<tbody>' . $rows . '</tbody></table>'
-            . $this->pager($total, $page, $pages);
+            . $this->pager($navBase . '/hvac', $total, $page, $pages);
 
         $body = $this->breadcrumbHtml($this->baseCrumbs($navBase, 'Climate / HVAC'))
             . $tiles
@@ -488,12 +488,12 @@ final class HvacSection extends AbstractPanelSection
         return $html . '</div>';
     }
 
-    private function pager(int $total, int $page, int $pages): string
+    private function pager(string $base, int $total, int $page, int $pages): string
     {
         $from = $total === 0 ? 0 : (($page - 1) * self::PER_PAGE) + 1;
         $to = min($page * self::PER_PAGE, $total);
-        return '<div class="alte-pager">Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total)
-            . ' zones · page ' . $page . ' / ' . $pages . '</div>';
+        $summary = 'Showing ' . $from . '&ndash;' . $to . ' of ' . number_format($total) . ' zones';
+        return $this->pagerHtml($base, $page, $pages, $summary);
     }
 
     /** Progressive-enhancement search box (client-side row filter); degrades to showing all rows. */

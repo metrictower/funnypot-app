@@ -175,8 +175,14 @@ final class Energy
             }
         }
 
-        // Budgeted comms-fail rows: 2-3 meters across the estate read FAIL, the rest OK.
-        $failIdx = $this->pickIndices(count($raw), $this->intIn(2, 3, 'commsfailk'), 'commsfail');
+        // Budgeted comms-fail rows: 2-3 meters across the estate read FAIL, the rest OK. Only circuit
+        // meters are eligible — both main incomers failing would zero the building load while circuits
+        // still read tens of kW, a self-contradiction that unmasks the page. Incomers are the first two.
+        $incomers = 2;
+        $failIdx = [];
+        foreach ($this->pickIndices(count($raw) - $incomers, $this->intIn(2, 3, 'commsfailk'), 'commsfail') as $ci) {
+            $failIdx[] = $ci + $incomers;
+        }
 
         $out = [];
         foreach ($raw as $i => $r) {

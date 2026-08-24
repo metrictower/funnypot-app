@@ -125,6 +125,55 @@ final class PanelWidgetsTest extends TestCase
         self::assertStringNotContainsString('<x>', $html);
         self::assertStringNotContainsString('<NW>', $html);
     }
+
+    // --- pagerHtml ---
+
+    public function test_pager_middle_page_has_both_prev_and_next_anchors(): void
+    {
+        $html = $this->s->pager('/panel/lighting', 3, 7, 'Showing 51&ndash;75 of 169 groups');
+        self::assertStringContainsString('href="/panel/lighting/p2"', $html);   // prev -> page-1
+        self::assertStringContainsString('href="/panel/lighting/p4"', $html);   // next -> page+1
+        self::assertStringContainsString('‹ prev', $html);
+        self::assertStringContainsString('next ›', $html);
+        self::assertStringContainsString('page 3 / 7', $html);
+        self::assertStringContainsString('Showing 51&ndash;75 of 169 groups', $html);
+    }
+
+    public function test_pager_first_page_has_no_prev_link(): void
+    {
+        $html = $this->s->pager('/panel/hvac', 1, 4);
+        self::assertStringNotContainsString('/panel/hvac/p0', $html);
+        self::assertSame(0, preg_match('#<a[^>]*>‹ prev</a>#', $html));  // prev is inert text, not a link
+        self::assertStringContainsString('href="/panel/hvac/p2"', $html); // next still links
+    }
+
+    public function test_pager_last_page_has_no_next_link(): void
+    {
+        $html = $this->s->pager('/panel/hvac', 4, 4);
+        self::assertStringContainsString('href="/panel/hvac/p3"', $html);  // prev links
+        self::assertSame(0, preg_match('#<a[^>]*>next ›</a>#', $html));     // next is inert text, not a link
+        self::assertStringNotContainsString('/panel/hvac/p5', $html);
+    }
+
+    public function test_pager_clamps_out_of_range_page_to_valid_ends(): void
+    {
+        // Below 1 clamps to page 1 (no prev); above total clamps to the last page (no next).
+        $low = $this->s->pager('/panel/energy/meters', -3, 5);
+        self::assertStringContainsString('page 1 / 5', $low);
+        self::assertSame(0, preg_match('#<a[^>]*>‹ prev</a>#', $low));
+
+        $high = $this->s->pager('/panel/energy/meters', 99, 5);
+        self::assertStringContainsString('page 5 / 5', $high);
+        self::assertSame(0, preg_match('#<a[^>]*>next ›</a>#', $high));
+    }
+
+    public function test_pager_href_is_slugged_and_structurally_inert(): void
+    {
+        // A base carrying an injection attempt slugs down to an inert sibling path; nothing breaks out.
+        $html = $this->s->pager('/panel/"><script>/list', 1, 2);
+        self::assertStringNotContainsString('<script>', $html);
+        self::assertStringContainsString('href="/panel/script/list/p2"', $html);
+    }
 }
 
 /**
@@ -161,6 +210,11 @@ final class WidgetProbeSkin extends AbstractSkin
     public function spark(array $points): string
     {
         return $this->sparklineHtml($points);
+    }
+
+    public function pager(string $basePath, int $page, int $totalPages, string $summary = ''): string
+    {
+        return $this->pagerHtml($basePath, $page, $totalPages, $summary);
     }
 
     public function crumbs(array $crumbs): string

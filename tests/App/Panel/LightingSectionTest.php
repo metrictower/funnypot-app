@@ -272,6 +272,24 @@ final class LightingSectionTest extends TestCase
         self::assertStringNotContainsString('<script>alert(1)', $html);
     }
 
+    public function test_deep_list_page_renders_that_pages_slice_with_reachable_pager(): void
+    {
+        $lx = Lighting::fromSeed(2);
+        $groups = $lx->groups();
+        self::assertGreaterThan(50, count($groups), 'seed 2 must have >2 pages of groups for this test');
+
+        $p2 = (new LightingSection())->render($this->route('', '', '', '', 2), VisualPersona::fromSeed(2), '/panel');
+
+        // Page 2 shows the 26th..50th group, not the first-page rows.
+        self::assertStringContainsString('href="/panel/lighting/' . $groups[25]['id'] . '"', $p2);
+        self::assertStringNotContainsString('href="/panel/lighting/' . $groups[0]['id'] . '"', $p2);
+
+        // The pager on a deep page is reachable both ways: prev -> p1, next -> p3.
+        self::assertStringContainsString('href="/panel/lighting/p1"', $p2);
+        self::assertStringContainsString('href="/panel/lighting/p3"', $p2);
+        self::assertStringContainsString('page 2 / ', $p2);
+    }
+
     public function test_no_public_ip_in_rendered_pages(): void
     {
         $s = new LightingSection();

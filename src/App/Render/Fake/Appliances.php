@@ -102,6 +102,21 @@ final class Appliances
         return FrozenClock::ymdFromDays(FrozenClock::nowDays() - $daysBack);
     }
 
+    /**
+     * The building's real floor codes (B1..G..Roof), so an elevator trip log only ever names floors that
+     * exist for this seed — a ghost floor an attacker can't find in the site would unmask the page.
+     *
+     * @return list<string>
+     */
+    public function floorCodes(): array
+    {
+        $codes = [];
+        foreach ($this->bld->floors() as $f) {
+            $codes[] = (string) $f['code'];
+        }
+        return $codes;
+    }
+
     // --- kitchens (the Building rooms coffee/vending/kitchen appliances live in) ---
 
     /**
