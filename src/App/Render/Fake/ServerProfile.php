@@ -27,6 +27,9 @@ final class ServerProfile
     /** @var int */
     private $seed;
 
+    // bcrypt's own base64 variant: '.' and '/' first, then A-Z a-z 0-9 (64 symbols, no '+').
+    private const BCRYPT_ALPHABET = './ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
     private function __construct(int $seed)
     {
         $this->seed = $seed;
@@ -59,6 +62,22 @@ final class ServerProfile
     private function hex(int $len, string $salt): string
     {
         return substr(hash('sha256', $this->seed . '|hex|' . $salt), 0, $len);
+    }
+
+    /** A run of characters from $alphabet, as long as needed, drawn from a seeded byte stream. */
+    private function chars(int $len, string $alphabet, string $salt): string
+    {
+        $m = strlen($alphabet);
+        $out = '';
+        $block = 0;
+        while (strlen($out) < $len) {
+            $stream = hash('sha256', $this->seed . '|chars|' . $salt . '|' . $block);
+            for ($k = 0; $k < 64 && strlen($out) < $len; $k += 2) {
+                $out .= $alphabet[hexdec(substr($stream, $k, 2)) % $m];
+            }
+            $block++;
+        }
+        return $out;
     }
 
     // --- correlated hardware identity (frozen) ---
@@ -112,12 +131,16 @@ final class ServerProfile
     /** @return array{model:string,sockets:int,coresPerSocket:int,threads:int,cores:int} */
     public function cpu(): array
     {
-        // Flagship: dual-socket 24c/48t each -> 48C / 96T.
         $model = $this->pick(
             ['Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz', 'Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz'],
             'cpu'
         );
-        return ['model' => $model, 'sockets' => 2, 'coresPerSocket' => 24, 'threads' => 96, 'cores' => 48];
+        // Core count follows the picked model (real Xeon Gold spec) so the sheet is self-consistent:
+        // 6342 = 24C/48T per socket; 6338 = 32C/64T per socket. Dual-socket, hyperthreaded.
+        $coresPerSocket = (strpos($model, '6338') !== false) ? 32 : 24;
+        $sockets = 2;
+        $cores = $sockets * $coresPerSocket;
+        return ['model' => $model, 'sockets' => $sockets, 'coresPerSocket' => $coresPerSocket, 'threads' => $cores * 2, 'cores' => $cores];
     }
 
     /**
@@ -173,6 +196,19 @@ final class ServerProfile
         return '10.0.' . $this->intIn(1, 250, 'ipc') . '.' . $this->intIn(2, 250, 'iph');
     }
 
+    /** RHEL-family distros (Rocky/RHEL/CentOS) log auth events to /var/log/secure; Debian-family use
+     *  /var/log/auth.log — the path must follow whichever OS this seed already picked. */
+    public function authLogPath(): string
+    {
+        $distro = $this->os()['distro'];
+        foreach (['Rocky', 'RHEL', 'CentOS', 'Red Hat'] as $needle) {
+            if (strpos($distro, $needle) !== false) {
+                return '/var/log/secure';
+            }
+        }
+        return '/var/log/auth.log';
+    }
+
     // --- live-ish gauges (drift per coarse time bucket, deterministic within it) ---
 
     private function gauge(int $min, int $max, string $salt, int $bucket): int
@@ -186,7 +222,7 @@ final class ServerProfile
      */
     public function liveStats(int $bucket = 0): array
     {
-        $cores = 48;
+        $cores = $this->cpu()['cores'];
         $cpuPct = $this->gauge(6, 74, 'cpu', $bucket);
         // load correlates with cpu% and core count (critique A.3): load1 ~ cpu% x cores x jitter.
         $load1 = round(($cpuPct / 100) * $cores * (0.6 + ($this->gauge(0, 80, 'j', $bucket) / 100)), 2);
@@ -220,6 +256,10 @@ final class ServerProfile
      * Dated backup archives, newest first, every name carrying an archive extension so the link routes
      * to the inert decoy-archive handler. Sizes/dates are the bait; the headline full backup is huge.
      *
+     * Each row's filename date and its "X ago" label are both derived from the SAME seeded elapsed-
+     * seconds offset off FrozenClock::EPOCH, so they can never disagree or land in the future — the two
+     * facts describe the same instant instead of being computed independently (critique root-cause B).
+     *
      * @return list<array{name:string,size:string,age:string}>
      */
     public function backups(): array
@@ -227,11 +267,30 @@ final class ServerProfile
         $user = $this->pick(['brightpk', 'nordicav', 'lumensta', 'apexfit', 'maplegrv'], 'bkuser');
         $db = $this->pick(['wp_prod', 'app_production', 'shop_live', 'crm_prod', 'billing'], 'bkdb');
         $out = [];
-        $ages = ['2h ago', '26h ago', '3 days ago', '9 days ago', '16 days ago', '31 days ago', '38 days ago'];
-        foreach ($ages as $i => $age) {
+        // Non-overlapping elapsed-seconds bands, strictly increasing, so row order stays newest-first
+        // regardless of the seeded jitter within each band.
+        $bands = [
+            [3600, 3 * 3600],           // ~1-3h ago
+            [20 * 3600, 30 * 3600],     // ~20-30h ago
+            [2 * 86400, 4 * 86400],     // 2-4 days ago
+            [7 * 86400, 11 * 86400],    // 7-11 days ago
+            [14 * 86400, 18 * 86400],   // 14-18 days ago
+            [28 * 86400, 34 * 86400],   // 28-34 days ago
+            [35 * 86400, 42 * 86400],   // 35-42 days ago
+        ];
+        foreach ($bands as $i => $band) {
+            $ago = $this->intIn($band[0], $band[1], 'bkage' . $i);
+            $epoch = FrozenClock::EPOCH - $ago;
+            [$y, $mo, $d] = FrozenClock::civilFromDays(intdiv($epoch, 86400));
+            $secOfDay = $epoch % 86400;
+            $h = intdiv($secOfDay, 3600);
+            $min = intdiv($secOfDay % 3600, 60);
+            $s = $secOfDay % 60;
+            $age = $this->ageLabel($ago);
+
             $gbTenths = $this->intIn(9, 118, 'bkfull' . $i);     // 0.9 - 11.8 GB
             $out[] = [
-                'name' => sprintf('backup-%d.%d.2026_%02d-%02d-%02d_%s.tar.gz', 8 - ($i % 8) + 1, ($i * 3) % 28 + 1, 2, 30, ($i * 7) % 60, $user),
+                'name' => sprintf('backup-%d.%d.%d_%02d-%02d-%02d_%s.tar.gz', $mo, $d, $y, $h, $min, $s, $user),
                 'size' => number_format($gbTenths / 10, 1) . ' GB',
                 'age' => $age,
             ];
@@ -245,6 +304,15 @@ final class ServerProfile
             }
         }
         return $out;
+    }
+
+    /** A short "time ago" label for an elapsed-seconds span, agreeing with the epoch it derives from. */
+    private function ageLabel(int $seconds): string
+    {
+        if ($seconds < 2 * 86400) {
+            return intdiv($seconds, 3600) . 'h ago';
+        }
+        return intdiv($seconds, 86400) . ' days ago';
     }
 
     /** A giant row count for a loot table so "Browse" is a bottomless scroll (critique D2). */
@@ -274,7 +342,9 @@ final class ServerProfile
                 $p[0],
                 $p[0] . '@' . $domain,
                 $p[1],
-                '$2y$10$' . substr(hash('sha256', $this->seed . '|bcrypt|' . $p[0]), 0, 22),
+                // Real bcrypt shape: cost + a 53-char run from bcrypt's own base64 alphabet (22-char
+                // salt + 31-char hash) — the exact format the attacker who'd try to crack this expects.
+                '$2y$10$' . $this->chars(53, self::BCRYPT_ALPHABET, 'bcrypt|' . $p[0]),
             ];
         }
         return $rows;

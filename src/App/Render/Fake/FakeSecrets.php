@@ -120,19 +120,44 @@ final class FakeSecrets
         return substr($full, 0, $front) . '****' . substr($full, -4);
     }
 
-    private function created(string $salt): string
+    /**
+     * "Created" as days-before-FrozenClock-today, so it can never land in the future. Returns both the
+     * date string and the day count — lastUsed() needs the count to stay on-or-after this same instant.
+     *
+     * @return array{0:string,1:int}
+     */
+    private function created(string $salt): array
     {
-        return sprintf('%04d-%02d-%02d', $this->intIn(2024, 2026, 'y' . $salt), $this->intIn(1, 12, 'm' . $salt), $this->intIn(1, 28, 'd' . $salt));
+        $daysAgo = $this->intIn(30, 730, 'age' . $salt);
+        $days = FrozenClock::nowDays() - $daysAgo;
+        return [FrozenClock::ymdFromDays($days), $daysAgo];
     }
 
-    private function lastUsed(string $salt): string
+    /** lastUsed lands somewhere between created and today (never before created) — or "Never". */
+    private function lastUsed(string $salt, int $createdDaysAgo): string
     {
-        $when = [
-            '2 minutes ago', '17 minutes ago', '3 hours ago', 'yesterday', '4 days ago',
-            '2 weeks ago', 'Never',
-            sprintf('%04d-%02d-%02d', 2025, $this->intIn(1, 12, 'lm' . $salt), $this->intIn(1, 28, 'ld' . $salt)),
-        ];
-        return $this->pick($when, 'lu' . $salt);
+        if ($this->h('never' . $salt) % 8 === 0) {
+            return 'Never';
+        }
+        $usedDaysAgo = $this->intIn(0, $createdDaysAgo, 'lu' . $salt);
+        if ($usedDaysAgo === 0) {
+            $minutesAgo = $this->intIn(1, 1439, 'lum' . $salt);
+            if ($minutesAgo < 60) {
+                return $minutesAgo . ' minute' . ($minutesAgo === 1 ? '' : 's') . ' ago';
+            }
+            $hoursAgo = intdiv($minutesAgo, 60);
+            return $hoursAgo . ' hour' . ($hoursAgo === 1 ? '' : 's') . ' ago';
+        }
+        if ($usedDaysAgo === 1) {
+            return 'yesterday';
+        }
+        if ($usedDaysAgo < 14) {
+            return $usedDaysAgo . ' days ago';
+        }
+        if ($usedDaysAgo < 60) {
+            return intdiv($usedDaysAgo, 7) . ' weeks ago';
+        }
+        return FrozenClock::ymdFromDays(FrozenClock::nowDays() - $usedDaysAgo);
     }
 
     // --- panel data ---
@@ -156,11 +181,12 @@ final class FakeSecrets
         for ($i = 0; $i < $count; $i++) {
             $provider = $providers[$this->h('prov' . $i) % count($providers)];
             $c = $this->forProvider($provider, (string) $i);
+            [$createdYmd, $createdDaysAgo] = $this->created((string) $i);
             $rows[] = [
                 'label' => $labels[$i % count($labels)] . ' (' . $provider . ')',
                 'masked' => $this->mask($c['full'], $c['front']),
-                'created' => $this->created((string) $i),
-                'lastUsed' => $this->lastUsed((string) $i),
+                'created' => $createdYmd,
+                'lastUsed' => $this->lastUsed((string) $i, $createdDaysAgo),
                 'fullInert' => $c['full'],
             ];
         }

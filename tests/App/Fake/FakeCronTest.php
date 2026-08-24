@@ -83,6 +83,27 @@ final class FakeCronTest extends TestCase
         self::assertStringContainsString('backup.sh', $procText);
     }
 
+    public function test_miner_process_appears_when_miner_info_is_supplied(): void
+    {
+        $miner = ['algo' => 'KawPow', 'pool' => 'rvn.2miners.com:6060', 'wallet' => '0xabc123'];
+        foreach ([1, 2, 99, 12345, 987654321] as $seed) {
+            $rows = FakeCron::fromSeed($seed)->processes($miner);
+            $procText = implode("\n", array_column($rows, 'command'));
+            self::assertStringContainsString('lolMiner', $procText);
+            self::assertStringContainsString('KAWPOW', $procText);
+            self::assertStringContainsString('rvn.2miners.com:6060', $procText);
+            self::assertStringContainsString('0xabc123', $procText);
+            // Guaranteed inside the minimum row-count slice, like the other juicy anchors.
+            self::assertGreaterThanOrEqual(13, count($rows));
+        }
+    }
+
+    public function test_no_miner_process_when_no_miner_info_supplied(): void
+    {
+        $procText = implode("\n", array_column(FakeCron::fromSeed(4242)->processes(), 'command'));
+        self::assertStringNotContainsString('lolMiner', $procText);
+    }
+
     public function test_no_real_routable_ips(): void
     {
         // Any IP a command reaches must be RFC1918/TEST-NET. Grab every dotted quad and check it.

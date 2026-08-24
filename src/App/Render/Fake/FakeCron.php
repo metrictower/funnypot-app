@@ -180,12 +180,17 @@ final class FakeCron
      * 12-24 rows of a plausible `ps aux`: PID (monotonic ascending), owner, %CPU, %MEM, full
      * command-line. Real daemons (mariadbd, nginx, php-fpm, redis, dockerd, postgres, node) plus a
      * couple of juicy ones — a backup script with --key=REDACTED, a python reading
-     * --config /etc/app/secrets.yaml, an RFC1918 rsync peer — kept inside the first 12 so the
-     * minimum slice still shows them.
+     * --config /etc/app/secrets.yaml, an RFC1918 rsync peer — kept inside the first 12 (13 when a
+     * miner row is also injected) so the minimum slice still shows them.
      *
+     * $miner, when non-empty, corroborates a "Miner detected: ACTIVE" card elsewhere on the page: it
+     * carries that card's own algo/pool/wallet (keys 'algo','pool','wallet') so this ps table shows a
+     * matching miner process instead of leaving the alert uncorroborated by any running process.
+     *
+     * @param array{algo?:string,pool?:string,wallet?:string} $miner
      * @return list<array{pid:string,user:string,cpu:string,mem:string,command:string}>
      */
-    public function processes(): array
+    public function processes(array $miner = []): array
     {
         $b = $this->bucket();
 
@@ -219,7 +224,13 @@ final class FakeCron
             ['root', 0, 5, 2, 8, '/usr/lib/postfix/sbin/master -w'],
         ];
 
-        $count = $this->intIn(12, 24, 'proccount');
+        if ($miner !== []) {
+            // Inside the guaranteed first-13 slice (right after the secrets.yaml python line) so it
+            // survives even the minimum row count — the alert always has a process backing it up.
+            array_splice($pool, 8, 0, [$this->minerProcessRow($miner)]);
+        }
+
+        $count = $this->intIn($miner !== [] ? 13 : 12, 24, 'proccount');
         $pid = 1;
         $rows = [];
         for ($i = 0; $i < $count; $i++) {
@@ -235,5 +246,25 @@ final class FakeCron
             $pid += $this->intIn(3, 900, 'pidgap' . $i);
         }
         return $rows;
+    }
+
+    /**
+     * A GPU-miner process row matching the "Miner detected" card's own algo/pool/wallet. lolMiner
+     * supports both Etchash and KawPow, so one binary stays coherent whichever coin the card picked.
+     * A GPU miner's controller process is CPU-light (the hashing runs on the cards) — modest %CPU/%MEM.
+     *
+     * @param array{algo?:string,pool?:string,wallet?:string} $miner
+     * @return array{0:string,1:int,2:int,3:int,4:int,5:string}
+     */
+    private function minerProcessRow(array $miner): array
+    {
+        $algo = strtoupper($miner['algo'] ?? 'ETCHASH');
+        $command = sprintf(
+            '/opt/miner/lolMiner --algo %s --pool %s --wallet %s.rig01 --log',
+            $algo,
+            $miner['pool'] ?? '',
+            $miner['wallet'] ?? ''
+        );
+        return ['root', 20, 180, 10, 60, $command];
     }
 }

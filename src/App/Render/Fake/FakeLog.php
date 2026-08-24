@@ -104,25 +104,24 @@ final class FakeLog
         );
     }
 
-    // --- timestamps (monotonic within a call; identity ignores wall-clock) ---
+    // --- timestamps (walk backward from FrozenClock "now"; identity ignores wall-clock) ---
 
     /** @var list<string> */
     private static $months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     /**
-     * Split an elapsed-seconds counter into a valid month/day/H:M:S. 28-day months keep every date valid
-     * regardless of how far the counter runs, so a 20k-line tail never prints an impossible day.
+     * Civil month/day/H:M:S for an absolute epoch, off FrozenClock's Hinnant conversion — every log
+     * line's date is a real calendar date near "now", never a span unrelated to the frozen instant.
      *
      * @return array{month:string,day:int,h:int,m:int,s:int}
      */
-    private function clock(int $t): array
+    private function clockAt(int $epoch): array
     {
-        $baseDayIndex = $this->intIn(0, 300, 'baseday');
-        $dayIndex = $baseDayIndex + intdiv($t, 86400);
-        $secOfDay = $t % 86400;
+        $c = FrozenClock::civilFromDays(intdiv($epoch, 86400));
+        $secOfDay = $epoch % 86400;
         return [
-            'month' => self::$months[intdiv($dayIndex, 28) % 12],
-            'day' => ($dayIndex % 28) + 1,
+            'month' => self::$months[$c[1] - 1],
+            'day' => $c[2],
             'h' => intdiv($secOfDay, 3600),
             'm' => intdiv($secOfDay % 3600, 60),
             's' => $secOfDay % 60,
@@ -130,17 +129,26 @@ final class FakeLog
     }
 
     /** Syslog stamp: "Aug 23 14:32:07" — no year, space-padded day. */
-    private function tsSyslog(int $t): string
+    private function tsSyslog(int $epoch): string
     {
-        $c = $this->clock($t);
+        $c = $this->clockAt($epoch);
         return sprintf('%s %2d %02d:%02d:%02d', $c['month'], $c['day'], $c['h'], $c['m'], $c['s']);
     }
 
     /** CLF stamp: "[23/Aug/2026:14:32:07 +0000]" — zero-padded day, fixed year. */
-    private function tsClf(int $t): string
+    private function tsClf(int $epoch): string
     {
-        $c = $this->clock($t);
-        return sprintf('[%02d/%s/2026:%02d:%02d:%02d +0000]', $c['day'], $c['month'], $c['h'], $c['m'], $c['s']);
+        $c = FrozenClock::civilFromDays(intdiv($epoch, 86400));
+        $secOfDay = $epoch % 86400;
+        return sprintf(
+            '[%02d/%s/%04d:%02d:%02d:%02d +0000]',
+            $c[2],
+            self::$months[$c[1] - 1],
+            $c[0],
+            intdiv($secOfDay, 3600),
+            intdiv($secOfDay % 3600, 60),
+            $secOfDay % 60
+        );
     }
 
     /** Correct-shape but INERT ssh key fingerprint: 43 base64url chars (32 bytes, no padding). */
@@ -165,11 +173,19 @@ final class FakeLog
         }
         $host = $this->hostname();
         $baitOffset = $this->h('baitoff') % 300;   // guarantees ~1 bait per 300 lines
-        $out = [];
-        $t = $this->intIn(0, 900, 'authstart');
+        // Walk the elapsed-seconds counter forward first so the total span is known, then anchor the
+        // LAST line to FrozenClock::EPOCH ("now") and derive every earlier line by walking back from
+        // it — the newest tail line is always recent, never a span unrelated to the frozen instant.
+        $t = 0;
+        $offsets = [];
         for ($i = 0; $i < $lines; $i++) {
             $t += $this->intIn(2, 55, 'ag|' . $i);
-            $ts = $this->tsSyslog($t);
+            $offsets[] = $t;
+        }
+        $span = $t;
+        $out = [];
+        for ($i = 0; $i < $lines; $i++) {
+            $ts = $this->tsSyslog(FrozenClock::EPOCH - ($span - $offsets[$i]));
             $pid = $this->intIn(2000, 32767, 'pid|' . $i);
             $port = $this->intIn(20000, 65000, 'port|' . $i);
             $ip = $this->privateIp('aip|' . $i);
@@ -242,10 +258,17 @@ final class FakeLog
             'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
             'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.0; +https://openai.com/gptbot',
         ];
-        $out = [];
-        $t = $this->intIn(0, 900, 'accstart');
+        // Same backward-from-"now" anchoring as authLog(): walk elapsed seconds forward to find the
+        // span, then the last line lands on FrozenClock::EPOCH and every earlier line walks back from it.
+        $t = 0;
+        $offsets = [];
         for ($i = 0; $i < $lines; $i++) {
             $t += $this->intIn(0, 12, 'xg|' . $i);
+            $offsets[] = $t;
+        }
+        $span = $t;
+        $out = [];
+        for ($i = 0; $i < $lines; $i++) {
             $ip = $this->privateIp('xip|' . $i);
             $path = $paths[$this->h('path|' . $i) % count($paths)];
             $method = (in_array($path, $postPaths, true) && $this->h('pm|' . $i) % 100 < 65) ? 'POST' : 'GET';
@@ -255,7 +278,7 @@ final class FakeLog
             $out[] = sprintf(
                 '%s - - %s "%s %s HTTP/1.1" %d %s "-" "%s"',
                 $ip,
-                $this->tsClf($t),
+                $this->tsClf(FrozenClock::EPOCH - ($span - $offsets[$i])),
                 $method,
                 $path,
                 $status,

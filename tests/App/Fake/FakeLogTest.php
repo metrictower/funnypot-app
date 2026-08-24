@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Fake;
 
 use Funnypot\App\Render\Fake\FakeLog;
+use Funnypot\App\Render\Fake\FrozenClock;
 use PHPUnit\Framework\TestCase;
 
 final class FakeLogTest extends TestCase
@@ -127,6 +128,32 @@ final class FakeLogTest extends TestCase
         foreach ($baits as $l) {
             // 43-char unpadded base64url fingerprint after "SHA256:".
             self::assertMatchesRegularExpression('#SHA256:[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])#', $l);
+        }
+    }
+
+    /** @return list<string> the 12 Jan-Dec syslog month abbreviations, matching FakeLog's own list. */
+    private static function months(): array
+    {
+        return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    }
+
+    public function test_auth_log_newest_line_is_anchored_to_frozen_now(): void
+    {
+        // The offsets are built so the LAST line lands exactly on FrozenClock::EPOCH — a live "now"
+        // tail, not a span anchored to an unrelated random offset.
+        $expected = sprintf('%s %2d %s', self::months()[FrozenClock::MONTH - 1], FrozenClock::DAY, FrozenClock::clock(FrozenClock::EPOCH));
+        foreach ([1, 2, 4242, 987654321] as $seed) {
+            $lines = FakeLog::fromSeed($seed)->authLog(500);
+            self::assertStringStartsWith($expected, end($lines), "seed {$seed}: newest auth.log line must be frozen \"now\"");
+        }
+    }
+
+    public function test_access_log_newest_line_is_anchored_to_frozen_now(): void
+    {
+        $expected = sprintf('[%02d/%s/%04d:%s +0000]', FrozenClock::DAY, self::months()[FrozenClock::MONTH - 1], FrozenClock::YEAR, FrozenClock::clock(FrozenClock::EPOCH));
+        foreach ([1, 2, 4242, 987654321] as $seed) {
+            $lines = FakeLog::fromSeed($seed)->accessLog(200);
+            self::assertStringContainsString($expected, end($lines), "seed {$seed}: newest access.log line must be frozen \"now\"");
         }
     }
 

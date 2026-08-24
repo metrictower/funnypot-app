@@ -13,14 +13,16 @@ final class ProcessesSection extends AbstractPanelSection
     public function render(array $route, VisualPersona $persona, string $navBase): string
     {
         $seed = $persona->seed();
+        // Miner lure: the box looks already-compromised and actively mining — a rabbit hole in itself.
+        // Read the summary first so the process table below can inject a matching process line — the
+        // alert must never appear above a ps table with no miner in it (that mismatch is a tell).
+        $mr = MinerRig::fromSeed($seed);
+        $s = $mr->summary();
         $rows = [];
-        foreach (FakeCron::fromSeed($seed)->processes() as $p) {
+        foreach (FakeCron::fromSeed($seed)->processes(['algo' => $s['algo'], 'pool' => $s['pool'], 'wallet' => $s['wallet']]) as $p) {
             $rows[] = [$p['pid'], $p['user'], $p['cpu'], $p['mem'], $p['command']];
         }
         $ps = $this->tableHtml(['PID', 'User', '%CPU', '%MEM', 'Command'], $rows, ' class="alte-table alte-mono"');
-        // Miner lure: the box looks already-compromised and actively mining — a rabbit hole in itself.
-        $mr = MinerRig::fromSeed($seed);
-        $s = $mr->summary();
         $miner = $this->kvTableHtml([
             ['Status', 'ACTIVE — ' . $s['coin'] . ' (' . $s['algo'] . ')'],
             ['Pool', $s['pool']],

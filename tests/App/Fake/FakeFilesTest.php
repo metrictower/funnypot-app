@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Fake;
 
 use Funnypot\App\Render\Fake\FakeFiles;
+use Funnypot\App\Render\Fake\FrozenClock;
 use PHPUnit\Framework\TestCase;
 
 final class FakeFilesTest extends TestCase
@@ -92,6 +93,40 @@ final class FakeFilesTest extends TestCase
             if (in_array($r['name'], ['wp-admin', 'wp-content', 'wp-includes', '.git', '.aws'], true)) {
                 self::assertTrue($r['isDir'], $r['name'] . ' should be a directory');
                 self::assertFalse($r['isDownload']);
+            }
+        }
+    }
+
+    /**
+     * A dated backup snapshot's own filename IS the Modified fact — the two must never disagree
+     * (a listing where "Modified" contradicts the date baked into the name is an instant tell).
+     */
+    public function test_modified_agrees_with_the_date_baked_into_the_filename(): void
+    {
+        $found = 0;
+        for ($seed = 1; $seed <= 50; $seed++) {
+            foreach (FakeFiles::fromSeed($seed)->listing('/backups') as $r) {
+                if (preg_match('/(\d{4})-(\d{2})-(\d{2})/', $r['name'], $m) === 1
+                    || preg_match('/(\d{4})(\d{2})(\d{2})/', $r['name'], $m) === 1) {
+                    $found++;
+                    $expected = sprintf('%04d-%02d-%02d', (int) $m[1], (int) $m[2], (int) $m[3]);
+                    self::assertStringStartsWith($expected, $r['modified'], "{$r['name']}: Modified must match its own filename date");
+                }
+            }
+        }
+        self::assertGreaterThan(0, $found, 'expected at least one dated backup filename across seeds');
+    }
+
+    public function test_modified_is_never_in_the_future(): void
+    {
+        $today = FrozenClock::todayYmd();
+        for ($seed = 1; $seed <= 50; $seed++) {
+            $ff = FakeFiles::fromSeed($seed);
+            foreach ($ff->dirs() as $dir) {
+                foreach ($ff->listing($dir) as $r) {
+                    $modifiedDay = substr($r['modified'], 0, 10);
+                    self::assertLessThanOrEqual($today, $modifiedDay, "{$dir}/{$r['name']} Modified is in the future");
+                }
             }
         }
     }

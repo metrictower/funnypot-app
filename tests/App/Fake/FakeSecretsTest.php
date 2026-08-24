@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Fake;
 
 use Funnypot\App\Render\Fake\FakeSecrets;
+use Funnypot\App\Render\Fake\FrozenClock;
 use PHPUnit\Framework\TestCase;
 
 final class FakeSecretsTest extends TestCase
@@ -79,6 +80,27 @@ final class FakeSecretsTest extends TestCase
         }
         foreach (['DB_PASSWORD', 'JWT_SECRET', 'AWS_SECRET_ACCESS_KEY', 'STRIPE_SECRET_KEY'] as $required) {
             self::assertContains($required, $names);
+        }
+    }
+
+    /** created must never be in the future; lastUsed must never be before created (or "Never"). */
+    public function test_created_is_capped_at_today_and_last_used_is_never_before_created(): void
+    {
+        $today = FrozenClock::todayYmd();
+        for ($seed = 1; $seed <= 100; $seed++) {
+            foreach (FakeSecrets::fromSeed($seed)->keys() as $r) {
+                self::assertLessThanOrEqual($today, $r['created'], "seed {$seed}: created is in the future");
+                if ($r['lastUsed'] === 'Never') {
+                    continue;
+                }
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $r['lastUsed']) === 1) {
+                    // An absolute lastUsed date must sit on/after created and on/before today.
+                    self::assertGreaterThanOrEqual($r['created'], $r['lastUsed'], "seed {$seed}: lastUsed before created");
+                    self::assertLessThanOrEqual($today, $r['lastUsed'], "seed {$seed}: lastUsed in the future");
+                }
+                // Relative labels ("N minutes/hours/days/weeks ago", "yesterday") are always "now or
+                // later" by construction; only the absolute-date branch needs the explicit check above.
+            }
         }
     }
 

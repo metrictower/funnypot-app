@@ -186,12 +186,32 @@ final class FakeFiles
         return $bytes . ' B';
     }
 
+    /**
+     * A dated snapshot's filename (e.g. "..._2026-08-14..." or "..._20260814...") IS the fact the
+     * Modified column reports — deriving it from the same digits keeps the two from disagreeing.
+     * Names with no embedded date fall back to a seeded day in the current month, clamped through
+     * FrozenClock so it never lands in the future.
+     */
     private function modifiedFor(string $name): string
     {
-        $month = $this->pick(['07', '08'], 'mon|' . $name);
-        $day = $this->intIn(1, 22, 'day|' . $name);
+        if (preg_match('/(\d{4})-(\d{2})-(\d{2})/', $name, $m) === 1
+            || preg_match('/(\d{4})(\d{2})(\d{2})/', $name, $m) === 1) {
+            $year = (int) $m[1];
+            $month = (int) $m[2];
+            $day = (int) $m[3];
+            $days = FrozenClock::daysFromCivil($year, $month, $day);
+        } else {
+            $month = (int) $this->pick(['07', '08'], 'mon|' . $name);
+            $day = $this->intIn(1, 22, 'day|' . $name);
+            $days = FrozenClock::daysFromCivil(FrozenClock::YEAR, $month, $day);
+        }
+        // Never in the future, whichever source the date came from.
+        if ($days > FrozenClock::nowDays()) {
+            $days = FrozenClock::nowDays();
+        }
+        [$year, $month, $day] = FrozenClock::civilFromDays($days);
         $hour = $this->h('hr|' . $name) % 24;
         $min = $this->h('mn|' . $name) % 60;
-        return sprintf('2026-%s-%02d %02d:%02d', $month, $day, $hour, $min);
+        return sprintf('%04d-%02d-%02d %02d:%02d', $year, $month, $day, $hour, $min);
     }
 }
