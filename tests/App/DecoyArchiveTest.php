@@ -90,6 +90,27 @@ final class DecoyArchiveTest extends TestCase
         self::assertStringStartsWith('BZh', (string) file_get_contents($this->decoyDir() . '/backup.tar.bz2'));
     }
 
+    /**
+     * Archive decoys are deep nested chains grown to ~1MB so extraction wastes an attacker's time.
+     * The band's floor keeps the depth/junk in place; the ceiling caps the served payload so the
+     * decoy can never become a bandwidth-amplification vector when hammered.
+     */
+    public function test_archive_decoys_are_about_one_megabyte(): void
+    {
+        foreach (['backup.zip', 'backup.tar.gz', 'backup.tar', 'backup.tar.bz2'] as $file) {
+            $size = (int) filesize($this->decoyDir() . '/' . $file);
+            self::assertGreaterThan(800_000, $size, "$file too small — nesting/junk missing");
+            self::assertLessThan(1_400_000, $size, "$file too large — served-payload cap");
+        }
+    }
+
+    /** Text decoys stay small: a 1MB cert/key would itself be a fingerprint tell. */
+    public function test_pem_and_cer_stay_small(): void
+    {
+        self::assertLessThan(20_000, (int) filesize($this->decoyDir() . '/backup.pem'));
+        self::assertLessThan(20_000, (int) filesize($this->decoyDir() . '/backup.cer'));
+    }
+
     public function test_sql_decoy_is_plausible_dump_text_not_binary(): void
     {
         $sql = (string) file_get_contents($this->decoyDir() . '/backup.sql');
