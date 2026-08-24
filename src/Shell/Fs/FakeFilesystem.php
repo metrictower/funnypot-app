@@ -42,6 +42,8 @@ class FakeFilesystem
     /** @var array<string,Node[]> pinned nodes grouped by parent dir */
     private array $pinnedByParent = [];
 
+    private ?Overlay $overlay = null;
+
     public function __construct(
         protected string $hostSeedBytes,
         protected string $role,
@@ -55,6 +57,16 @@ class FakeFilesystem
         foreach ($this->pinnedNodes as $path => $node) {
             $this->pinnedByParent[PathCanon::parent($path)][] = $node;
         }
+    }
+
+    /** Return a copy of this filesystem with a session overlay applied (base generation is unchanged). */
+    public function withOverlay(Overlay $overlay): self
+    {
+        $new = clone $this;
+        $new->overlay = $overlay;
+        $new->childCache = [];
+
+        return $new;
     }
 
     /** @return Node[] */
@@ -90,6 +102,15 @@ class FakeFilesystem
     public function read(string $path): string
     {
         $canon = PathCanon::canonical($path);
+        if ($this->overlay !== null) {
+            if ($this->overlay->isRemoved($canon)) {
+                throw PathNotFound::for($path);
+            }
+            $ob = $this->overlay->fileBytes($canon);
+            if ($ob !== null) {
+                return $ob;
+            }
+        }
         if (isset($this->pinnedContent[$canon])) {
             return $this->pinnedContent[$canon];
         }
@@ -152,6 +173,15 @@ class FakeFilesystem
         if ($canon === '/') {
             return new Node('/', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null);
         }
+        if ($this->overlay !== null) {
+            if ($this->overlay->isRemoved($canon)) {
+                return null;
+            }
+            $on = $this->overlay->node($canon, FrozenClock::epoch());
+            if ($on !== null) {
+                return $on;
+            }
+        }
         if (isset($this->pinnedNodes[$canon])) {
             return $this->pinnedNodes[$canon];
         }
@@ -208,6 +238,20 @@ class FakeFilesystem
         foreach ($this->pinnedByParent[$canonDir] ?? [] as $pinned) {
             $result = array_values(array_filter($result, fn (Node $n) => $n->name !== $pinned->name));
             $result[] = $pinned;
+        }
+
+        // Session overlay: drop tombstoned children (base order preserved), then append created entries.
+        if ($this->overlay !== null) {
+            $overlay = $this->overlay;
+            $now = FrozenClock::epoch();
+            $result = array_values(array_filter($result, static function (Node $n) use ($overlay, $canonDir) {
+                $childCanon = $canonDir === '/' ? '/' . $n->name : $canonDir . '/' . $n->name;
+                return !$overlay->isRemoved($childCanon);
+            }));
+            foreach ($overlay->createdChildren($canonDir, $now) as $node) {
+                $result = array_values(array_filter($result, fn (Node $n) => $n->name !== $node->name));
+                $result[] = $node;
+            }
         }
 
         $this->childCache[$canonDir] = $result;
