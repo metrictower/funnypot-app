@@ -121,13 +121,13 @@ final class SensorsSection extends AbstractPanelSection
         $classChips = '';
         foreach ($sensors->classes() as $dc) {
             $href = $this->esc($navBase . '/sensors/class/' . $dc);
-            $classChips .= '<a class="alte-btn" href="' . $href . '" style="text-decoration:none;padding:3px 10px;margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;color:#3b7ea1;font-size:.82em;display:inline-block">'
+            $classChips .= '<a class="alte-btn" href="' . $href . '" style="text-decoration:none;padding:3px 10px;margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;font-size:.82em;display:inline-block">'
                 . $this->esc($sensors->classLabel($dc)) . '</a>';
         }
         $floorChips = '';
         foreach ($this->buildingFloors($sensors) as $f) {
             $href = $this->esc($navBase . '/sensors/floor/' . strtolower($f['code']));
-            $floorChips .= '<a class="alte-btn" href="' . $href . '" style="text-decoration:none;padding:3px 10px;margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;color:#3b7ea1;font-size:.82em;display:inline-block">'
+            $floorChips .= '<a class="alte-btn" href="' . $href . '" style="text-decoration:none;padding:3px 10px;margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;font-size:.82em;display:inline-block">'
                 . $this->esc($f['label']) . '</a>';
         }
         $inner = '<div style="margin-bottom:8px"><strong style="font-size:.85em;color:#6c757d">By class</strong><div style="margin-top:6px">' . $classChips . '</div></div>'

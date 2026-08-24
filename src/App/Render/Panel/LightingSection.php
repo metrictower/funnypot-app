@@ -275,7 +275,7 @@ final class LightingSection extends AbstractPanelSection
         }
 
         $floorHref = $this->esc($base . '/floor/apply');
-        $floorLink = '<a class="alte-btn" href="' . $floorHref . '" style="text-decoration:none;padding:4px 14px;border:1px solid #3b7ea1;border-radius:4px;color:#3b7ea1">Apply to whole floor ('
+        $floorLink = '<a class="alte-btn" href="' . $floorHref . '" style="text-decoration:none;padding:4px 14px;border:1px solid #3b7ea1;border-radius:4px">Apply to whole floor ('
             . $this->esc((string) $g['floorLabel']) . ')</a>';
 
         $swatches = '';
