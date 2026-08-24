@@ -52,6 +52,12 @@ final class AdminLteSkin extends AbstractSkin
             ['Logs', 'logs'],
             ['Files', 'files'],
         ],
+        'IT & Platform 2' => [
+            ['IT Assets', 'it'],
+            ['Network', 'network'],
+            ['IT Services', 'helpdesk'],
+            ['Facilities', 'facilities'],
+        ],
         'Building · Smart Office' => [
             ['HVAC', 'hvac'],
             ['Access', 'access'],
@@ -94,6 +100,15 @@ final class AdminLteSkin extends AbstractSkin
         'appliances' => 'Appliances & AV', 'coffee' => 'Appliances & AV', 'elevator' => 'Appliances & AV', 'av' => 'Appliances & AV',
         'sensors' => 'Environment Sensors', 'environment' => 'Environment Sensors', 'climate-sensors' => 'Environment Sensors',
         'energy' => 'Energy & Metering', 'power' => 'Energy & Metering', 'metering' => 'Energy & Metering',
+        'it' => 'IT Assets', 'cmdb' => 'IT Assets', 'assets' => 'IT Assets', 'inventory' => 'IT Assets',
+        'integrations' => 'Integrations', 'devices' => 'Integrations',
+        'network' => 'Network', 'vpn' => 'VPN', 'voip' => 'VoIP', 'telephony' => 'VoIP',
+        'helpdesk' => 'IT Services', 'tickets' => 'Helpdesk Tickets', 'printers' => 'Printers',
+        'licenses' => 'Software Licences', 'mdm' => 'Device Management', 'mail' => 'Mail Admin',
+        'certificates' => 'Certificates',
+        'facilities' => 'Facilities', 'floorplan' => 'Floorplan', 'rooms' => 'Rooms',
+        'work-orders' => 'Work Orders', 'workorders' => 'Work Orders',
+        'meeting-rooms' => 'Meeting Rooms', 'bookings' => 'Meeting Rooms',
     ];
 
     /** @var PanelRegistry */

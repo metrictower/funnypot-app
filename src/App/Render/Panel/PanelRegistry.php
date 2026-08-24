@@ -49,6 +49,10 @@ final class PanelRegistry
             'appliances' => new AppliancesSection(),
             'sensors' => new SensorsSection(),
             'energy' => new EnergySection(),
+            'it' => new ItAssetsSection(),
+            'network' => new NetworkSection(),
+            'helpdesk' => new ItServicesSection(),
+            'facilities' => new FacilitiesSection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -72,6 +76,12 @@ final class PanelRegistry
             'coffee' => 'appliances', 'elevator' => 'appliances', 'av' => 'appliances',
             'environment' => 'sensors', 'climate-sensors' => 'sensors',
             'power' => 'energy', 'metering' => 'energy',
+            'cmdb' => 'it', 'assets' => 'it', 'inventory' => 'it', 'integrations' => 'it', 'devices' => 'it',
+            'vpn' => 'network', 'voip' => 'network', 'telephony' => 'network',
+            'tickets' => 'helpdesk', 'printers' => 'helpdesk', 'licenses' => 'helpdesk',
+            'mdm' => 'helpdesk', 'mail' => 'helpdesk', 'certificates' => 'helpdesk',
+            'floorplan' => 'facilities', 'rooms' => 'facilities', 'work-orders' => 'facilities',
+            'workorders' => 'facilities', 'meeting-rooms' => 'facilities', 'bookings' => 'facilities',
         ];
         $this->fallback = $dashboard;
     }
