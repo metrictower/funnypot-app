@@ -1,0 +1,246 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Funnypot\Shell\Host;
+
+use Funnypot\App\Render\Fake\FakeCron;
+use Funnypot\App\Render\Fake\MinerRig;
+use Funnypot\App\Render\Fake\ServerProfile;
+
+/**
+ * The single per-host coherence source for the fake shell + fleet console. Every host fact — the process
+ * table (reused from the same MinerRig+FakeCron generators the deep panel's ProcessesSection uses),
+ * /proc/*, free, df, netstat, uname — derives from ONE identity seed, so the terminal, the panel, and the
+ * fleet all describe the same box. For the this-box host the identity seed is the panel's personaSeed, so
+ * shell `ps` == panel `ps` exactly. Pure/inert: no real process, socket, or /proc access.
+ */
+final class HostFacts
+{
+    private ServerProfile $sp;
+    private FakeCron $cron;
+    /** @var array<string,mixed> */
+    private array $miner;
+
+    public function __construct(int $identitySeed)
+    {
+        $this->sp = ServerProfile::fromSeed($identitySeed);
+        $this->cron = FakeCron::fromSeed($identitySeed);
+        $this->miner = MinerRig::fromSeed($identitySeed)->summary();
+    }
+
+    public function hostname(): string
+    {
+        return $this->sp->hostname();
+    }
+
+    /** @return array{distro:string,kernel:string} */
+    public function os(): array
+    {
+        return $this->sp->os();
+    }
+
+    public function primaryIp(): string
+    {
+        return $this->sp->primaryIp();
+    }
+
+    public function uptimeDays(): int
+    {
+        return $this->sp->uptimeDays();
+    }
+
+    public function uname(): string
+    {
+        $os = $this->sp->os();
+
+        return 'Linux ' . $this->sp->hostname() . ' ' . $os['kernel']
+            . ' #1 SMP x86_64 x86_64 x86_64 GNU/Linux';
+    }
+
+    /**
+     * Process table, coherent with the panel: reuses MinerRig+FakeCron on the same seed so the miner line
+     * and every service row match ProcessesSection exactly.
+     *
+     * @return list<array{pid:int,user:string,cpu:string,mem:string,command:string}>
+     */
+    public function processTable(): array
+    {
+        return $this->cron->processes([
+            'algo' => $this->miner['algo'] ?? '',
+            'pool' => $this->miner['pool'] ?? '',
+            'wallet' => $this->miner['wallet'] ?? '',
+        ]);
+    }
+
+    /** @return int[] PIDs backing /proc/<pid>, matching the process table */
+    public function procPids(): array
+    {
+        return array_map(static fn (array $p): int => (int) $p['pid'], $this->processTable());
+    }
+
+    /** Serve a /proc pseudo-file, or null if not modeled. */
+    public function proc(string $name): ?string
+    {
+        switch (ltrim($name, '/')) {
+            case 'proc/cpuinfo':
+            case 'cpuinfo':
+                return $this->procCpuinfo();
+            case 'proc/meminfo':
+            case 'meminfo':
+                return $this->procMeminfo();
+            case 'proc/loadavg':
+            case 'loadavg':
+                return $this->procLoadavg();
+            case 'proc/uptime':
+            case 'uptime':
+                return $this->procUptime();
+            case 'proc/version':
+            case 'version':
+                return $this->procVersion();
+            default:
+                return null;
+        }
+    }
+
+    private function procCpuinfo(): string
+    {
+        $cpu = $this->sp->cpu();
+        $perSock = $cpu['coresPerSocket'];
+        $out = '';
+        for ($i = 0; $i < $cpu['threads']; $i++) {
+            $physical = intdiv($i, $cpu['threads'] / $cpu['sockets']);
+            $coreId = $i % $perSock;
+            $out .= "processor\t: {$i}\n"
+                . "vendor_id\t: GenuineIntel\n"
+                . "cpu family\t: 6\n"
+                . "model\t\t: 106\n"
+                . "model name\t: {$cpu['model']}\n"
+                . "physical id\t: {$physical}\n"
+                . "siblings\t: " . ($perSock * 2) . "\n"
+                . "core id\t\t: {$coreId}\n"
+                . "cpu cores\t: {$perSock}\n"
+                . "fpu\t\t: yes\n"
+                . "flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat sse sse2 ss ht syscall nx rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc aperfmperf avx avx2 avx512f avx512dq rdseed adx smap avx512cd sha_ni\n"
+                . "\n";
+        }
+
+        return $out;
+    }
+
+    private function mem(): array
+    {
+        $m = $this->sp->memory();
+        $live = $this->sp->liveStats();
+        $totalKb = $m['memTotalKb'];
+        $usedKb = (int) round($live['memUsedGib'] * 1024 * 1024);
+        $usedKb = max(0, min($usedKb, $totalKb));
+        $cachedKb = (int) round($usedKb * 0.42);
+        $buffersKb = (int) round($usedKb * 0.05);
+        $freeKb = max(0, $totalKb - $usedKb);
+        $availKb = min($totalKb, $freeKb + $cachedKb);
+        $swapTotalKb = 8 * 1024 * 1024;
+        $swapFreeKb = $swapTotalKb - (int) round($usedKb * 0.01);
+
+        return compact('totalKb', 'usedKb', 'cachedKb', 'buffersKb', 'freeKb', 'availKb', 'swapTotalKb', 'swapFreeKb');
+    }
+
+    private function procMeminfo(): string
+    {
+        $x = $this->mem();
+
+        return sprintf(
+            "MemTotal:       %d kB\nMemFree:        %d kB\nMemAvailable:   %d kB\nBuffers:        %d kB\n"
+            . "Cached:         %d kB\nSwapTotal:      %d kB\nSwapFree:       %d kB\n",
+            $x['totalKb'],
+            $x['freeKb'],
+            $x['availKb'],
+            $x['buffersKb'],
+            $x['cachedKb'],
+            $x['swapTotalKb'],
+            $x['swapFreeKb']
+        );
+    }
+
+    /** free -m style rows. @return array{mem:array<int,int>,swap:array<int,int>} (values in MiB) */
+    public function free(): array
+    {
+        $x = $this->mem();
+        $mib = static fn (int $kb): int => intdiv($kb, 1024);
+        $usedMib = $mib($x['usedKb']) - $mib($x['buffersKb']) - $mib($x['cachedKb']);
+
+        return [
+            'mem' => [$mib($x['totalKb']), max(0, $usedMib), $mib($x['freeKb']), 0, $mib($x['buffersKb'] + $x['cachedKb']), $mib($x['availKb'])],
+            'swap' => [$mib($x['swapTotalKb']), $mib($x['swapTotalKb'] - $x['swapFreeKb']), $mib($x['swapFreeKb'])],
+        ];
+    }
+
+    private function procLoadavg(): string
+    {
+        $live = $this->sp->liveStats();
+        $total = count($this->processTable()) + 90; // kernel threads etc.
+        $running = 1 + ((int) $live['load1'] % 3);
+        $lastPid = 20000 + ($this->sp->uptimeDays() * 137 % 9000);
+
+        return sprintf("%.2f %.2f %.2f %d/%d %d\n", $live['load1'], $live['load5'], $live['load15'], $running, $total, $lastPid);
+    }
+
+    private function procUptime(): string
+    {
+        $secs = $this->sp->uptimeDays() * 86400;
+        $idle = (int) round($secs * $this->sp->cpu()['cores'] * 0.88);
+
+        return sprintf("%d.%02d %d.%02d\n", $secs, 12, $idle, 47);
+    }
+
+    private function procVersion(): string
+    {
+        $k = $this->sp->os()['kernel'];
+
+        return "Linux version {$k} (build@{$this->sp->hostname()}) "
+            . "(gcc (Ubuntu 11.4.0) 11.4.0) #1 SMP PREEMPT_DYNAMIC\n";
+    }
+
+    /**
+     * df rows: the boot volume mounted at / and the RAID data volume at /data.
+     *
+     * @return list<array{fs:string,size:string,used:string,avail:string,pct:string,mount:string}>
+     */
+    public function df(): array
+    {
+        $s = $this->sp->storage();
+        $rootTb = 1.8; // boot NVMe
+        $rootUsed = round($rootTb * $s['rootPct'] / 100, 1);
+        $dataTb = (float) $s['usableTb'];
+        $dataUsed = round($dataTb * $s['usedPct'] / 100, 1);
+        $tb = static fn (float $v): string => rtrim(rtrim(number_format($v, 1), '0'), '.') . 'T';
+
+        return [
+            ['fs' => '/dev/mapper/vg0-root', 'size' => $tb($rootTb), 'used' => $tb($rootUsed),
+                'avail' => $tb($rootTb - $rootUsed), 'pct' => $s['rootPct'] . '%', 'mount' => '/'],
+            ['fs' => '/dev/sdb1', 'size' => $tb($dataTb), 'used' => $tb($dataUsed),
+                'avail' => $tb($dataTb - $dataUsed), 'pct' => $s['usedPct'] . '%', 'mount' => '/data'],
+        ];
+    }
+
+    /**
+     * Listening sockets coherent with the running services (nginx/mariadb/redis/postgres from the process
+     * table + sshd). All bound to the host's RFC1918 IP or loopback.
+     *
+     * @return list<array{proto:string,local:string,foreign:string,state:string}>
+     */
+    public function netstat(): array
+    {
+        $ip = $this->sp->primaryIp();
+
+        return [
+            ['proto' => 'tcp', 'local' => '0.0.0.0:22', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => '0.0.0.0:80', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => '0.0.0.0:443', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => '127.0.0.1:3306', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => '127.0.0.1:6379', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => '127.0.0.1:5432', 'foreign' => '0.0.0.0:*', 'state' => 'LISTEN'],
+            ['proto' => 'tcp', 'local' => $ip . ':22', 'foreign' => '10.0.0.5:51334', 'state' => 'ESTABLISHED'],
+        ];
+    }
+}

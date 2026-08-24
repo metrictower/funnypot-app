@@ -56,12 +56,13 @@ class FakeFilesystem
     public function __construct(
         protected string $hostSeedBytes,
         protected string $role,
+        protected int $identitySeed = 0,   // host-identity int (= panel personaSeed for the this-box host)
         protected int $maxDepth = 12,
         protected int $perDirMax = 24,
         protected int $cacheMax = self::CHILD_CACHE_MAX
     ) {
         Draw::assertEnv();
-        $pinned = PinnedNodes::build($hostSeedBytes, $role);
+        $pinned = PinnedNodes::build($hostSeedBytes, $role, $identitySeed);
         $this->pinnedNodes = $pinned['nodes'];
         $this->pinnedContent = $pinned['content'];
         $this->distroFam = $pinned['fam'];

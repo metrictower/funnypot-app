@@ -42,12 +42,22 @@ final class PinnedNodesTest extends TestCase
         self::assertSame('/usr/share/zoneinfo/Etc/UTC', $link->target);
     }
 
-    public function test_pinned_varies_by_host_secret(): void
+    public function test_identity_seed_drives_hostname_secret_does_not(): void
     {
-        $one = new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer');
-        $two = new FakeFilesystem(Draw::seed("secretB\0h\0dev"), 'developer');
-        // hostname + admin user are seeded, so passwd differs across installs.
-        self::assertNotSame($one->read('/etc/hostname'), $two->read('/etc/hostname'));
+        // hostname is host IDENTITY (from ServerProfile) -> keyed by identitySeed, stable across secrets.
+        $base = new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer', 1001);
+        $h1 = $base->read('/etc/hostname');
+        $sameIdOtherSecret = new FakeFilesystem(Draw::seed("secretB\0h\0dev"), 'developer', 1001);
+        self::assertSame($h1, $sameIdOtherSecret->read('/etc/hostname'), 'secret must not change identity');
+
+        $found = false;
+        for ($i = 0; $i < 60; $i++) {
+            if ((new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer', $i))->read('/etc/hostname') !== $h1) {
+                $found = true;
+                break;
+            }
+        }
+        self::assertTrue($found, 'a different identitySeed should be able to change the hostname');
     }
 
     public function test_shadow_is_seeded_not_a_shared_literal(): void
@@ -76,10 +86,10 @@ final class PinnedNodesTest extends TestCase
 
     private function firstSeedOfFamily(string $family): ?FakeFilesystem
     {
-        for ($i = 0; $i < 60; $i++) {
-            $fs = new FakeFilesystem(Draw::seed("famseed-{$i}\0h\0ops"), 'ops');
+        for ($i = 0; $i < 80; $i++) {
+            $fs = new FakeFilesystem(Draw::seed("s\0h\0ops"), 'ops', $i); // OS is keyed by identitySeed now
             $os = $fs->read('/etc/os-release');
-            $isRhel = (bool) preg_match('/^ID=(centos|rhel)/m', $os);
+            $isRhel = (bool) preg_match('/^ID=(rocky|centos|rhel|almalinux)/m', $os);
             if (($family === 'rhel') === $isRhel) {
                 return $fs;
             }
@@ -110,11 +120,11 @@ final class PinnedNodesTest extends TestCase
     public function test_passwd_and_os_release_agree_on_distro_family(): void
     {
         // M1 regression: cross-file consistency — an RHEL os-release must not sit over a Debian passwd.
-        for ($i = 0; $i < 30; $i++) {
-            $fs = new FakeFilesystem(Draw::seed("distro-seed-{$i}\0h\0ops"), 'ops');
+        for ($i = 0; $i < 40; $i++) {
+            $fs = new FakeFilesystem(Draw::seed("s\0h\0ops"), 'ops', $i);
             $os = $fs->read('/etc/os-release');
             $passwd = $fs->read('/etc/passwd');
-            if (preg_match('/^ID=(centos|rhel)/m', $os)) {
+            if (preg_match('/^ID=(rocky|centos|rhel|almalinux)/m', $os)) {
                 self::assertStringContainsString('apache:x:48:48', $passwd, "rhel os-release needs rhel passwd (seed $i)");
                 self::assertStringNotContainsString('www-data', $passwd, "seed $i");
             } elseif (preg_match('/^ID=(ubuntu|debian)/m', $os)) {

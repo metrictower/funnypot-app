@@ -57,7 +57,7 @@ final class FakeFilesystemGenerationTest extends TestCase
     {
         // Tiny cache forces FIFO eviction; a re-listed dir MUST regenerate identically (M5 regression:
         // generation is a pure function of the dir seed, not of cache/newcount state).
-        $fs = new FakeFilesystem(Draw::seed("evict\0host\0dev"), 'developer', 12, 24, 4);
+        $fs = new FakeFilesystem(Draw::seed("evict\0host\0dev"), 'developer', 0, 12, 24, 4);
         $before = $fs->list('/srv/app');
         // list many distinct dirs to blow past the 4-entry cache
         foreach (['/etc', '/usr', '/usr/lib', '/var', '/var/log', '/opt', '/root', '/home', '/usr/share', '/usr/local'] as $d) {

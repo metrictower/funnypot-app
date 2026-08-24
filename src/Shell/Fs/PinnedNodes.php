@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace Funnypot\Shell\Fs;
 
 use Funnypot\App\Render\Fake\FrozenClock;
+use Funnypot\App\Render\Fake\ServerProfile;
 
 /**
- * Curated nodes at paths attackers reach for first — pinned over the procedural fill. Standard system
- * users/paths stay standard (every real box has them, so they are not a fingerprint) and match the drawn
- * distro family, but every fabricated secret (the admin shadow salt+digest, the hostname, the admin user)
- * is seeded per host so no two installs are byte-identical. Inert: the shadow digest is drawn noise in the
- * crypt alphabet, never a real hash.
+ * Curated nodes at paths attackers reach for first — pinned over the procedural fill.
+ *
+ * Host identity (OS, hostname, distro family) comes from ONE source: ServerProfile::fromSeed($identitySeed)
+ * — the same source the System panel and HostFacts use — so /etc/os-release, /etc/hostname, uname, the
+ * panel, and the fleet all agree. Per-host SECRETS (the admin shadow salt+digest, the admin username) are
+ * seeded from the private-secret-keyed pinned seed, so they vary per install even at the same identity.
+ * Inert: the shadow digest is drawn noise in the crypt alphabet, never a real or shared hash.
  */
 final class PinnedNodes
 {
@@ -24,35 +27,34 @@ final class PinnedNodes
         'ubaker', 'vpetrov', 'wjackson', 'xander', 'ylowe', 'zabel', 'amorgan', 'bcarter', 'cdiaz', 'dfoster',
         'ereyes', 'fhoward', 'gwallace', 'hbrooks', 'ihughes', 'jbennett', 'kcole', 'lortiz', 'mgraham',
     ];
-    private const HOST_ENV = ['prod', 'stg', 'app', 'web', 'db', 'api', 'core', 'svc', 'infra', 'edge', 'ops', 'int'];
-    private const HOST_SVC = ['db', 'app', 'web', 'cache', 'queue', 'auth', 'gw', 'node', 'worker', 'lb', 'store', 'mail'];
 
-    private const DISTROS = [
-        ['id' => 'ubuntu', 'name' => 'Ubuntu', 'ver' => '22.04.4 LTS (Jammy Jellyfish)', 'vid' => '22.04', 'fam' => 'debian'],
-        ['id' => 'ubuntu', 'name' => 'Ubuntu', 'ver' => '20.04.6 LTS (Focal Fossa)', 'vid' => '20.04', 'fam' => 'debian'],
-        ['id' => 'debian', 'name' => 'Debian GNU/Linux', 'ver' => '12 (bookworm)', 'vid' => '12', 'fam' => 'debian'],
-        ['id' => 'centos', 'name' => 'CentOS Stream', 'ver' => '9', 'vid' => '9', 'fam' => 'rhel'],
-        ['id' => 'rhel', 'name' => 'Red Hat Enterprise Linux', 'ver' => '9.3 (Plow)', 'vid' => '9.3', 'fam' => 'rhel'],
+    /** Full os-release fields for ServerProfile's fixed distro set (kept coherent with its os() strings). */
+    private const OS_RELEASE = [
+        'Ubuntu 22.04.4 LTS' => ['NAME' => 'Ubuntu', 'VERSION' => '22.04.4 LTS (Jammy Jellyfish)', 'ID' => 'ubuntu', 'VERSION_ID' => '22.04'],
+        'Debian GNU/Linux 12 (bookworm)' => ['NAME' => 'Debian GNU/Linux', 'VERSION' => '12 (bookworm)', 'ID' => 'debian', 'VERSION_ID' => '12'],
+        'Rocky Linux 9.4 (Blue Onyx)' => ['NAME' => 'Rocky Linux', 'VERSION' => '9.4 (Blue Onyx)', 'ID' => 'rocky', 'VERSION_ID' => '9.4'],
     ];
 
     /**
      * @return array{nodes: array<string,Node>, content: array<string,string>, fam: string}
      */
-    public static function build(string $hostSeedBytes, string $role): array
+    public static function build(string $hostSeedBytes, string $role, int $identitySeed = 0): array
     {
         $seed = Draw::seed($hostSeedBytes . "\0pinned\0" . $role);
         $now = FrozenClock::epoch();
 
+        $sp = ServerProfile::fromSeed($identitySeed);
+        $distro = $sp->os()['distro'];
+        $fam = self::famFromDistro($distro);
+
         $admin = (string) Draw::pick($seed, 1, self::ADMIN_NAMES);
-        /** @var array{id:string,name:string,ver:string,vid:string,fam:string} $distro */
-        $distro = Draw::pick($seed, 20, self::DISTROS);
         $lastchg = 19000 + Draw::intBelow($seed, 30, 800);
 
         $content = [
-            '/etc/hostname' => self::hostname($seed) . "\n",
+            '/etc/hostname' => $sp->hostname() . "\n",
             '/etc/os-release' => self::osRelease($distro),
-            '/etc/passwd' => self::passwd($admin, $distro['fam']),
-            '/etc/shadow' => self::shadow($seed, $admin, $distro['fam'], $lastchg),
+            '/etc/passwd' => self::passwd($admin, $fam),
+            '/etc/shadow' => self::shadow($seed, $admin, $fam, $lastchg),
         ];
 
         $nodes = [];
@@ -66,7 +68,44 @@ final class PinnedNodes
         $nodes['/etc/localtime'] = new Node('localtime', 'link', 0, 0, 27, 0o777, $now - 31000000, '/usr/share/zoneinfo/Etc/UTC');
         $nodes['/etc/mtab'] = new Node('mtab', 'link', 0, 0, 12, 0o777, $now - 30000000, '/proc/self/mounts');
 
-        return ['nodes' => $nodes, 'content' => $content, 'fam' => $distro['fam']];
+        return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam];
+    }
+
+    public static function famFromDistro(string $distro): string
+    {
+        foreach (['Rocky', 'RHEL', 'CentOS', 'Red Hat', 'AlmaLinux', 'Fedora', 'Oracle Linux'] as $needle) {
+            if (stripos($distro, $needle) !== false) {
+                return 'rhel';
+            }
+        }
+
+        return 'debian';
+    }
+
+    private static function osRelease(string $distro): string
+    {
+        $d = self::OS_RELEASE[$distro] ?? [
+            'NAME' => $distro,
+            'VERSION' => '',
+            'ID' => strtolower(explode(' ', $distro)[0]),
+            'VERSION_ID' => '',
+        ];
+
+        return "NAME=\"{$d['NAME']}\"\n"
+            . "VERSION=\"{$d['VERSION']}\"\n"
+            . "ID={$d['ID']}\n"
+            . "VERSION_ID=\"{$d['VERSION_ID']}\"\n"
+            . "PRETTY_NAME=\"{$distro}\"\n";
+    }
+
+    private static function cryptB64(string $seed, int $base, int $len): string
+    {
+        $out = '';
+        for ($i = 0; $i < $len; $i++) {
+            $out .= self::CRYPT_B64[Draw::intBelow($seed, $base + $i, 64)];
+        }
+
+        return $out;
     }
 
     /** @return array<string,string> username => full /etc/passwd line, per distro family (shadow mirrors it) */
@@ -102,35 +141,6 @@ final class PinnedNodes
             'sshd' => 'sshd:x:110:65534::/run/sshd:/usr/sbin/nologin',
             $admin => "{$admin}:x:1000:1000:{$admin}:/home/{$admin}:/bin/bash",
         ];
-    }
-
-    private static function cryptB64(string $seed, int $base, int $len): string
-    {
-        $out = '';
-        for ($i = 0; $i < $len; $i++) {
-            $out .= self::CRYPT_B64[Draw::intBelow($seed, $base + $i, 64)];
-        }
-
-        return $out;
-    }
-
-    private static function hostname(string $seed): string
-    {
-        $env = (string) Draw::pick($seed, 10, self::HOST_ENV);
-        $svc = (string) Draw::pick($seed, 11, self::HOST_SVC);
-        $n = 1 + Draw::intBelow($seed, 12, 40);
-
-        return sprintf('%s-%s-%02d', $env, $svc, $n);
-    }
-
-    /** @param array{id:string,name:string,ver:string,vid:string,fam:string} $d */
-    private static function osRelease(array $d): string
-    {
-        return "NAME=\"{$d['name']}\"\n"
-            . "VERSION=\"{$d['ver']}\"\n"
-            . "ID={$d['id']}\n"
-            . "VERSION_ID=\"{$d['vid']}\"\n"
-            . "PRETTY_NAME=\"{$d['name']} {$d['ver']}\"\n";
     }
 
     private static function passwd(string $admin, string $fam): string
