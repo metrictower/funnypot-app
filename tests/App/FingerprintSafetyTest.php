@@ -197,4 +197,60 @@ final class FingerprintSafetyTest extends TestCase
         $hits = self::scan('blocked by rule 942100 during the scan');
         self::assertNotSame([], $hits, 'expected the bare CRS rule id 942100 to be flagged');
     }
+
+    /** @return array<string,array{0:string}> role => provider row (FP-0036 fake-filesystem engine). */
+    public static function fakeFilesystemRoles(): array
+    {
+        return ['developer' => ['developer'], 'finance' => ['finance'], 'ops' => ['ops']];
+    }
+
+    /**
+     * The FS/shell/fleet engine emits runtime-generated content the compiled-artifact CI gate never
+     * sees. Scan a representative slice — directory listings, pinned system files, a generated file's
+     * bytes, and a listing at depth — against the same app denylist.
+     *
+     * @dataProvider fakeFilesystemRoles
+     */
+    public function test_fake_filesystem_output_carries_no_denylisted_signature(string $role): void
+    {
+        $fs = new \Funnypot\Shell\Fs\FakeFilesystem(
+            \Funnypot\Shell\Fs\Draw::seed("fp-safety-secret\0host\0" . $role),
+            $role
+        );
+        $lsLa = static function (array $nodes): string {
+            $out = '';
+            foreach ($nodes as $n) {
+                $out .= sprintf(
+                    "%s %d %d %6d %s %s%s\n",
+                    $n->isDir() ? 'drwxr-xr-x' : ($n->isLink() ? 'lrwxrwxrwx' : '-rw-r--r--'),
+                    $n->uid,
+                    $n->gid,
+                    $n->size,
+                    date('M j H:i', $n->mtime),
+                    $n->name,
+                    $n->target !== null ? ' -> ' . $n->target : ''
+                );
+            }
+            return $out;
+        };
+
+        $blob = $lsLa($fs->list('/'))
+            . $lsLa($fs->list('/etc'))
+            . $lsLa($fs->list('/srv/app'))
+            . $lsLa($fs->list('/usr/lib'))
+            . $fs->read('/etc/passwd')
+            . $fs->read('/etc/os-release')
+            . $fs->read('/etc/hostname');
+
+        // a generated file's bytes + a listing one level deeper
+        foreach ($fs->list('/srv/app') as $n) {
+            if ($n->isFile()) {
+                $blob .= $fs->read('/srv/app/' . $n->name);
+            } elseif ($n->isDir()) {
+                $blob .= $lsLa($fs->list('/srv/app/' . $n->name));
+            }
+        }
+
+        self::assertClean($blob, "fake-filesystem output for role {$role}");
+    }
 }
