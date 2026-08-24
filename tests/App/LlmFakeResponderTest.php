@@ -103,7 +103,8 @@ final class LlmFakeResponderTest extends TestCase
     public function test_panel_path_bypasses_lexical_shed_and_serves_200(): void
     {
         // /panel/hvac is a coherent-panel path (AdminLteSkin) the lexical classifier rates "not plausible"
-        // and would shed — but every panel sub-path is navigable, so it must still render, with a 200.
+        // and would shed — but every panel sub-path is navigable, so it must still render, with a 200. The
+        // panel renders deterministically (empty slots), independent of the transport.
         [$r] = $this->makeWithRenderer(fn (): array => ['status' => 200, 'body' => json_encode(['heading' => 'HVAC'])]);
         $resp = $r->respond(new RequestContext('GET', '/panel/hvac'), '9.9.9.9');
         self::assertNotNull($resp, 'a panel sub-path must render even though the lexical gate would shed it');
@@ -119,6 +120,35 @@ final class LlmFakeResponderTest extends TestCase
         $resp = $r->respond(new RequestContext('GET', '/panel/dashboard'), '9.9.9.9');
         self::assertNotNull($resp);
         self::assertSame(200, $resp->status);
+    }
+
+    public function test_panel_serves_200_even_when_ip_is_bulk_scan_pinned(): void
+    {
+        // The deep panel is meant for hours of exploration: a human clicking a dense sidebar quickly
+        // trips the velocity window and gets bulk-scan-pinned. A panel path must stay navigable anyway —
+        // it is exempt from the gate entirely (deterministic + cached render, no model call). This is the
+        // regression: pinned IPs were seeing the whole panel collapse to plain 404s.
+        [$r, $store] = $this->makeWithRenderer(fn (): array => ['status' => 200, 'body' => json_encode(['heading' => 'HVAC'])]);
+        $store->flagBulkScan('9.9.9.9', 24);
+        $resp = $r->respond(new RequestContext('GET', '/panel/hvac'), '9.9.9.9');
+        self::assertNotNull($resp, 'a bulk-scan-pinned IP must still be able to navigate the panel');
+        self::assertSame(200, $resp->status);
+        self::assertStringContainsString('alte-sidebar', $resp->body);
+    }
+
+    public function test_pinned_ip_is_still_gated_on_a_non_panel_path(): void
+    {
+        // The panel exemption must not disarm the gate for everything: a plausible NON-panel path from a
+        // bulk-scan-pinned IP is still declined to the plain 404 (anti-DoS/anti-enumeration intact).
+        $calls = 0;
+        [$r, $store] = $this->makeWithRenderer(function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => json_encode(['content' => self::GOOD_HTML])];
+        });
+        $store->flagBulkScan('9.9.9.9', 24);
+        self::assertNull($r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9'));
+        self::assertSame(0, $calls, 'a pinned non-panel path must not reach generation');
     }
 
     private const GOOD_HTML =
