@@ -70,6 +70,74 @@ final class AccessSectionTest extends TestCase
         $html = $this->render('/admin/access/events');
         self::assertStringContainsString('<pre', $html);
         self::assertStringContainsString('GRANTED', $html);
+        // Each scroll line now carries a full date, not just HH:MM:SS (spec E11 — a bare time-of-day
+        // makes a log crossing local midnight read as the clock jumping backward with nothing to explain it).
+        self::assertMatchesRegularExpression('/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/', $html);
+    }
+
+    /** Every event/badge log line must carry a full civil date alongside the time, and never a future one. */
+    public function test_event_logs_show_full_date_and_never_future(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $access = Access::fromSeed($seed);
+            $door = $access->doors()[0];
+
+            foreach ($access->badgeEventsFor($door['id'], 40) as $e) {
+                self::assertMatchesRegularExpression(
+                    '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+                    $e['time'],
+                    "seed $seed: badge event carries a full date"
+                );
+                $epoch = strtotime($e['time'] . ' UTC');
+                self::assertLessThanOrEqual(Access::DEPLOY_EPOCH, $epoch, "seed $seed: badge event must not be in the future");
+            }
+
+            foreach ($access->accessEventLog(60) as $line) {
+                self::assertMatchesRegularExpression(
+                    '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}  /',
+                    $line,
+                    "seed $seed: access log line carries a full date: $line"
+                );
+                $epoch = strtotime(substr($line, 0, 19) . ' UTC');
+                self::assertLessThanOrEqual(Access::DEPLOY_EPOCH, $epoch, "seed $seed: access log entry must not be in the future: $line");
+            }
+        }
+    }
+
+    /** badgeEventsFor() must walk strictly backward from DEPLOY_EPOCH: never a future row, never a
+     *  repeated or backward-jumping timestamp (spec E11 — each row used to be an independent random draw,
+     *  so a small gap on a later row could land newer than a large gap on an earlier one). */
+    public function test_badge_events_are_strictly_monotonic(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $access = Access::fromSeed($seed);
+            $door = $access->doors()[0];
+            $prevEpoch = null;
+            foreach ($access->badgeEventsFor($door['id'], 60) as $e) {
+                $epoch = strtotime($e['time'] . ' UTC');
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: badge events must be strictly newest-first");
+                }
+                $prevEpoch = $epoch;
+            }
+        }
+    }
+
+    /** accessEventLog() must walk strictly backward from DEPLOY_EPOCH, including through the planted
+     *  off-hours anomaly row — same invariant as badgeEventsFor()/CctvSectionTest's events() checks. */
+    public function test_access_event_log_is_strictly_monotonic(): void
+    {
+        for ($seed = 0; $seed < 20; $seed++) {
+            $access = Access::fromSeed($seed);
+            $prevEpoch = null;
+            foreach ($access->accessEventLog(60) as $line) {
+                $epoch = strtotime(substr($line, 0, 19) . ' UTC');
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: access log must be strictly newest-first: $line");
+                }
+                $prevEpoch = $epoch;
+            }
+        }
     }
 
     // --- inert-control behaviour (the key trick) ---

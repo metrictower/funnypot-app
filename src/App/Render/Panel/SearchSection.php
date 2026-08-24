@@ -14,8 +14,11 @@ use Funnypot\Support\VisualPersona;
  *     link into another canned query (deep engagement with nothing to type);
  *   - a query -> fabricated result GROUPS (People / Employees / Assets / Invoices / Vendors / Rooms /
  *     Tickets / Bank accounts) from `Fake\Search`, each hit a deep link into that module's OWN detail page
- *     so the surfaced record reads identically there (one roster/estate holds end-to-end). A query always
- *     returns confident-looking hits ("password" / "admin" / a name all resolve), and every hit is inert.
+ *     so the surfaced record reads identically there (one roster/estate holds end-to-end). A real-looking
+ *     term ("password" / "admin" / a name) returns confident hits across most areas; a gibberish/random
+ *     probe scores low on `Fake\Search`'s character-level plausibility check and returns few or none, so
+ *     "N areas" and the total both vary with the query instead of always reading "8 areas". Every hit,
+ *     confident or not, is inert.
  *
  * SAFETY: the echoed query is the one reflected value on the page and is always run through esc() (it is
  * never used to build a link — hrefs are fixed module paths or generator ids), so a `<script>` query is
@@ -56,6 +59,7 @@ final class SearchSection extends AbstractPanelSection
     private function results(Search $search, string $navBase, string $query): string
     {
         $groups = $search->groups($query);
+        $docs = $search->documentsFor($query);
 
         $crumbs = [
             ['Corevance', $navBase],
@@ -63,21 +67,31 @@ final class SearchSection extends AbstractPanelSection
             ['"' . $query . '"', ''],
         ];
 
+        // "Areas" counts only the groups that actually surfaced a hit, so a gibberish query — which scores
+        // low on every group's plausibility check — visibly narrows both the total and the area count
+        // instead of always claiming the full 8.
         $total = 0;
+        $areas = 0;
         foreach ($groups as $g) {
-            $total += count($g['items']);
+            if ($g['items'] !== []) {
+                $areas++;
+                $total += count($g['items']);
+            }
         }
 
         // The one reflected value on the page — esc() it, and never build a link from it.
         $heading = '<p style="margin:0 0 4px;font-size:1.05em;color:#2c3136">Results for '
             . '<strong>"' . $this->esc($query) . '"</strong></p>'
             . '<p class="fp-muted" style="margin:0;font-size:.86em;color:#6c757d">'
-            . number_format($total) . ' matches across ' . count($groups) . ' areas</p>';
+            . number_format($total) . ' matches across ' . $areas . ' areas</p>';
 
         $body = $this->breadcrumbHtml($crumbs)
             . $this->card('Search', $this->searchForm($navBase, $query) . '<div style="margin-top:10px">' . $heading . '</div>',
-                'global')
-            . $this->documentsCard($navBase, $query);
+                'global');
+
+        if ($docs !== []) {
+            $body .= $this->documentsCard($navBase, $docs);
+        }
 
         foreach ($groups as $g) {
             if ($g['items'] === []) {
@@ -91,24 +105,17 @@ final class SearchSection extends AbstractPanelSection
 
     /**
      * A "top match" documents teaser that folds the query back in (the confident echo the spec calls for:
-     * search "password" and a shared-drive row is right there). It links to real in-panel decoy handlers,
-     * never to a query-derived path, so the query stays a text-only, escaped value.
+     * search "password" and a shared-drive row is right there). Items and their count come from
+     * Search::documentsFor() (query-plausibility scaled, department varied by query hash); this just
+     * renders them. Links go to real in-panel decoy handlers, never a query-derived path.
+     *
+     * @param list<array{title:string,sub:string,path:string}> $items
      */
-    private function documentsCard(string $navBase, string $query): string
+    private function documentsCard(string $navBase, array $items): string
     {
-        $items = [
-            [
-                'title' => '"' . $query . '" — matches in shared drive',
-                'sub' => 'Documents / reports · restricted',
-                'path' => '/hr/documents',
-            ],
-            [
-                'title' => $query . ' (export).xlsx',
-                'sub' => 'Files · last opened by Finance',
-                'path' => '/files',
-            ],
-        ];
-        return $this->card('Files & documents', $this->hitList($navBase, $items), '2 matches');
+        $count = count($items);
+        return $this->card('Files & documents', $this->hitList($navBase, $items),
+            $count . ($count === 1 ? ' match' : ' matches'));
     }
 
     /**

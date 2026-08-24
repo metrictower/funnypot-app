@@ -137,7 +137,11 @@ final class Facilities
 
     /**
      * Reconciled facilities headline counts for the dashboard tiles. Occupancy is summed from the same
-     * per-room status the floorplan paints, so the tile and the map never disagree.
+     * per-room status the floorplan paints, so the tile and the map never disagree. Alarms/energy/doors/
+     * cameras are PULLED from the authoritative modules (Access/Energy/Cctv/Safety) rather than guessed
+     * independently, so this hub always agrees with what a click into the detail page shows — including
+     * camerasTotal, which (via Cctv::summary()) counts the 8 fixed exterior cameras Building's room
+     * devices alone do not.
      *
      * @return array{occupied:int,occupancyDesign:int,zonesTotal:int,zonesInComfort:int,openWorkOrders:int,activeAlarms:int,energyKw:int,doorsUnsecured:int,camerasOnline:int,camerasTotal:int,roomsFree:int,meetingTotal:int}
      */
@@ -147,7 +151,6 @@ final class Facilities
         $occupied = 0;
         $meetingTotal = 0;
         $roomsFree = 0;
-        $devicesCamera = 0;
         foreach ($this->floors() as $f) {
             foreach ($this->roomsOnFloor($f['code']) as $r) {
                 $occupied += $r['occupants'];
@@ -159,17 +162,16 @@ final class Facilities
                 }
             }
         }
-        foreach ($this->building->devices() as $d) {
-            if ($d['domain'] === 'camera') {
-                $devicesCamera++;
-            }
-        }
         $zonesTotal = 0;
         foreach ($this->floors() as $f) {
             $zonesTotal += count($f['zones']);
         }
         $zonesFault = $this->intIn(0, 3, 'zonesfault');
-        $camerasDown = $this->h('camdown') % 4 === 0 ? 1 : 0;
+
+        $accessSummary = Access::fromSeed($this->seed)->summary();
+        $energySummary = Energy::fromSeed($this->seed)->summary();
+        $cctvSummary = Cctv::fromSeed($this->seed)->summary();
+        $fireTrouble = Safety::fromSeed($this->seed)->panel()['trouble'] !== '' ? 1 : 0;
 
         return [
             'occupied' => $occupied,
@@ -177,11 +179,11 @@ final class Facilities
             'zonesTotal' => $zonesTotal,
             'zonesInComfort' => $zonesTotal - $zonesFault,
             'openWorkOrders' => $this->openWorkOrderCount(),
-            'activeAlarms' => $this->intIn(0, 4, 'activealarms'),
-            'energyKw' => $this->intIn(90, 320, 'energykw'),
-            'doorsUnsecured' => $this->intIn(0, 2, 'doorsunsec'),
-            'camerasOnline' => $devicesCamera - $camerasDown,
-            'camerasTotal' => $devicesCamera,
+            'activeAlarms' => $accessSummary['alarms'] + $energySummary['activeAlarms'] + $fireTrouble,
+            'energyKw' => (int) round($energySummary['loadKw']),
+            'doorsUnsecured' => $accessSummary['unsecured'],
+            'camerasOnline' => $cctvSummary['online'],
+            'camerasTotal' => $cctvSummary['total'],
             'roomsFree' => $roomsFree,
             'meetingTotal' => $meetingTotal,
         ];

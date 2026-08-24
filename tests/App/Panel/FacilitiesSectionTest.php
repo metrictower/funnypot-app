@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Panel;
 
+use Funnypot\App\Render\Fake\Access;
 use Funnypot\App\Render\Fake\Building;
+use Funnypot\App\Render\Fake\Cctv;
+use Funnypot\App\Render\Fake\Energy;
 use Funnypot\App\Render\Fake\Facilities;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\FacilitiesSection;
@@ -277,6 +280,36 @@ final class FacilitiesSectionTest extends TestCase
             }
         }
         self::assertTrue($seenFault, 'at least one fault room must exist across the sampled seeds');
+    }
+
+    /** The hub tiles must be PULLED from the authoritative modules, never guessed independently, so the
+     *  overview always matches what a click into Access/Energy/Cctv/Fire shows — and camerasTotal must
+     *  include the 8 fixed exterior cameras Cctv adds on top of Building's room devices. */
+    public function test_hub_tiles_reconcile_with_authoritative_modules(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $fac = Facilities::fromSeed($seed);
+            $summary = $fac->summary();
+
+            $access = Access::fromSeed($seed)->summary();
+            $energy = Energy::fromSeed($seed)->summary();
+            $cctv = Cctv::fromSeed($seed)->summary();
+
+            self::assertSame($access['unsecured'], $summary['doorsUnsecured'], "seed $seed doorsUnsecured matches Access::summary()");
+            self::assertSame((int) round($energy['loadKw']), $summary['energyKw'], "seed $seed energyKw matches Energy::summary()['loadKw']");
+            self::assertSame($cctv['online'], $summary['camerasOnline'], "seed $seed camerasOnline matches Cctv::summary()");
+            self::assertSame($cctv['total'], $summary['camerasTotal'], "seed $seed camerasTotal matches Cctv::summary() (incl. exterior cams)");
+            self::assertGreaterThanOrEqual(8, $summary['camerasTotal'], "seed $seed cameras total must include the 8 fixed exterior cameras");
+        }
+    }
+
+    public function test_hub_camera_and_energy_tiles_match_the_rendered_html(): void
+    {
+        $seed = 9;
+        $s = Facilities::fromSeed($seed)->summary();
+        $html = $this->render('/admin/facilities', $seed);
+        self::assertStringContainsString($s['camerasOnline'] . '/' . $s['camerasTotal'], $html, 'rendered camera tile matches the reconciled summary');
+        self::assertStringContainsString($s['energyKw'] . ' kW', $html, 'rendered energy tile matches Energy::summary()');
     }
 
     public function test_work_order_list_ids_are_all_distinct(): void

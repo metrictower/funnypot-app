@@ -74,6 +74,20 @@ final class ActivitySectionTest extends TestCase
         self::assertStringContainsString('<table', $html);
     }
 
+    /** Headline tiles must read as historical windows, not present-state — "Alarms"~300-750 used to be
+     *  presented as if it were the same concept as Dashboard's "Active alarms: 0-3" current-state gauge. */
+    public function test_headline_tiles_are_labeled_as_historical_windows(): void
+    {
+        $html = $this->render('/admin/activity');
+        foreach (['Sign-ins (30 d)', 'Access events (30 d)', 'Approval events (30 d)',
+                  'Alarm events (30 d)', 'Cert expiries (30 d)'] as $label) {
+            self::assertStringContainsString($label, $html, "tile labeled as a historical window: $label");
+        }
+        // The bare present-tense label must not appear (it would read as the same concept as Dashboard's
+        // current-state "Active alarms" tile).
+        self::assertStringNotContainsString('Approvals pending', $html);
+    }
+
     public function test_pagination_advances(): void
     {
         $p1 = $this->render('/admin/activity');

@@ -62,7 +62,12 @@ final class ActivitySection extends AbstractPanelSection
             . $this->card($title, $timeline . $pager, 'global timeline · newest first (cached ~30 s)');
     }
 
-    /** Headline stat tiles derived from the per-type counts so nothing contradicts the feed. */
+    /**
+     * Headline stat tiles derived from the per-type counts so nothing contradicts the feed. Every label is
+     * an explicit historical window ("(30 d)") — these are activity-stream counts (hundreds of events over
+     * a month), not a live gauge, so they never read as the same concept as Dashboard's "Active alarms:
+     * 0-3" current-state tile for the same word.
+     */
     private function headlineTiles(Activity $activity, array $counts): string
     {
         $by = [];
@@ -71,11 +76,11 @@ final class ActivitySection extends AbstractPanelSection
         }
         return $this->statCardsHtml([
             ['label' => 'Events (30 d)', 'value' => number_format($activity->total())],
-            ['label' => 'Sign-ins', 'value' => number_format($by['signin'] ?? 0)],
-            ['label' => 'Access events', 'value' => number_format($by['door'] ?? 0)],
-            ['label' => 'Approvals pending', 'value' => number_format($by['approval'] ?? 0)],
-            ['label' => 'Alarms', 'value' => number_format($by['alarm'] ?? 0)],
-            ['label' => 'Cert expiries', 'value' => number_format($by['cert'] ?? 0)],
+            ['label' => 'Sign-ins (30 d)', 'value' => number_format($by['signin'] ?? 0)],
+            ['label' => 'Access events (30 d)', 'value' => number_format($by['door'] ?? 0)],
+            ['label' => 'Approval events (30 d)', 'value' => number_format($by['approval'] ?? 0)],
+            ['label' => 'Alarm events (30 d)', 'value' => number_format($by['alarm'] ?? 0)],
+            ['label' => 'Cert expiries (30 d)', 'value' => number_format($by['cert'] ?? 0)],
         ], 'fp-tiles', 'fp-tile');
     }
 

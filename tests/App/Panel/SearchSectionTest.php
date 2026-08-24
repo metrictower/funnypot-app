@@ -69,6 +69,54 @@ final class SearchSectionTest extends TestCase
         }
     }
 
+    // --- hit count + area participation scale with query plausibility ---
+
+    public function test_gibberish_query_returns_few_or_zero_hits_and_fewer_areas(): void
+    {
+        $confident = $this->render('/admin/search/payroll');
+        preg_match('/(\d+) matches across (\d+) areas/', $confident, $mConfident);
+        self::assertNotEmpty($mConfident, 'the results heading renders for a confident query');
+
+        // A long consonant-run keyboard-mash string, unrelated to any real term, scores as implausible.
+        $gibberish = $this->render('/admin/search/zxqvbnmqpxz');
+        preg_match('/(\d+) matches across (\d+) areas/', $gibberish, $mGibberish);
+        self::assertNotEmpty($mGibberish, 'the results heading still renders for a gibberish query');
+
+        self::assertLessThan((int) $mConfident[1], (int) $mGibberish[1], 'gibberish must return fewer total matches than a real term');
+        self::assertLessThan((int) $mConfident[2], (int) $mGibberish[2], 'gibberish must participate in fewer areas than a real term');
+        self::assertSame(0, (int) $mGibberish[1], 'a strongly implausible query returns zero hits');
+        self::assertSame(0, (int) $mGibberish[2], 'a strongly implausible query participates in zero areas');
+        // No result-group card renders at all for a zero-hit query.
+        self::assertStringNotContainsString('href="/admin/hr/employees/emp-', $gibberish);
+    }
+
+    public function test_real_looking_short_abbreviations_still_return_confident_hits(): void
+    {
+        // Vowel-less real abbreviations (no dictionary lookup — just short enough to be plausible) must
+        // keep the original always-confident behaviour, same as the existing password/admin/wire/root/ssn set.
+        foreach (['vpn', 'ssh'] as $q) {
+            $html = $this->render('/admin/search/' . $q);
+            self::assertStringContainsString('matches across', $html, "query $q");
+            self::assertStringContainsString('href="/admin/hr/employees/emp-', $html, "query $q");
+        }
+    }
+
+    // --- documents teaser varies by query ---
+
+    public function test_documents_teaser_varies_owner_and_count_by_query(): void
+    {
+        $a = $this->render('/admin/search/payroll');
+        $b = $this->render('/admin/search/wire');
+        self::assertStringContainsString('last opened by IT', $a);
+        self::assertStringContainsString('last opened by Legal', $b);
+        self::assertStringNotContainsString('last opened by Legal', $a);
+
+        // A gibberish query gets no documents teaser at all (plausibility-scaled to zero, not a fixed 2).
+        $gibberish = $this->render('/admin/search/zxqvbnmqpxz');
+        self::assertStringNotContainsString('Files &amp; documents', $gibberish);
+        self::assertStringNotContainsString('last opened by', $gibberish);
+    }
+
     // --- determinism ---
 
     public function test_results_are_byte_identical_per_seed_and_query(): void

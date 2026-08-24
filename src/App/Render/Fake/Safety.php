@@ -69,13 +69,6 @@ final class Safety
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** A frozen wall-clock time-of-day string HH:MM:SS derived off the seed — never date(). */
-    private function clock(string $salt): string
-    {
-        $sec = $this->h($salt) % 86400;
-        return sprintf('%02d:%02d:%02d', (int) ($sec / 3600), (int) ($sec % 3600 / 60), $sec % 60);
-    }
-
     /** Seeded "N ago" off DEPLOY_EPOCH — deterministic, never time()/date(). */
     private function ageAgo(string $salt): string
     {
@@ -423,9 +416,11 @@ final class Safety
 
     /**
      * A page of the incident buffer — benign life-safety operations (tests, isolations, cleared faults),
-     * never a live fire. Timestamps are monotonic within the page and derived off DEPLOY_EPOCH. Each
-     * incident is located in a real Building room (never an invented floor/room the topology lacks), so
-     * the location reconciles with the suppression zones and every space referenced elsewhere.
+     * never a live fire. Row $i's timestamp is a strictly-backward walk off DEPLOY_EPOCH (a seeded positive
+     * gap subtracted per step, absolute-index-keyed so any page recomputes the same date+time for the same
+     * row): newest-first, never in the future, and the printed date advances exactly when the walk crosses
+     * midnight. Each incident is located in a real Building room (never an invented floor/room the topology
+     * lacks), so the location reconciles with the suppression zones and every space referenced elsewhere.
      *
      * @return list<array{ref:string,time:string,type:string,location:string,floor:string,room:string,severity:string,status:string}>
      */
@@ -456,13 +451,24 @@ final class Safety
             $rooms[] = array('id' => 'room-g-01', 'name' => 'Core', 'floor' => 'G');
         }
 
+        // Strictly-descending epochs for every row up to this page, walked backward from DEPLOY_EPOCH so
+        // paging never repeats a date or reverses the clock, and row 0 is never later than "now".
+        $end = $offset + $limit;
+        $epoch = self::DEPLOY_EPOCH;
+        $epochs = array();
+        for ($k = 0; $k < $end; $k++) {
+            $epoch -= $this->intIn(60, 900, 'incgap|' . $k);
+            $epochs[$k] = $epoch;
+        }
+
         $out = [];
         for ($k = 0; $k < $limit; $k++) {
             $i = $offset + $k;
             $room = $rooms[$this->h('incroom|' . $i) % count($rooms)];
+            $rowEpoch = $epochs[$i];
             $out[] = array(
                 'ref' => 'FIRE-2026-' . sprintf('%05d', self::INCIDENT_TOTAL - $i),
-                'time' => $this->clock('inctime|' . $i),
+                'time' => FrozenClock::ymd($rowEpoch) . ' ' . FrozenClock::clock($rowEpoch),
                 'type' => $types[$this->h('inctype|' . $i) % count($types)],
                 'location' => $room['name'] . ' (Floor ' . $room['floor'] . ')',
                 'floor' => $room['floor'],

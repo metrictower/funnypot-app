@@ -107,12 +107,91 @@ final class CctvSectionTest extends TestCase
         }
     }
 
+    /** recordings() must walk strictly backward from DEPLOY_EPOCH: never a future clip, never a repeated
+     *  or backward-jumping start time (spec E11 — the newest clip used to be hardcoded into hour 23..10,
+     *  past a frozen "now" of 01:46, on every seed). */
+    public function test_recordings_are_never_future_and_strictly_monotonic(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $cctv = Cctv::fromSeed($seed);
+            $camId = $cctv->cameras()[0]['id'];
+            $prevEpoch = null;
+            foreach ($cctv->recordings($camId) as $r) {
+                self::assertMatchesRegularExpression(
+                    '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+                    $r['start'],
+                    "seed $seed: recording start carries a full date"
+                );
+                $epoch = strtotime($r['start'] . ' UTC');
+                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: recording must not start in the future: {$r['start']}");
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: recordings must be strictly newest-first");
+                }
+                $prevEpoch = $epoch;
+            }
+        }
+    }
+
+    /** The burned live-view timecode must never read later than the frozen "now" (spec E11 — it used to be
+     *  a fully random time-of-day, future on ~93% of cameras). */
+    public function test_camera_timecode_is_never_future(): void
+    {
+        for ($seed = 0; $seed < 10; $seed++) {
+            foreach (Cctv::fromSeed($seed)->cameras() as $c) {
+                $epoch = strtotime($c['timecode'] . ' UTC');
+                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: {$c['id']} timecode must not be in the future: {$c['timecode']}");
+            }
+        }
+    }
+
     public function test_generator_emits_no_public_ip(): void
     {
         for ($seed = 0; $seed < 12; $seed++) {
             $cctv = Cctv::fromSeed($seed);
             $blob = json_encode([$cctv->cameras(), $cctv->nvrArrays(), $cctv->events(30)]);
             self::assertDoesNotMatchRegularExpression(self::PUBLIC_IP, (string) $blob, "seed $seed");
+        }
+    }
+
+    /** events() must walk strictly backward from DEPLOY_EPOCH: never a future row, never a repeated or
+     *  backward-jumping date (spec E11 — the newest event used to be hardcoded to hour 23, past a frozen
+     *  "now" of 01:46). */
+    public function test_events_are_never_future_and_strictly_monotonic(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $cctv = Cctv::fromSeed($seed);
+            $prevEpoch = null;
+            foreach ($cctv->events(60) as $line) {
+                self::assertMatchesRegularExpression(
+                    '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}  /',
+                    $line,
+                    "seed $seed: event line carries a date+time: $line"
+                );
+                $epoch = strtotime(substr($line, 0, 19) . ' UTC');
+                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: event must not be in the future: $line");
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: events must be strictly newest-first: $line");
+                }
+                $prevEpoch = $epoch;
+            }
+        }
+    }
+
+    /** A per-camera event tail must hold the same never-future, strictly-descending invariant as events(). */
+    public function test_camera_events_for_are_never_future_and_strictly_monotonic(): void
+    {
+        for ($seed = 0; $seed < 6; $seed++) {
+            $cctv = Cctv::fromSeed($seed);
+            $camId = $cctv->cameras()[0]['id'];
+            $prevEpoch = null;
+            foreach ($cctv->cameraEventsFor($camId, 40) as $line) {
+                $epoch = strtotime(substr($line, 0, 19) . ' UTC');
+                self::assertLessThanOrEqual(Cctv::DEPLOY_EPOCH, $epoch, "seed $seed: camera event must not be in the future: $line");
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: camera events must be strictly newest-first: $line");
+                }
+                $prevEpoch = $epoch;
+            }
         }
     }
 

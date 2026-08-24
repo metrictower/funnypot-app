@@ -16,8 +16,10 @@ namespace Funnypot\App\Render\Fake;
  *  - DETERMINISTIC per (seed, query): every result group, its size and which records it selects are
  *    hash(seed + query-slug + slot). No time()/date()/rand()/shuffle(), so the same URL is byte-identical
  *    on reload (a diffable search page is a tell).
- *  - ALWAYS PLAUSIBLE: every group returns at least one hit for any query, so "password" / "admin" /
- *    "wire" / a name all return confident-looking rows (deep engagement) that all dead-end inertly.
+ *  - PLAUSIBILITY-SCALED: a real-looking term ("password" / "admin" / "wire" / a name) returns confident
+ *    multi-group rows (deep engagement) that all dead-end inertly; a gibberish/random-token query scores
+ *    low on the character-level plausibility check and returns few or zero hits across fewer areas, so a
+ *    blind fuzz probe does not get the same confident results page as a real search term.
  *  - COHERENT + SAFE: hits are the same fabricated, RFC1918/invalid-format records the modules already
  *    serve — no new secret is minted here and the query itself is only ever a hash salt, never reflected
  *    into a link or persisted. The section escapes the echoed query.
@@ -82,14 +84,102 @@ final class Search
         return (int) hexdec(substr(hash('sha256', $this->seed . '|search|' . $salt), 0, 15));
     }
 
-    /** How many hits a group shows: 2..4, clamped to what the pool holds, never above; >=1 while non-empty. */
+    /**
+     * How many hits a group shows, clamped to what the pool holds. Scaled by plausibility(): a real-looking
+     * term gets the original 2..4 confident hits; a marginal query gets a sparse, per-group-varying 0..2;
+     * outright gibberish gets 0 in every group (so "N areas" drops with it — see groups()/plausibility()).
+     */
     private function countFor(string $group, string $query, int $poolSize): int
     {
         if ($poolSize <= 0) {
             return 0;
         }
-        $k = 2 + ($this->h('cnt|' . $group . '|' . $query) % 3);   // 2..4
+        $tier = $this->plausibility($query);
+        if ($tier <= 0) {
+            return 0;
+        }
+        $h = $this->h('cnt|' . $group . '|' . $query);
+        if ($tier === 1) {
+            $k = ($h % 100) < 45 ? 0 : 1;               // marginal: patchy, mostly-empty
+        } elseif ($tier === 2) {
+            $k = 1 + ($h % 2);                          // 1..2
+        } else {
+            $k = 2 + ($h % 3);                          // 2..4 — unchanged confident behaviour
+        }
         return $k > $poolSize ? $poolSize : $k;
+    }
+
+    /**
+     * A cheap 0..N "does this look like a real search term" score, derived purely from the query's own
+     * characters (never a dictionary, so it stays deterministic and PHP 7.3-clean). Short real words and
+     * abbreviations without vowels ("ssn", "vpn") still score as plausible via the length exemption; a
+     * keyboard-mash consonant run, a repeated-character string, or a digit-heavy random token scores low.
+     * >=3 = confident (the original always-hits behaviour); 1-2 = marginal/sparse; <=0 = no hits anywhere.
+     */
+    private function plausibility(string $query): int
+    {
+        $len = strlen($query);
+        if ($len === 0) {
+            return 0;
+        }
+        $letters = 0;
+        $digits = 0;
+        $vowels = 0;
+        $maxSameRun = 1;
+        $sameRun = 1;
+        $maxConsonantRun = 0;
+        $consonantRun = 0;
+        $prev = '';
+        for ($i = 0; $i < $len; $i++) {
+            $c = strtolower($query[$i]);
+            $isAlpha = ($c >= 'a' && $c <= 'z');
+            $isVowel = $isAlpha && strpos('aeiou', $c) !== false;
+            if ($isAlpha) {
+                $letters++;
+                if ($isVowel) {
+                    $vowels++;
+                }
+            } elseif ($c >= '0' && $c <= '9') {
+                $digits++;
+            }
+            if ($isAlpha && !$isVowel) {
+                $consonantRun++;
+                $maxConsonantRun = $consonantRun > $maxConsonantRun ? $consonantRun : $maxConsonantRun;
+            } else {
+                $consonantRun = 0;
+            }
+            $sameRun = ($c === $prev) ? $sameRun + 1 : 1;
+            $maxSameRun = $sameRun > $maxSameRun ? $sameRun : $maxSameRun;
+            $prev = $c;
+        }
+
+        $score = 0;
+        $alphaRatio = $letters / $len;
+        if ($alphaRatio >= 0.6) {
+            $score += 2;
+        } elseif ($alphaRatio >= 0.3) {
+            $score += 1;
+        }
+        if ($vowels > 0 || $len <= 4) {
+            $score += 1;                                // real short abbreviations lack vowels (ssn, vpn)
+        }
+        if ($len >= 2 && $len <= 28) {
+            $score += 1;
+        } else {
+            $score -= 1;
+        }
+        if ($maxConsonantRun >= 5) {
+            $score -= 3;                                // keyboard-mash consonant cluster
+        }
+        if ($maxSameRun >= 6) {
+            $score -= 4;                                // "aaaaaaaa" style repeat
+        } elseif ($maxSameRun >= 4) {
+            $score -= 2;
+        }
+        if ($digits > 0 && $len >= 8 && ($digits / $len) > 0.35) {
+            $score -= 2;                                // digit-heavy — reads like a hash/random token
+        }
+        return $score;
     }
 
     /**
@@ -264,6 +354,38 @@ final class Search
             ];
         }
         return ['key' => 'bank', 'label' => 'Bank accounts', 'items' => $items];
+    }
+
+    /**
+     * The "top match" documents teaser: a shared-drive hit + an export file that fold the query back in.
+     * Item count (0-2) follows the same plausibility scale as groups() — a gibberish query gets no teaser
+     * at all — and the attributed department is picked by a query-derived hash rather than always Finance,
+     * so two different queries don't surface the identical confident 2-item card.
+     *
+     * @return list<array{title:string,sub:string,path:string}>
+     */
+    public function documentsFor(string $query): array
+    {
+        $tier = $this->plausibility($query);
+        if ($tier <= 0) {
+            return [];
+        }
+        $depts = ['Finance', 'Legal', 'HR', 'IT', 'Operations', 'Facilities', 'Security', 'Executive Office'];
+        $dept = $depts[$this->h('docdept|' . $query) % count($depts)];
+        $items = [
+            [
+                'title' => '"' . $query . '" — matches in shared drive',
+                'sub' => 'Documents / reports · restricted',
+                'path' => '/hr/documents',
+            ],
+            [
+                'title' => $query . ' (export).xlsx',
+                'sub' => 'Files · last opened by ' . $dept,
+                'path' => '/files',
+            ],
+        ];
+        $count = $tier >= 3 ? 2 : 1;
+        return array_slice($items, 0, $count);
     }
 
     // --- landing (empty query) ---

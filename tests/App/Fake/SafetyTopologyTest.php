@@ -56,4 +56,40 @@ final class SafetyTopologyTest extends TestCase
         self::assertSame($a->sprinklerZones(), $b->sprinklerZones());
         self::assertSame($a->incidents(0, 40), $b->incidents(0, 40));
     }
+
+    /** incidents() must walk strictly backward from DEPLOY_EPOCH: never a future row, and monotonically
+     *  newest-first with a real date — clock() used to be pure hash%86400 with no tie to row order at all,
+     *  contradicting the class doc's own "monotonic" claim. */
+    public function test_incidents_are_never_future_and_strictly_monotonic_with_dates(): void
+    {
+        for ($seed = 0; $seed < 8; $seed++) {
+            $safety = Safety::fromSeed($seed);
+            $prevEpoch = null;
+            foreach ($safety->incidents(0, 80) as $inc) {
+                self::assertMatchesRegularExpression(
+                    '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+                    $inc['time'],
+                    "seed $seed: incident {$inc['ref']} time carries a date"
+                );
+                $epoch = strtotime($inc['time'] . ' UTC');
+                self::assertLessThanOrEqual(Safety::DEPLOY_EPOCH, $epoch, "seed $seed: incident must not be in the future: {$inc['ref']}");
+                if ($prevEpoch !== null) {
+                    self::assertLessThan($prevEpoch, $epoch, "seed $seed: incidents must be strictly newest-first: {$inc['ref']}");
+                }
+                $prevEpoch = $epoch;
+            }
+        }
+    }
+
+    /** Paging must never repeat or reverse the clock: the first row of page 2 is strictly older than the
+     *  last row of page 1, for the same reason a physical incident log can't un-happen between pages. */
+    public function test_incident_paging_never_repeats_or_reverses_the_clock(): void
+    {
+        $safety = Safety::fromSeed(7);
+        $page1 = $safety->incidents(0, 40);
+        $page2 = $safety->incidents(40, 40);
+        $lastOfPage1 = strtotime(end($page1)['time'] . ' UTC');
+        $firstOfPage2 = strtotime($page2[0]['time'] . ' UTC');
+        self::assertLessThan($lastOfPage1, $firstOfPage2, 'page 2 continues strictly older than page 1');
+    }
 }

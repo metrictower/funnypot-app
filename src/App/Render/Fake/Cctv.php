@@ -65,15 +65,15 @@ final class Cctv
         return $min + ($this->h($salt) % (($max - $min) + 1));
     }
 
-    /** Frozen "HH:MM:SS" for a burned timecode — seeded, never date(). */
-    private function clock(string $salt): string
+    /**
+     * A "just now" instant for a burned timecode — a few seconds to a few minutes before DEPLOY_EPOCH, so
+     * a live-view overlay reads as the panel's own clock, not a random hour that can land hours ahead of
+     * the frozen "now" (spec E11 — no future timestamps).
+     */
+    private function liveTimecode(string $salt): string
     {
-        return sprintf(
-            '%02d:%02d:%02d',
-            $this->intIn(0, 23, $salt . '|hh'),
-            $this->intIn(0, 59, $salt . '|mm'),
-            $this->intIn(0, 59, $salt . '|ss')
-        );
+        $epoch = self::DEPLOY_EPOCH - $this->intIn(0, 240, $salt . '|lag');
+        return FrozenClock::ymd($epoch) . ' ' . FrozenClock::clock($epoch);
     }
 
     // --- catalogs (invented, resemblance only) ---
@@ -216,7 +216,7 @@ final class Cctv
             'recording' => $status === 'online' || $status === 'tampering',
             'ptz' => ($this->h($salt . '|ptz') % 3) === 0,
             'retentionDays' => $retention,
-            'timecode' => FrozenClock::todayYmd() . ' ' . $this->clock($salt . '|tc'),
+            'timecode' => $this->liveTimecode($salt . '|tc'),
         ];
     }
 
@@ -267,8 +267,12 @@ final class Cctv
     // --- recordings ---
 
     /**
-     * Seeded recording clips for a camera (newest first). Filenames end `.mp4.zip` so a download routes to
-     * the decoy-archive handler (spec E8), and match [A-Za-z0-9._-] so the section can link them.
+     * Seeded recording clips for a camera, newest first. Row $i's start walks strictly backward from
+     * DEPLOY_EPOCH by the clip's own duration plus a seeded gap, the same anchoring events()/
+     * cameraEventsFor() use, so a clip never "starts" later than the frozen now and the reel reads as
+     * one continuous back-catalogue rather than a wall clock stuck in the future (spec E11). Filenames
+     * end `.mp4.zip` so a download routes to the decoy-archive handler (spec E8), and match
+     * [A-Za-z0-9._-] so the section can link them.
      *
      * @return list<array{file:string,start:string,duration:string,size:string,trigger:string}>
      */
@@ -277,16 +281,18 @@ final class Cctv
         $count = $this->intIn(6, 14, 'recn|' . $camId);
         $triggers = ['Continuous', 'Motion', 'Motion', 'Alarm', 'Tamper', 'Line-cross'];
         $out = [];
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'rec|' . $camId . '|' . $i;
-            $hh = 23 - ($i % 24);
-            $mm = $this->intIn(0, 59, $salt . '|mm');
             $secs = $this->intIn(20, 1800, $salt . '|dur');
             $mb = $this->intIn(40, 2400, $salt . '|mb');
+            $epoch -= ($secs + $this->intIn(60, 3600, $salt . '|gap'));
+            $ymd = FrozenClock::ymd($epoch);
+            $hhmm = substr(FrozenClock::clock($epoch), 0, 5);
             $out[] = [
-                'file' => $camId . '_' . str_replace('-', '', FrozenClock::todayYmd())
-                    . '_' . sprintf('%02d%02d', $hh, $mm) . '.mp4.zip',
-                'start' => FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $mm, $this->intIn(0, 59, $salt . '|ss')),
+                'file' => $camId . '_' . str_replace('-', '', $ymd)
+                    . '_' . str_replace(':', '', $hhmm) . '.mp4.zip',
+                'start' => $ymd . ' ' . FrozenClock::clock($epoch),
                 'duration' => $this->durationLabel($secs),
                 'size' => $mb < 1024 ? $mb . ' MB' : number_format($mb / 1024, 1) . ' GB',
                 'trigger' => $triggers[$this->h($salt . '|trig') % count($triggers)],
@@ -360,7 +366,9 @@ final class Cctv
 
     /**
      * Recent camera-plane events (newest first) — motion / tamper / signal-loss lines for the landing and
-     * per-camera log. Deterministic, monotonic timecodes off the frozen day.
+     * per-camera log. Each row walks strictly backward from DEPLOY_EPOCH by a seeded positive gap, so the
+     * date advances (never repeats or jumps) exactly when the walk crosses midnight, and row 0 is never
+     * later than "now" (spec E11 — no future timestamps).
      *
      * @return list<string>
      */
@@ -372,12 +380,13 @@ final class Cctv
         $cams = $this->cameras();
         $kinds = ['MOTION', 'MOTION', 'LINE-CROSS', 'TAMPER', 'SIGNAL-LOSS', 'PTZ-PRESET', 'RECORD-START'];
         $out = [];
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'evt|' . $i;
             $cam = $cams[$this->h($salt . '|cam') % count($cams)];
             $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];
-            $hh = 23 - ($i % 24);
-            $out[] = FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
+            $epoch -= $this->intIn(20, 240, $salt . '|gap');
+            $out[] = FrozenClock::ymd($epoch) . ' ' . FrozenClock::clock($epoch)
                 . '  ' . $kind . '  ' . $cam['id'] . '  ' . $cam['name'];
         }
         return $out;
@@ -385,7 +394,8 @@ final class Cctv
 
     /**
      * This camera's own recent event tail (newest first) — every line names THIS camera, so a per-camera
-     * events tab never shows another camera's id. Deterministic per (camId,index).
+     * events tab never shows another camera's id. Same strictly-backward walk off DEPLOY_EPOCH as events(),
+     * keyed to (camId,index), so no row is ever in the future and the date advances only forward-in-time.
      *
      * @return list<string>
      */
@@ -397,11 +407,12 @@ final class Cctv
         $cam = $this->camera($camId);
         $kinds = ['MOTION', 'MOTION', 'LINE-CROSS', 'TAMPER', 'SIGNAL-LOSS', 'PTZ-PRESET', 'RECORD-START'];
         $out = [];
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'camevt|' . $camId . '|' . $i;
             $kind = $kinds[$this->h($salt . '|kind') % count($kinds)];
-            $hh = 23 - ($i % 24);
-            $out[] = FrozenClock::todayYmd() . ' ' . sprintf('%02d:%02d:%02d', $hh, $this->intIn(0, 59, $salt . '|mm'), $this->intIn(0, 59, $salt . '|ss'))
+            $epoch -= $this->intIn(30, 300, $salt . '|gap');
+            $out[] = FrozenClock::ymd($epoch) . ' ' . FrozenClock::clock($epoch)
                 . '  ' . $kind . '  ' . $cam['id'] . '  ' . $cam['name'];
         }
         return $out;

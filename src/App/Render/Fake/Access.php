@@ -396,8 +396,12 @@ final class Access
     // --- badge events (per door) + global access-event log ---
 
     /**
-     * Recent transactions at one door, newest first, on a descending time gradient off DEPLOY_EPOCH.
-     * Badges are masked; a high-security door skews toward more DENIED lines (schedule / access-level).
+     * Recent transactions at one door, newest first. Row $i's time is a strictly-backward walk off
+     * DEPLOY_EPOCH (a seeded positive gap subtracted per step, cumulative — not an independent draw per
+     * row), so the scroll never jumps forward and row 0 is never later than "now" (spec E11). Badges are
+     * masked; a high-security door skews toward more DENIED lines (schedule / access-level). Each row
+     * prints the full civil date alongside the time — a door open long enough to cross local midnight must
+     * not read as the clock jumping backward with no date to explain it.
      *
      * @return list<array{time:string,result:string,badge:string,holder:string,reason:string}>
      */
@@ -406,9 +410,10 @@ final class Access
         $door = $this->door($doorId);
         $n = $this->org->headcount();
         $out = [];
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'evt|' . $doorId . '|' . $i;
-            $epoch = self::DEPLOY_EPOCH - ($i * $this->intIn(70, 900, $salt . '|gap')) - $this->intIn(0, 59, $salt . '|j');
+            $epoch -= $this->intIn(70, 900, $salt . '|gap');
             $person = $this->rosterAt($this->h($salt . '|who') % $n);
             $roll = $this->h($salt . '|res') % 100;
             $denyCut = $door['highSecurity'] ? 34 : 12;
@@ -420,7 +425,7 @@ final class Access
                 $reason = $door['name'];
             }
             $out[] = array(
-                'time' => $this->clock($epoch),
+                'time' => FrozenClock::ymd($epoch) . ' ' . $this->clock($epoch),
                 'result' => $result,
                 'badge' => $this->maskBadge($person['badgeId']),
                 'holder' => $person['name'],
@@ -432,8 +437,14 @@ final class Access
 
     /**
      * The building-wide access-event scroll as preformatted lines (aligned columns), newest first, each
-     * carrying its ACS controller's RFC1918 source. One off-hours GRANTED to a server room is buried in
-     * when the budget allows — the thread the incident view reconstructs. Deterministic per seed+page.
+     * carrying its ACS controller's RFC1918 source. Row $i's time is a strictly-backward walk off
+     * DEPLOY_EPOCH (a seeded positive gap subtracted per step, cumulative — not an independent draw per
+     * row), so the scroll never jumps forward and row 0 is never later than "now" (spec E11). One
+     * off-hours GRANTED to a server room is buried in when the budget allows — the thread the incident
+     * view reconstructs; its slot is pulled back to the nearest earlier off-hours instant without breaking
+     * the walk's strict ordering, and the rows after it continue the walk from there. Deterministic per
+     * seed+page. Every row prints the full civil date alongside the time (spec E11): a scroll long enough
+     * to cross local midnight must not read as the clock jumping backward with no date to explain it.
      *
      * @return list<string>
      */
@@ -443,21 +454,22 @@ final class Access
         $n = $this->org->headcount();
         $plantOffHours = ($this->h('offhours') % 3) === 0;
         $out = [];
+        $epoch = self::DEPLOY_EPOCH;
         for ($i = 0; $i < $count; $i++) {
             $salt = 'log|' . $i;
-            $epoch = self::DEPLOY_EPOCH - ($i * $this->intIn(40, 400, $salt . '|gap')) - $this->intIn(0, 59, $salt . '|j');
+            $epoch -= $this->intIn(40, 400, $salt . '|gap');
             $door = $doors[$this->h($salt . '|door') % count($doors)];
             $person = $this->rosterAt($this->h($salt . '|who') % $n);
 
             $roll = $this->h($salt . '|res') % 100;
-            $time = $this->clock($epoch);
             if ($plantOffHours && $i === 3) {
-                // The buried off-hours server-room grant — the anomaly the alerts module narrates. Its
-                // timestamp is forced into off-hours so the "off-hours access" narrative actually holds.
+                // The buried off-hours server-room grant — the anomaly the alerts module narrates. Pulled
+                // back to the nearest earlier off-hours instant (never later than the walk already
+                // reached), so the scroll still reads strictly newest-first around it.
                 $result = 'GRANTED';
                 $srv = $this->firstHighSecDoor($doors);
                 $door = $srv !== null ? $srv : $door;
-                $time = $this->clock($this->offHoursSecond($salt));
+                $epoch = $this->offHoursEpoch($salt, $epoch);
             } elseif ($roll < 8) {
                 $result = 'FORCED';
             } elseif ($roll < 22) {
@@ -466,7 +478,7 @@ final class Access
                 $result = 'GRANTED';
             }
 
-            $out[] = $time
+            $out[] = FrozenClock::ymd($epoch) . ' ' . $this->clock($epoch)
                 . '  ' . str_pad($result, 8)
                 . ' ' . str_pad($this->maskBadge($person['badgeId']), 8)
                 . ' ' . str_pad($this->truncate($person['name'], 20), 20)
@@ -482,6 +494,25 @@ final class Access
         // 7-hour window: 00:00–05:00 (5 h) then 22:00–24:00 (2 h).
         $r = $this->h($salt . '|offhrs') % (7 * 3600);
         return $r < 5 * 3600 ? $r : (22 * 3600 + ($r - 5 * 3600));
+    }
+
+    /**
+     * The most recent occurrence of the planted off-hours second-of-day that is still strictly earlier
+     * than $ceiling (the walk's own epoch reaching this row), as an absolute epoch. The time-of-day alone
+     * (offHoursSecond) has no date; pairing it with $ceiling's calendar day would read as a future/
+     * simultaneous event whenever the off-hours second lands at or after $ceiling, so this rolls the date
+     * back a day at a time until it doesn't — keeping the walk strictly newest-first (spec E11) whatever
+     * point in the walk it is spliced into.
+     */
+    private function offHoursEpoch(string $salt, int $ceiling): int
+    {
+        $secOfDay = $this->offHoursSecond($salt);
+        $midnightOfCeiling = $ceiling - ($ceiling % 86400);
+        $epoch = $midnightOfCeiling + $secOfDay;
+        while ($epoch >= $ceiling) {
+            $epoch -= 86400;
+        }
+        return $epoch;
     }
 
     private function firstHighSecDoor(array $doors): ?array
