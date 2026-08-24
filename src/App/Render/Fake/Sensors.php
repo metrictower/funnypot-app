@@ -464,7 +464,7 @@ final class Sensors
             return $out;
         }
         // Binary: a seeded on/off walk; the present state anchors the last sample.
-        $on = ($s['sev'] === 'info' || $s['sev'] === 'warn' || $s['sev'] === 'crit') ? 1 : 0;
+        $on = ($s['severity'] === 'info' || $s['severity'] === 'warn' || $s['severity'] === 'crit') ? 1 : 0;
         for ($i = 0; $i < 24; $i++) {
             $out[] = ($this->h($id . '|hb|' . $i) % 100) < 18 ? 1.0 : 0.0;
         }

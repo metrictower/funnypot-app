@@ -45,6 +45,12 @@ final class ItServices
     /** @var Building */
     private $building;
 
+    /** @var Cmdb|null asset inventory, built lazily — the estate the MDM fleet is a managed view over. */
+    private $cmdb = null;
+
+    /** @var array<string,list<array{hostname:string,serial:string}>>|null CMDB endpoints grouped by type. */
+    private $cmdbEndpoints = null;
+
     /** @var array<int,array>|null cached flat room list across all floors (printer locations). */
     private $rooms = null;
 
@@ -300,6 +306,37 @@ final class ItServices
         return $this->org->magnitudes()['mdmEnrolled'];
     }
 
+    /** The shared asset inventory, built lazily — the MDM fleet draws its hostnames/serials from it. */
+    private function cmdb(): Cmdb
+    {
+        if ($this->cmdb === null) {
+            $this->cmdb = Cmdb::fromSeed($this->seed, $this->domain);
+        }
+        return $this->cmdb;
+    }
+
+    /**
+     * CMDB endpoint hostname+serial pairs grouped by asset type (built once). The MDM fleet is a managed
+     * VIEW over these real assets, so its hostnames/serials are drawn from the inventory rather than a
+     * disjoint 01001+ namespace — a list-diff against the CMDB overlaps instead of reading as two fleets.
+     *
+     * @return array<string,list<array{hostname:string,serial:string}>>
+     */
+    private function cmdbEndpoints(): array
+    {
+        if ($this->cmdbEndpoints !== null) {
+            return $this->cmdbEndpoints;
+        }
+        $byType = ['laptop' => [], 'desktop' => [], 'phone' => [], 'tablet' => []];
+        foreach ($this->cmdb()->assets() as $a) {
+            if (isset($byType[$a['type']]) && $a['hostname'] !== '—') {
+                $byType[$a['type']][] = ['hostname' => $a['hostname'], 'serial' => $a['serial']];
+            }
+        }
+        $this->cmdbEndpoints = $byType;
+        return $byType;
+    }
+
     /** @return list<array> */
     public function mdmPage(int $offset, int $limit): array
     {
@@ -324,22 +361,56 @@ final class ItServices
         $r = $this->h('mdm-comp|' . $i) % 100;
         $compliance = $r < 82 ? 'Compliant' : ($r < 95 ? 'At risk' : 'Non-compliant');
 
-        // Hostname + serial follow the CMDB naming scheme (same host prefix, LT/PH/TB type codes, same
-        // serial shape) so the managed fleet reconciles with the asset inventory instead of reading as a
-        // second, disjoint population an attacker could diff.
-        $typeCode = $osIdx <= 1 ? 'LT' : ($osIdx === 4 ? 'TB' : 'PH');
+        // Hostname + serial are a REAL CMDB endpoint's, of the class this device's OS implies (macOS/
+        // Windows -> laptop/desktop, iPadOS -> tablet, iOS/Android -> phone), so the managed fleet is a
+        // subset of the asset inventory an attacker can diff, never a second disjoint 01001+ population.
+        if ($osIdx === 0) {
+            $classes = ['laptop', 'desktop'];
+        } elseif ($osIdx === 1) {
+            $classes = ['laptop'];
+        } elseif ($osIdx === 4) {
+            $classes = ['tablet'];
+        } else {
+            $classes = ['phone'];
+        }
+        $byType = $this->cmdbEndpoints();
+        $pool = [];
+        foreach ($classes as $c) {
+            foreach ($byType[$c] as $ep) {
+                $pool[] = $ep;
+            }
+        }
+        if ($pool === []) {
+            // No CMDB endpoint of this class for the seed: draw from any endpoint so the fleet still
+            // reconciles with the inventory (subset holds); only a monitor-only estate would empty this.
+            foreach ($byType as $eps) {
+                foreach ($eps as $ep) {
+                    $pool[] = $ep;
+                }
+            }
+        }
+        if ($pool !== []) {
+            $ep = $pool[$this->h('mdm-host|' . $i) % count($pool)];
+            $hostname = $ep['hostname'];
+            $serial = $ep['serial'];
+        } else {
+            // Degenerate fallback (no hostnamed asset at all): keep a self-consistent name/serial.
+            $typeCode = $osIdx <= 1 ? 'LT' : ($osIdx === 4 ? 'TB' : 'PH');
+            $hostname = $this->hostPrefix() . '-' . $typeCode . '-' . sprintf('%05d', 1001 + $i);
+            $serial = strtoupper(substr(hash('sha256', $this->seed . '|mdmsn|' . $i), 0, 3))
+                . sprintf('%07d', $this->intIn(0, 9999999, 'mdmsn2|' . $i));
+        }
 
         return [
             'index' => $i,
             'id' => 'dev-' . sprintf('%05d', 20001 + $i),
-            'hostname' => $this->hostPrefix() . '-' . $typeCode . '-' . sprintf('%05d', 1001 + $i),
+            'hostname' => $hostname,
             'owner' => $owner['name'],
             'ownerEmail' => $owner['email'],
             'os' => $osList[$osIdx],
             'osVersion' => $verList[$osIdx],
             'model' => $modelList[$this->h('mdm-md|' . $i) % count($modelList)],
-            'serial' => strtoupper(substr(hash('sha256', $this->seed . '|mdmsn|' . $i), 0, 3))
-                . sprintf('%07d', $this->intIn(0, 9999999, 'mdmsn2|' . $i)),
+            'serial' => $serial,
             'compliance' => $compliance,
             'ip' => $owner['ip'],
             'lastSync' => $this->intIn(1, 2880, 'mdm-ls|' . $i) . ' min ago',

@@ -338,18 +338,47 @@ final class Safety
     // --- sprinkler zones ---
 
     /**
-     * Wet/dry/pre-action sprinkler zones with supervised pressure and flow-switch state.
+     * Wet/dry/pre-action sprinkler zones with supervised pressure and flow-switch state. Each zone
+     * anchors to a floor the shared Building topology actually has (never a hardcoded B1/level-8 the
+     * seed's stack may lack): parking rides the deepest basement (ground if none), server pre-action
+     * the floor of a real Server-Comms room, office wet the top upper level, deluge the roof.
      *
      * @return list<array{id:string,name:string,type:string,status:string,pressurePsi:int,flowSwitch:string,floor:string}>
      */
     public function sprinklerZones(): array
     {
+        $bld = Building::fromSeed($this->seed);
+        $ground = 'G';
+        $roof = 'Roof';
+        $basement = '';        // deepest basement code, if the stack has one
+        $topOffice = $ground;  // highest numbered upper level, else ground
+        foreach ($bld->floors() as $f) {
+            $code = $f['code'];
+            if ($code !== '' && $code[0] === 'B' && ($basement === '' || $code > $basement)) {
+                $basement = $code;                       // 'B2' > 'B1' lexically -> deepest
+            }
+            if (ctype_digit($code) && ($topOffice === $ground || (int) $code > (int) $topOffice)) {
+                $topOffice = $code;
+            }
+        }
+        // Server / comms pre-action rides the floor of a real Server-Comms room, else ground.
+        $serverFloor = $ground;
+        foreach ($bld->floors() as $f) {
+            foreach ($bld->roomsFor($f['code']) as $r) {
+                if ($r['type'] === 'Server-Comms') {
+                    $serverFloor = $r['floor'];
+                    break 2;
+                }
+            }
+        }
+        $parkingFloor = $basement !== '' ? $basement : $ground;
+
         $defs = array(
-            array('sz-office-wet', 'Office floors (wet)', 'Wet pipe', 'G–8'),
-            array('sz-parking-dry', 'Parking deck (dry)', 'Dry pipe', 'B1–B2'),
-            array('sz-server-preaction', 'Server / comms (pre-action)', 'Pre-action', 'Core'),
-            array('sz-plant-deluge', 'Roof plant (deluge)', 'Deluge', 'Roof'),
-            array('sz-atrium-wet', 'Atrium & reception (wet)', 'Wet pipe', 'G'),
+            array('sz-office-wet', 'Office floors (wet)', 'Wet pipe', $topOffice),
+            array('sz-parking-dry', 'Parking / loading (dry)', 'Dry pipe', $parkingFloor),
+            array('sz-server-preaction', 'Server / comms (pre-action)', 'Pre-action', $serverFloor),
+            array('sz-plant-deluge', 'Roof plant (deluge)', 'Deluge', $roof),
+            array('sz-atrium-wet', 'Atrium & reception (wet)', 'Wet pipe', $ground),
         );
         $out = [];
         foreach ($defs as $d) {
@@ -394,9 +423,11 @@ final class Safety
 
     /**
      * A page of the incident buffer — benign life-safety operations (tests, isolations, cleared faults),
-     * never a live fire. Timestamps are monotonic within the page and derived off DEPLOY_EPOCH.
+     * never a live fire. Timestamps are monotonic within the page and derived off DEPLOY_EPOCH. Each
+     * incident is located in a real Building room (never an invented floor/room the topology lacks), so
+     * the location reconciles with the suppression zones and every space referenced elsewhere.
      *
-     * @return list<array{ref:string,time:string,type:string,location:string,severity:string,status:string}>
+     * @return list<array{ref:string,time:string,type:string,location:string,floor:string,room:string,severity:string,status:string}>
      */
     public function incidents(int $offset, int $limit): array
     {
@@ -412,15 +443,30 @@ final class Safety
             'Panel walk-test', 'Supervisory restored', 'Drill — occupants NOT notified (test mode)',
         );
         $sev = array('Info', 'Info', 'Info', 'Low', 'Low');
-        $locs = array('Server Room A', 'Records Vault', 'Main Kitchen', 'Atrium', 'Loading Dock', 'Comms Riser', 'Level 3 North', 'Parking B1');
+
+        // Real building rooms — an incident always names a space the topology actually has.
+        $bld = Building::fromSeed($this->seed);
+        $rooms = array();
+        foreach ($bld->floors() as $f) {
+            foreach ($bld->roomsFor($f['code']) as $r) {
+                $rooms[] = $r;
+            }
+        }
+        if ($rooms === array()) {
+            $rooms[] = array('id' => 'room-g-01', 'name' => 'Core', 'floor' => 'G');
+        }
+
         $out = [];
         for ($k = 0; $k < $limit; $k++) {
             $i = $offset + $k;
+            $room = $rooms[$this->h('incroom|' . $i) % count($rooms)];
             $out[] = array(
                 'ref' => 'FIRE-2026-' . sprintf('%05d', self::INCIDENT_TOTAL - $i),
                 'time' => $this->clock('inctime|' . $i),
                 'type' => $types[$this->h('inctype|' . $i) % count($types)],
-                'location' => $locs[$this->h('incloc|' . $i) % count($locs)],
+                'location' => $room['name'] . ' (Floor ' . $room['floor'] . ')',
+                'floor' => $room['floor'],
+                'room' => $room['id'],
                 'severity' => $sev[$this->h('incsev|' . $i) % count($sev)],
                 'status' => 'Closed',
             );

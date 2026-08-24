@@ -53,6 +53,8 @@ final class PanelRegistry
             'network' => new NetworkSection(),
             'helpdesk' => new ItServicesSection(),
             'facilities' => new FacilitiesSection(),
+            'search' => new SearchSection(),
+            'activity' => new ActivitySection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -82,6 +84,7 @@ final class PanelRegistry
             'mdm' => 'helpdesk', 'mail' => 'helpdesk', 'certificates' => 'helpdesk',
             'floorplan' => 'facilities', 'rooms' => 'facilities', 'work-orders' => 'facilities',
             'workorders' => 'facilities', 'meeting-rooms' => 'facilities', 'bookings' => 'facilities',
+            'feed' => 'activity',
         ];
         $this->fallback = $dashboard;
     }

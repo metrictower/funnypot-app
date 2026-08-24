@@ -40,6 +40,7 @@ final class AdminLteSkin extends AbstractSkin
     private const NAV_GROUPS = [
         'Overview' => [
             ['Dashboard', ''],
+            ['Activity Feed', 'activity'],
         ],
         'IT & Platform' => [
             ['Servers', 'system'],
@@ -80,6 +81,7 @@ final class AdminLteSkin extends AbstractSkin
 
     /** Module slug -> page <title>; unmapped modules fall to the Dashboard title. */
     private const TITLES = [
+        'search' => 'Search', 'activity' => 'Activity Feed', 'feed' => 'Activity Feed',
         'system' => 'System Information', 'system-info' => 'System Information', 'servers' => 'System Information',
         'databases' => 'Databases', 'database' => 'Databases', 'db' => 'Databases', 'users' => 'Users',
         'backups' => 'Backups', 'backup' => 'Backups',
@@ -153,7 +155,8 @@ final class AdminLteSkin extends AbstractSkin
         $html = '<div class="alte-wrapper">';
 
         $html .= '<nav class="alte-navbar"><span class="alte-brand">' . $company . '</span>'
-            . '<span class="alte-app">' . $appName . ' &middot; ' . $this->esc($sp->hostname()) . '</span></nav>';
+            . '<span class="alte-app">' . $appName . ' &middot; ' . $this->esc($sp->hostname()) . '</span>'
+            . $this->navbarSearch($mountBase) . '</nav>';
 
         $html .= $this->sidebar($mountBase, $module);
 
@@ -234,6 +237,22 @@ final class AdminLteSkin extends AbstractSkin
         return self::TITLES[$module] ?? 'Dashboard';
     }
 
+    /**
+     * The navbar global-search box (spec §D.6). A plain GET form to `<mount>/search`; a query string never
+     * routes, so a submit lands on the search landing page (the documented zero-JS fallback), from which
+     * the section's own on-page form carries a typed query through to results. No inline script lives in
+     * the always-present skin chrome (a script here would be cached and re-served — the escaping golden
+     * test forbids it). Nothing typed is ever reflected here — no pre-filled value, fixed mount action —
+     * so the only echoed value is the mount base (skin vocab, escaped as defence-in-depth).
+     */
+    private function navbarSearch(string $mountBase): string
+    {
+        $action = $this->esc($mountBase . '/search');
+        return '<form class="alte-navsearch" method="get" action="' . $action . '" role="search">'
+            . '<input name="q" type="search" placeholder="Search the estate…" autocomplete="off" '
+            . 'aria-label="Search" class="alte-navsearch-input"></form>';
+    }
+
     private function css(): string
     {
         // Palette reads as a Bootstrap-admin-template scheme (dark sidebar, blue-grey accent) but every
@@ -245,6 +264,10 @@ final class AdminLteSkin extends AbstractSkin
             . 'box-sizing:border-box;z-index:2}'
             . '.alte-brand{font-weight:bold;color:#3b7ea1}'
             . '.alte-app{color:#6c757d;font-size:.9em}'
+            . '.alte-navsearch{margin-left:auto}'
+            . '.alte-navsearch-input{width:240px;max-width:38vw;padding:6px 12px;border:1px solid #cfd6dc;'
+            . 'border-radius:16px;font-size:.86em;color:#2c3136;background:#f4f6f8;box-sizing:border-box}'
+            . '.alte-navsearch-input:focus{outline:none;border-color:#3b7ea1;background:#fff}'
             . '.alte-sidebar{position:fixed;top:52px;bottom:0;left:0;width:210px;background:#2f3640;'
             . 'padding-top:6px;box-sizing:border-box;overflow-y:auto}'
             . '.alte-nav-group{margin:0}'

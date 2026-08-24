@@ -14,8 +14,11 @@ namespace Funnypot\App\Render\Fake;
  *  - INERT: no real credentials/keys/buckets; the "secret" args are literal REDACTED / random hex
  *    tokens that authenticate nowhere. Referenced paths and hosts are display-only decoys.
  *  - SAFE: any IP the host reaches (rsync/replica peers) is RFC1918/TEST-NET only, never real space.
- *  - Coherent loot: a single per-seed bucket/db/domain threads through the commands so the story
- *    reconciles if an attacker cross-reads two lines.
+ *  - Coherent loot: a single per-seed bucket/db threads through the commands so the story reconciles
+ *    if an attacker cross-reads two lines.
+ *  - ONE DOMAIN: the heartbeat endpoint renders at the host persona domain when the caller supplies it
+ *    (one host = one domain), never a second invented public domain; standalone it falls back to a
+ *    clearly-internal RFC1918 service host.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf/number_format), matching ServerProfile.
  */
 final class FakeCron
@@ -23,14 +26,22 @@ final class FakeCron
     /** @var int */
     private $seed;
 
-    private function __construct(int $seed)
+    /** @var string host persona domain the heartbeat renders at ('' -> internal RFC1918 fallback). */
+    private $personaDomain;
+
+    private function __construct(int $seed, string $personaDomain)
     {
         $this->seed = $seed;
+        $this->personaDomain = $personaDomain;
     }
 
-    public static function fromSeed(int $seed): self
+    /**
+     * Build a fake cron table for a seed. Callers that render the heartbeat SHOULD pass the host persona
+     * domain so it never contradicts the one domain shown elsewhere; the default '' is for standalone use.
+     */
+    public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed);
+        return new self($seed, $personaDomain);
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---
@@ -69,9 +80,16 @@ final class FakeCron
         return $this->pick(['brightpeak', 'nordicav', 'apexfit', 'maplegrove', 'lumenstack'], 'bucket');
     }
 
-    private function domain(): string
+    /**
+     * The heartbeat endpoint. Persona domain when the caller supplied it (one host = one domain);
+     * otherwise a clearly-internal RFC1918 service host — never a second invented public domain.
+     */
+    private function heartbeatUrl(): string
     {
-        return $this->bucket() . '.io';
+        if ($this->personaDomain !== '') {
+            return 'https://api.' . $this->personaDomain . '/v1/heartbeat/sync';
+        }
+        return 'https://10.0.5.' . $this->intIn(10, 240, 'hbhost') . '/v1/heartbeat/sync';
     }
 
     private function db(): string
@@ -91,7 +109,6 @@ final class FakeCron
     public function cronJobs(): array
     {
         $b = $this->bucket();
-        $d = $this->domain();
         $db = $this->db();
         $tok = $this->hex(40, 'bearer');           // inert 40-hex token; authenticates nowhere
 
@@ -102,7 +119,7 @@ final class FakeCron
             [$this->sched('daily', 's1'),   'root',
                 '/usr/local/bin/backup.sh --dest s3://' . $b . '-backups --key=REDACTED'],
             [$this->sched('daily', 's2'),   'root',
-                '/usr/bin/curl -fsS -H "Authorization: Bearer ' . $tok . '" https://api.' . $d . '/v1/heartbeat/sync'],
+                '/usr/bin/curl -fsS -H "Authorization: Bearer ' . $tok . '" ' . $this->heartbeatUrl()],
             [$this->sched('weekly', 's3'),  'root',
                 '/usr/bin/aws s3 sync /var/backups s3://' . $b . '-backups --delete'],
             [$this->sched('daily', 's4'),   'root',
