@@ -17,6 +17,13 @@ final class PageShellRenderer
     {
     }
 
+    /** True when the path routes to a specific product panel skin (not the generic fallback) — the LLM
+     *  tier uses this to always serve the coherent panels + their sub-paths. */
+    public function matchesProductSkin(string $path): bool
+    {
+        return $this->skins->hasProductMatch($path);
+    }
+
     public function render(PageSlots $slots, VisualPersona $persona, RequestContext $ctx): string
     {
         try {

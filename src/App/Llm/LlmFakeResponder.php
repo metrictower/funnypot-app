@@ -82,10 +82,35 @@ final class LlmFakeResponder
             return $this->build($hit['status'], $hit['content_type'], $hit['body']);
         }
 
+        // A coherent product panel (admin/wp/phpmyadmin/grafana chrome) is the honeypot's marquee lure, and
+        // every sub-path under it is legitimate navigation, not a random probe — so a panel path is let
+        // through the lexical "not a plausible path" shed below. The per-IP velocity/bulk-scan pin still
+        // applies to everyone (anti-DoS), so enumerating /panel/<random> at speed still trips it.
+        $isPanel = $profile->renderer !== null && $profile->renderer->matchesProductSkin($context->path);
+
         // 2. Gate (only paid on a cache miss). Sheds the probe/scan 404s before they can consume a
         //    generation slot, so the cap below is only ever spent on genuinely plausible paths.
-        if (!$this->gate->decide($context->method, $context->path, $clientIp)['generate']) {
+        $decision = $this->gate->decide($context->method, $context->path, $clientIp);
+        if (!$decision['generate'] && !($isPanel && $decision['reason'] === 'probe')) {
             return null;
+        }
+
+        // 2b. A coherent product panel renders DETERMINISTICALLY from its seeded skin — no model call. Its
+        //     content is generated chrome + seeded Fake\* data, not model text, so it must never depend on a
+        //     flaky generation/sanitize/concurrency-cap miss (that was blanking marquee panels to a 404).
+        //     Served 200 (you are "in" the panel), byte-identical per deploy, cached like any other fake.
+        if ($isPanel && $profile->renderer !== null) {
+            $body = $profile->renderer->render(
+                PageSlots::fromArray([]),
+                VisualPersona::fromSeed($this->personaSeed),
+                $context
+            );
+            if (!$this->sanitizer->pageBodyOk($body, true)) {
+                return null;                                  // defensive: our own chrome should always pass
+            }
+            $this->cache->put($key, 200, $profile->contentType, $body, $version);
+
+            return $this->build(200, $profile->contentType, $body);
         }
 
         // 3. Atomic single-flight + concurrency cap. Over the cap (FULL) goes straight to the plain
@@ -129,7 +154,7 @@ final class LlmFakeResponder
                     return null;
                 }
             }
-            $status = $this->chooseStatus($context->path);
+            $status = $this->chooseStatus($context->path, $isPanel);
             $this->cache->put($key, $status, $profile->contentType, $body, $version);
 
             return $this->build($status, $profile->contentType, $body);
@@ -154,10 +179,15 @@ final class LlmFakeResponder
         );
     }
 
-    /** App-chosen status (never the model's). Bias auth-looking paths to 401 so not every plausible
-     *  path returns a 200 (that itself is a fingerprint under distributed probing). */
-    private function chooseStatus(string $path): int
+    /** App-chosen status (never the model's). A coherent product panel serves 200 — you are "in" it,
+     *  viewing content, so a 401 mid-navigation would break the deep-exploration illusion. Other
+     *  auth-looking fakes bias to 401 so not every plausible path returns 200 (that itself is a
+     *  fingerprint under distributed probing). */
+    private function chooseStatus(string $path, bool $isPanel): int
     {
+        if ($isPanel) {
+            return 200;
+        }
         $p = strtolower($path);
         foreach (['admin', 'manage', 'console', 'secure', 'private', 'internal', 'dashboard', 'actuator'] as $auth) {
             if (strpos($p, $auth) !== false) {

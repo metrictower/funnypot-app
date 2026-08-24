@@ -20,4 +20,17 @@ final class SkinSet
         }
         return $this->default;
     }
+
+    /** True when a specific resemblance skin (not the generic fallback) claims this path — i.e. the path
+     *  is one of the coherent product panels the honeypot always wants to serve (so the LLM tier can let
+     *  it through the lexical probe shed and serve every sub-path as navigable content). */
+    public function hasProductMatch(string $path): bool
+    {
+        foreach ($this->skins as $skin) {
+            if ($skin->matches($path)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

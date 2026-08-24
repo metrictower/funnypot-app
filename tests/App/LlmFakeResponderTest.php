@@ -11,6 +11,13 @@ use Funnypot\App\Llm\LlmResponseProfiles;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
+use Funnypot\App\Render\GenericSkin;
+use Funnypot\App\Render\PageShellRenderer;
+use Funnypot\App\Render\SkinSet;
+use Funnypot\App\Render\Skins\AdminLteSkin;
+use Funnypot\App\Render\Skins\GrafanaSkin;
+use Funnypot\App\Render\Skins\PhpMyAdminSkin;
+use Funnypot\App\Render\Skins\WordpressSkin;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\RequestContext;
@@ -66,6 +73,52 @@ final class LlmFakeResponderTest extends TestCase
         );
 
         return [$responder, $store];
+    }
+
+    /** Like make(), but the HTML profile carries the real skin renderer, so coherent-panel paths are
+     *  detected (matchesProductSkin) and let through the lexical shed. */
+    private function makeWithRenderer(callable $transport): array
+    {
+        $store = new SqliteHitStore($this->dbPath('hits'));
+        $skins = new SkinSet(
+            [new WordpressSkin(), new PhpMyAdminSkin(), new GrafanaSkin(), new AdminLteSkin()],
+            new GenericSkin()
+        );
+        $responder = new LlmFakeResponder(
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $store),
+            new LlmFakeCache($this->dbPath('cache')),
+            new LlmClient('http://sidecar/completion', 1500, 320, null, $transport),
+            new LlmOutputSanitizer(),
+            $store,
+            new LlmResponseProfiles('nginx', 'root ::= "<"', 'root ::= "{"', new PageShellRenderer($skins), 'root ::= "{"'),
+            'v1',
+            4,
+            7,
+            'a1',
+        );
+
+        return [$responder, $store];
+    }
+
+    public function test_panel_path_bypasses_lexical_shed_and_serves_200(): void
+    {
+        // /panel/hvac is a coherent-panel path (AdminLteSkin) the lexical classifier rates "not plausible"
+        // and would shed — but every panel sub-path is navigable, so it must still render, with a 200.
+        [$r] = $this->makeWithRenderer(fn (): array => ['status' => 200, 'body' => json_encode(['heading' => 'HVAC'])]);
+        $resp = $r->respond(new RequestContext('GET', '/panel/hvac'), '9.9.9.9');
+        self::assertNotNull($resp, 'a panel sub-path must render even though the lexical gate would shed it');
+        self::assertSame(200, $resp->status);
+        self::assertStringContainsString('alte-sidebar', $resp->body);
+    }
+
+    public function test_panel_dashboard_serves_200_not_401(): void
+    {
+        // The dashboard used to 401 (auth-looking keyword). As a coherent panel it now serves 200 so
+        // deep navigation isn't broken by an auth wall mid-panel.
+        [$r] = $this->makeWithRenderer(fn (): array => ['status' => 200, 'body' => json_encode(['heading' => 'Dashboard'])]);
+        $resp = $r->respond(new RequestContext('GET', '/panel/dashboard'), '9.9.9.9');
+        self::assertNotNull($resp);
+        self::assertSame(200, $resp->status);
     }
 
     private const GOOD_HTML =

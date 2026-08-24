@@ -123,7 +123,7 @@ final class LlmOutputSanitizer
      * Deliberately does NOT run the full HTML arm (sanitizeHtml) — the trusted page chrome
      * legitimately uses <style>/<link> and relative URLs that sanitizeHtml would reject.
      */
-    public function pageBodyOk(string $html): bool
+    public function pageBodyOk(string $html, bool $trustedChrome = false): bool
     {
         $low = strtolower($html);
         foreach (self::META_DISCLOSURE as $tell) {
@@ -131,11 +131,17 @@ final class LlmOutputSanitizer
                 return false;
             }
         }
-        if (strpos($low, '<script') !== false || strpos($low, '<iframe') !== false) {
-            return false;
-        }
-        if (preg_match('~[\s/]on[a-z]+\s*=~i', $html) === 1) {
-            return false;
+        // The active-content checks (<script>/<iframe>/on-handlers) guard UNTRUSTED, model-supplied markup.
+        // Trusted panel chrome is escape-by-construction with no model text in it, so its own scoped inline
+        // JS/handlers (the deep panel's interactivity) are safe and exempt — but the disclosure-tell scans
+        // above and below still run on it, to catch an accidental leak in our own authored chrome.
+        if (!$trustedChrome) {
+            if (strpos($low, '<script') !== false || strpos($low, '<iframe') !== false) {
+                return false;
+            }
+            if (preg_match('~[\s/]on[a-z]+\s*=~i', $html) === 1) {
+                return false;
+            }
         }
         // Re-scan the visible text with tags stripped and whitespace collapsed: a disclosure word
         // can be split across cells (e.g. <td>honey</td><td>pot</td> reads as "honeypot" to a human

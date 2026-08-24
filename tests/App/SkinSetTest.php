@@ -125,6 +125,34 @@ final class SkinSetTest extends TestCase
     /** AdminLteSkin is the broadest matcher; it must be the last entry in the production list so
      *  every more-specific product skin gets first refusal. A structural check, not just a behavioral
      *  one, so a future reordering fails loudly here even before it manifests as a routing bug. */
+    /**
+     * hasProductMatch drives the LLM tier's "always serve the coherent panels" rule: a path claimed by a
+     * real resemblance skin is a panel (served + navigable through the lexical shed); anything only the
+     * generic fallback would take is not.
+     *
+     * @dataProvider productMatchPaths
+     */
+    public function test_has_product_match(string $path, bool $expected): void
+    {
+        self::assertSame($expected, $this->productionSkinSet()->hasProductMatch($path));
+    }
+
+    /** @return array<string,array{0:string,1:bool}> */
+    public static function productMatchPaths(): array
+    {
+        return [
+            'panel sub-path hvac' => ['/panel/hvac', true],
+            'panel dashboard' => ['/panel/dashboard', true],
+            'admin' => ['/admin', true],
+            'deep admin path' => ['/whatever/admin', true],
+            'grafana' => ['/grafana/d/x', true],
+            'wp-admin' => ['/wp-admin/options.php', true],
+            'phpmyadmin' => ['/phpmyadmin/index.php', true],
+            'unrelated' => ['/foo/bar', false],
+            'random' => ['/hr/portal', false],
+        ];
+    }
+
     public function test_production_skin_list_registers_adminlte_last(): void
     {
         $skins = [new WordpressSkin(), new PhpMyAdminSkin(), new GrafanaSkin(), new AdminLteSkin()];
