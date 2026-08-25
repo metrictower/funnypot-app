@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Llm;
 
-use Funnypot\Support\Chrome\PageSlots;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\Chrome\PageSlots;
+use Funnypot\Core\Support\VisualPersona;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
-use Funnypot\Detection;
-use Funnypot\RequestContext;
-use Funnypot\Support\PathNormalizer;
-use Funnypot\SynthesizedResponse;
+use Funnypot\Core\Detection;
+use Funnypot\Core\RequestContext;
+use Funnypot\Core\Support\PathNormalizer;
+use Funnypot\Core\SynthesizedResponse;
 
 /**
  * Orchestrates an LLM-generated fake for a request the engine could not match. Cache first (the

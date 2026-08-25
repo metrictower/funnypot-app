@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render;
 
-use Funnypot\Support\Chrome\PathSegments;
+use Funnypot\Core\Support\Chrome\PathSegments;
 
 /**
  * Positional route parser for the deep admin panel. `AdminLteSkin` used to route on the LAST path

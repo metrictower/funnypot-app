@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Hvac;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * HVAC / Climate (spec §C.2): the building's climate plane rendered off Fake\Hvac (which itself sits on

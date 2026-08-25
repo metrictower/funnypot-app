@@ -6,7 +6,7 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Panel\SearchSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class SearchSectionTest extends TestCase

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Energy;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Energy & Power / BMS (module slug `energy`, spec §C.8) — the SCADA-flavoured electrical plane rendered

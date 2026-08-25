@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Search;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Global search (spec §D.6) — the cross-module lure that ties the whole estate into one company. The query

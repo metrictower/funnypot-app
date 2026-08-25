@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Funnypot\Tests;
 
 use Funnypot\Compiler\CatalogCompiler;
-use Funnypot\Config;
-use Funnypot\Honeypot;
+use Funnypot\Core\Config;
+use Funnypot\Core\Honeypot;
 use Funnypot\Policy\EmulationCatalog;
 use Funnypot\Policy\EmulationPolicy;
-use Funnypot\RequestContext;
-use Funnypot\Store\PhpArrayStore;
-use Funnypot\Template\TemplateAttackEmulator;
+use Funnypot\Core\RequestContext;
+use Funnypot\Core\Store\PhpArrayStore;
+use Funnypot\Core\Template\TemplateAttackEmulator;
 use PHPUnit\Framework\TestCase;
 
 /**

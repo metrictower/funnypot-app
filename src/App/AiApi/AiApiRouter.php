@@ -7,7 +7,7 @@ namespace Funnypot\App\AiApi;
 use Funnypot\App\AiApi\Dialect\AnthropicDialect;
 use Funnypot\App\AiApi\Dialect\OllamaDialect;
 use Funnypot\App\AiApi\Dialect\OpenAiDialect;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * Front-controller seam for the fake inference API. It owns the POST chat surface only: it maps one of

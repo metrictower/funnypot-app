@@ -7,7 +7,7 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\Blocklist;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use Geo;
 
 /**

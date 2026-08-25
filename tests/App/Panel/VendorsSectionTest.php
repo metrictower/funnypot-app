@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\VendorsSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class VendorsSectionTest extends TestCase

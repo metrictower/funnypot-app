@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Helpdesk;
 use Funnypot\App\Render\Fake\ItServices;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * IT & Platform services (spec §C.7) — the lateral-movement intel lure. One section renders six sub-areas

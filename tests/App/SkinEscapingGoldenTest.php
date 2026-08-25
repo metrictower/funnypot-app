@@ -4,8 +4,8 @@ namespace Funnypot\Tests\App;
 
 use Funnypot\App\Render\Skins\{GrafanaSkin, AdminLteSkin};
 use Funnypot\App\Llm\LlmOutputSanitizer;
-use Funnypot\Support\Chrome\{GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\Chrome\{GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

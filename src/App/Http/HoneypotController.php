@@ -11,12 +11,12 @@ use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
-use Funnypot\Config;
-use Funnypot\Honeypot;
-use Funnypot\Http\ResponseEmitter;
-use Funnypot\Log4ShellProbe;
+use Funnypot\Core\Config;
+use Funnypot\Core\Honeypot;
+use Funnypot\Core\Http\ResponseEmitter;
+use Funnypot\Core\Log4ShellProbe;
 use Funnypot\Policy\EmulationPolicy;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use Geo;
 
 /**

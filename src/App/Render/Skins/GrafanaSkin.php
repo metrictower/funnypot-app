@@ -2,11 +2,11 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\Support\Chrome\AbstractSkin;
+use Funnypot\Core\Support\Chrome\AbstractSkin;
 use Funnypot\App\Render\Fake\FakeInfra;
-use Funnypot\Support\Chrome\PageSlots;
-use Funnypot\Support\Chrome\PathSegments;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\Chrome\PageSlots;
+use Funnypot\Core\Support\Chrome\PathSegments;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * A hand-authored lookalike of a Grafana dashboard: dark top nav, a left icon rail, and a panel-grid

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\AiApi;
 
-use Funnypot\Ai\ModelCatalog;
+use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\AiApi\AiChatHandler;
 use Funnypot\App\AiApi\AiChatPromptBuilder;
 use Funnypot\App\AiApi\ChatRequest;
@@ -23,7 +23,7 @@ use Funnypot\App\Llm\VelocityTracker;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 use stdClass;
 

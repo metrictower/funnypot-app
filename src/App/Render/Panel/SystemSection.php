@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /** Servers / system information: the host hardware, OS and network identity (migrated from the old
  *  AdminLteSkin::systemCard). All facts from the seeded ServerProfile, so the whole host agrees. */

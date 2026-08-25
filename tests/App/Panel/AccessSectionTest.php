@@ -7,7 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Access;
 use Funnypot\App\Render\Panel\AccessSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class AccessSectionTest extends TestCase

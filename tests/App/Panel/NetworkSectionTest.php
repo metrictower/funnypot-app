@@ -8,7 +8,7 @@ use Funnypot\App\Render\Fake\Network;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\NetworkSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class NetworkSectionTest extends TestCase

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * One deep-panel module renderer. The deep admin dashboard dispatches a parsed route to the section

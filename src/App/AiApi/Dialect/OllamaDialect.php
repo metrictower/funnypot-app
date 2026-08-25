@@ -6,7 +6,7 @@ namespace Funnypot\App\AiApi\Dialect;
 
 use Funnypot\App\AiApi\ChatRequest;
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * Ollama's native API — both /api/chat (message array) and /api/generate (single prompt), told apart

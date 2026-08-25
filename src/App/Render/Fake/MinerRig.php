@@ -174,9 +174,9 @@ final class MinerRig
 
         // Unpaid balance in the mined coin; ETC in fractions, RVN in whole-ish units (cheap coin).
         if ($etc) {
-            $unpaid = number_format($this->intIn(428, 9400, 'unpaid') / 10000, 4) . ' ETC';
+            $unpaid = number_format($this->intIn(42800, 940000, 'unpaid') / 10000, 4) . ' ETC';
         } else {
-            $unpaid = number_format($this->intIn(4000, 90000, 'unpaid') / 100, 2) . ' RVN';
+            $unpaid = number_format($this->intIn(400000, 9000000, 'unpaid') / 100, 2) . ' RVN';
         }
 
         return [
@@ -190,7 +190,7 @@ final class MinerRig
             'rejectedShares' => $rejected,
             'uptime' => $this->uptime(),
             'unpaidBalance' => $unpaid,
-            'estDailyUsd' => '$' . number_format($this->intIn(80, 450, 'daily') / 100, 2),
+            'estDailyUsd' => '$' . number_format($this->intIn(8000, 45000, 'daily') / 100, 2),
         ];
     }
 }

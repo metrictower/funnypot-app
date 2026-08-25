@@ -8,7 +8,7 @@ use Funnypot\App\AiApi\ChatRequest;
 use Funnypot\App\AiApi\ChatStats;
 use Funnypot\App\AiApi\Dialect\AnthropicDialect;
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 /**

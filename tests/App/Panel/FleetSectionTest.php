@@ -7,7 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Fleet;
 use Funnypot\App\Render\Panel\FleetSection;
 use Funnypot\App\Render\Panel\PanelRegistry;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class FleetSectionTest extends TestCase

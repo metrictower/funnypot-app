@@ -6,7 +6,7 @@ namespace Funnypot\App\AiApi\Dialect;
 
 use Funnypot\App\AiApi\ChatRequest;
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use stdClass;
 
 /**

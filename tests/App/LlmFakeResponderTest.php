@@ -11,16 +11,16 @@ use Funnypot\App\Llm\LlmResponseProfiles;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
-use Funnypot\Support\Chrome\GenericSkin;
+use Funnypot\Core\Support\Chrome\GenericSkin;
 use Funnypot\App\Render\PageShellRenderer;
 use Funnypot\App\Render\SkinSet;
 use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
-use Funnypot\Support\Chrome\PhpMyAdminSkin;
-use Funnypot\Support\Chrome\WordpressSkin;
+use Funnypot\Core\Support\Chrome\PhpMyAdminSkin;
+use Funnypot\Core\Support\Chrome\WordpressSkin;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -178,12 +178,12 @@ final class LlmFakeResponderTest extends TestCase
         $resp = $r->respond(new RequestContext('GET', $live), '9.9.9.9');
         self::assertNotNull($resp);
         self::assertSame(200, $resp->status);
-        $liveKey = \Funnypot\Support\PathNormalizer::key('GET', $live);
+        $liveKey = \Funnypot\Core\Support\PathNormalizer::key('GET', $live);
         self::assertNull($cache->get($liveKey, 'a1'), 'the live rewards path must never be cached');
 
         // Control: an ordinary panel path IS cached (byte-identical is correct there).
         $r->respond(new RequestContext('GET', '/admin/bank/crypto'), '9.9.9.9');
-        $normalKey = \Funnypot\Support\PathNormalizer::key('GET', '/admin/bank/crypto');
+        $normalKey = \Funnypot\Core\Support\PathNormalizer::key('GET', '/admin/bank/crypto');
         self::assertNotNull($cache->get($normalKey, 'a1'), 'a normal panel path should be cached');
     }
 
@@ -348,7 +348,7 @@ final class LlmFakeResponderTest extends TestCase
     {
         $slots = json_encode(['content' => '{"app_name":"HR Portal","heading":"Users","table":{"cols":["User","Token"],"rows":[["m.hale","APITOKEN"]]}}']);
         $renderer = new \Funnypot\App\Render\PageShellRenderer(
-            new \Funnypot\App\Render\SkinSet([], new \Funnypot\Support\Chrome\GenericSkin())
+            new \Funnypot\App\Render\SkinSet([], new \Funnypot\Core\Support\Chrome\GenericSkin())
         );
         $store = new SqliteHitStore($this->dbPath('hits'));
         $r = new LlmFakeResponder(

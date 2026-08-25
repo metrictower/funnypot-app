@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Fake\Org;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * The panel landing: business / operations metrics ONLY (spec T1/E1). No secrets, and specifically NO

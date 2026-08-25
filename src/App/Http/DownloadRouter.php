@@ -8,7 +8,7 @@ use Closure;
 use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\Render\Fake\Fleet;
 use Funnypot\App\Storage\HitStore;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use Funnypot\Shell\Fs\Draw;
 
 /**

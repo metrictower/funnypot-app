@@ -6,7 +6,7 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Fake\Lighting;
 use Funnypot\App\Render\Panel\LightingSection;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class LightingSectionTest extends TestCase

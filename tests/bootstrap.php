@@ -20,8 +20,8 @@ if (is_file($vendorAutoload)) {
 
 spl_autoload_register(static function (string $class): void {
     $prefixes = [
-        'Funnypot\\Tests\\' => __DIR__ . '/',
-        'Funnypot\\' => __DIR__ . '/../src/',
+        'Funnypot\Core\\Tests\\' => __DIR__ . '/',
+        'Funnypot\Core\\' => __DIR__ . '/../src/',
     ];
 
     foreach ($prefixes as $prefix => $baseDir) {

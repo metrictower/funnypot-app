@@ -12,7 +12,7 @@ use Funnypot\App\Render\Fake\Payroll;
 use Funnypot\App\Render\Fake\Vendors;
 use Funnypot\App\Render\Panel\FinanceSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class FinanceSectionTest extends TestCase

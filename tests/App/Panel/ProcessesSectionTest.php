@@ -7,7 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\MinerRig;
 use Funnypot\App\Render\Panel\ProcessesSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

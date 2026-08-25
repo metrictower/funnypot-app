@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Sensors;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Sensors / Environment (spec §C.2): the HA device-class long tail rendered off Fake\Sensors (which sits

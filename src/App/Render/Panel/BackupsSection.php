@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /** Backups: downloadable archive lures. Each filename keeps its archive extension so the link routes
  *  to the decoy-archive handler (migrated from AdminLteSkin::backupsCard). */

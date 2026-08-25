@@ -17,7 +17,7 @@ namespace Funnypot\App\Render\Fake;
  *  - SAFE: the host's own addressing is RFC1918/TEST-NET only (never real routable space), every
  *    secret/key is fabricated + non-working, no real product signature strings.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf/number_format) so it can promote into the shared
- *    Funnypot\Support\Fake namespace for the core template tier once Phase 3 consolidates generators.
+ *    Funnypot\Core\Support\Fake namespace for the core template tier once Phase 3 consolidates generators.
  *
  * Live gauges (cpu%, load, temps) take an optional coarse time bucket so they drift believably across
  * cache regenerations while staying deterministic within a bucket; identity ignores it.

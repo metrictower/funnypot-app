@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\ThreatIntel;
 
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * A last-resort attack-class classifier for requests the engine did not match — the fall-through to

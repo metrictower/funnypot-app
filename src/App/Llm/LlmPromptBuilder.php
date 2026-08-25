@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Llm;
 
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Builds the completion prompt for the sidecar. Qwen ChatML format: a fixed system instruction, a

@@ -5,7 +5,7 @@ namespace Funnypot\App\Render\Panel;
 use Funnypot\App\Render\Fake\Cmdb;
 use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\Fake\Integrations;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * IT Assets / CMDB + Integrations registry (spec §C.7; §F.3 #15). Two deep, read-only surfaces off one
@@ -424,7 +424,7 @@ final class ItAssetsSection extends AbstractPanelSection
     private function chip(string $href, string $label): string
     {
         return '<a class="alte-btn" href="' . $this->esc($href) . '" style="text-decoration:none;padding:3px 10px;'
-            . 'margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;color:#3b7ea1;font-size:.82em;display:inline-block">'
+            . 'margin:0 6px 6px 0;border:1px solid #c9ccd1;border-radius:12px;color:#f3f3f3;font-size:.82em;display:inline-block">'
             . $this->esc($label) . '</a>';
     }
 

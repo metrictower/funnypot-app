@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\ThreatIntel\AttackClassifier;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 /**

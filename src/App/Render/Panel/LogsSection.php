@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeLog;
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /** Logs: long, deterministic auth.log + access.log scroll-backs (migrated from AdminLteSkin::logsCard). */
 final class LogsSection extends AbstractPanelSection

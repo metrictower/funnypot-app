@@ -4,7 +4,7 @@ namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\Hr;
 use Funnypot\App\Render\Fake\Payroll;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * HR portal (spec §C.5) — the PII gold-mine illusion. Renders the five-rung ladder over the `Fake\Hr`

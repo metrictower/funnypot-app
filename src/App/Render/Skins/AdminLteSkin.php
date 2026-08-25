@@ -2,13 +2,13 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
-use Funnypot\Support\Chrome\AbstractSkin;
+use Funnypot\Core\Support\Chrome\AbstractSkin;
 use Funnypot\App\Render\Fake\ServerProfile;
-use Funnypot\Support\Chrome\PageSlots;
+use Funnypot\Core\Support\Chrome\PageSlots;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\Chrome\PathSegments;
+use Funnypot\Core\Support\Chrome\PathSegments;
 use Funnypot\App\Render\Panel\PanelRegistry;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * A hand-authored lookalike of an AdminLTE/Bootstrap-style server control panel — the honeypot's

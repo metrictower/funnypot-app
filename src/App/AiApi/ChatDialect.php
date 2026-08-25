@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\AiApi;
 
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * One provider's on-the-wire chat protocol. A dialect parses that provider's request shape into the

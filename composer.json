@@ -15,7 +15,7 @@
         "php": ">=8.0",
         "ext-sodium": "*",
         "ext-openssl": "*",
-        "metrictower/funnypot-core": "dev-main"
+        "metrictower/funnypot-core": "^0.3"
     },
     "require-dev": {
         "phpunit/phpunit": "^9.5",

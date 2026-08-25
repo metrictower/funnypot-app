@@ -9,7 +9,7 @@ use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Render\Fake\Fleet;
 use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Storage\HitStore;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 /**

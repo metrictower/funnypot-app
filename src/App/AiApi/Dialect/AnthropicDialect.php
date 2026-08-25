@@ -6,7 +6,7 @@ namespace Funnypot\App\AiApi\Dialect;
 
 use Funnypot\App\AiApi\ChatRequest;
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * Anthropic's /v1/messages. Streaming is named-event SSE (`event: <name>\ndata: {json}\n\n`) in a

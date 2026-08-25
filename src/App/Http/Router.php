@@ -6,7 +6,7 @@ namespace Funnypot\App\Http;
 
 use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\Config\AppConfig;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 
 /**
  * Front-controller routing. Two route tables selected by FUNNYPOT_MODE: public (today's behaviour,

@@ -135,8 +135,8 @@ ART;
         if ($n < self::FLASH_FRAMES) {
             $bel = $n === 0 ? "\x07\x07\x07" : '';
             return $bel . "\e[41m\e[2J\e[H\e[41;1;97m\r\n\r\n"
-                . "     ** UNAUTHORIZED ACCESS DETECTED **\r\n\r\n"
-                . "     securing session";
+                   . "    ENABLE REVERSE CONNECTION  Y/N ?\r\n\r\n";
+
         }
         $m = $n - self::FLASH_FRAMES;                      // animation frame index (post red flash)
 

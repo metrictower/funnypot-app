@@ -9,7 +9,7 @@ use Funnypot\App\Render\Fake\Activity;
 use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Panel\ActivitySection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class ActivitySectionTest extends TestCase

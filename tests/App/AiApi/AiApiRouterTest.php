@@ -9,7 +9,7 @@ use Funnypot\App\AiApi\AiChatHandler;
 use Funnypot\App\AiApi\Dialect\AnthropicDialect;
 use Funnypot\App\AiApi\Dialect\OllamaDialect;
 use Funnypot\App\AiApi\Dialect\OpenAiDialect;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 /**

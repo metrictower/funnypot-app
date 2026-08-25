@@ -7,7 +7,7 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Fake\Cctv;
 use Funnypot\App\Render\Panel\CctvSection;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**

@@ -18,7 +18,7 @@ namespace Funnypot\App\Render\Fake;
  *    fingerprint is a correct-shape but inert base64url string; no usable key exists behind it.
  *  - Timestamps are monotonic within each call (a 24h+ gradient), syslog format for auth, CLF for access.
  *  - PHP 7.3-clean (plain arrays + hash/sprintf) matching ServerProfile so it can promote into the shared
- *    Funnypot\Support\Fake namespace when the generators consolidate.
+ *    Funnypot\Core\Support\Fake namespace when the generators consolidate.
  */
 final class FakeLog
 {

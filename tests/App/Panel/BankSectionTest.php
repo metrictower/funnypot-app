@@ -9,7 +9,7 @@ use Funnypot\App\Render\Fake\Org;
 use Funnypot\App\Render\Fake\Payroll;
 use Funnypot\App\Render\Panel\BankSection;
 use Funnypot\App\Render\PanelRoute;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class BankSectionTest extends TestCase

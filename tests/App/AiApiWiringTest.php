@@ -12,7 +12,7 @@ use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Storage\SqliteHitStore;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 2) . '/demo/lib/geo.php';

@@ -2,8 +2,8 @@
 declare(strict_types=1);
 namespace Funnypot\Tests\App;
 use Funnypot\App\Render\Skins\AdminLteSkin;
-use Funnypot\Support\Chrome\PageSlots;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\Chrome\PageSlots;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class AdminLteSkinTest extends TestCase

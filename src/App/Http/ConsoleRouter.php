@@ -9,7 +9,7 @@ use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\Render\Fake\Fleet;
 use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Storage\HitStore;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use Funnypot\Shell\Fs\Draw;
 use Funnypot\Shell\Fs\FakeFilesystem;
 use Funnypot\Shell\Host\HostFacts;

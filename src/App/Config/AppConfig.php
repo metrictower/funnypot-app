@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Config;
 
-use Funnypot\Support\PersonaIdentity;
+use Funnypot\Core\Support\PersonaIdentity;
 
 /**
  * One source of truth for the app's runtime configuration. Every FUNNYPOT_* environment variable

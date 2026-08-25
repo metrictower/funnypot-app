@@ -28,7 +28,7 @@ final class AiApiReconClassifyTest extends TestCase
     {
         // Path-labelled only: a request body that merely mentions the words must not classify() as an
         // attack (that path stays the engine's / the other patterns' job).
-        $ctx = new \Funnypot\RequestContext('POST', '/v1/chat/completions', '', [], '{"model":"x"}');
+        $ctx = new \Funnypot\Core\RequestContext('POST', '/v1/chat/completions', '', [], '{"model":"x"}');
         self::assertNull((new AttackClassifier())->classify($ctx));
     }
 }

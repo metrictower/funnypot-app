@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Protocol;
 
 use Funnypot\Protocol\Shell\FakeShell;
-use Funnypot\Template\DirectiveRenderer;
+use Funnypot\Core\Template\DirectiveRenderer;
 
 /**
  * Interprets one compiled protocol against a connection's bytes: send the banner on connect,

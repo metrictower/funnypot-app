@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Llm;
 
 use Funnypot\App\Render\PageShellRenderer;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Maps a request path's file extension to the shape of fake to synthesize. A real server answers a

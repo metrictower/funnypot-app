@@ -3,8 +3,8 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 use Funnypot\App\Render\SkinSet;
 use Funnypot\App\Render\Skins\{GrafanaSkin, AdminLteSkin};
-use Funnypot\Support\Chrome\{Skin, GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\Chrome\{Skin, GenericSkin, PageSlots, PhpMyAdminSkin, WordpressSkin};
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class SkinSetTest extends TestCase

@@ -6,7 +6,7 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Fake\Sensors;
 use Funnypot\App\Render\Panel\SensorsSection;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 final class SensorsSectionTest extends TestCase

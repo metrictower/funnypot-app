@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\App\AiApi;
 
 use Closure;
-use Funnypot\Ai\ModelCatalog;
+use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeGate;
@@ -13,7 +13,7 @@ use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
-use Funnypot\RequestContext;
+use Funnypot\Core\RequestContext;
 use Throwable;
 
 /**

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Panel;
 
 use Funnypot\App\Render\Fake\FakeFiles;
-use Funnypot\Support\VisualPersona;
+use Funnypot\Core\Support\VisualPersona;
 
 /** File manager: per-directory listings; only downloadable files link (keeping their extension so they
  *  route to the decoy-archive handler), dirs and text lures stay plain (migrated from
