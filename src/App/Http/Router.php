@@ -23,6 +23,7 @@ final class Router
         private CorporateController $corporate,
         private ?AiApiRouter $aiApi = null,
         private ?ConsoleRouter $console = null,
+        private ?DownloadRouter $download = null,
     ) {
     }
 
@@ -57,6 +58,13 @@ final class Router
         // (many POSTs) never trips the per-IP velocity/bulk-scan gate.
         if ($method === 'POST' && $this->console !== null && $this->console->matches($path)) {
             $this->console->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Endless backup-download bait (fleet console). GET-only seam, gate-exempt, mounted only when
+        // the feature is on; otherwise these paths fall through to the honeypot like any probe.
+        if ($method === 'GET' && $this->download !== null && $this->download->matches($path)) {
+            $this->download->handle($ctx, $clientIp);
 
             return;
         }
@@ -133,6 +141,13 @@ final class Router
         // (many POSTs) never trips the per-IP velocity/bulk-scan gate.
         if ($method === 'POST' && $this->console !== null && $this->console->matches($path)) {
             $this->console->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Endless backup-download bait (fleet console). GET-only seam, gate-exempt, mounted only when
+        // the feature is on; otherwise these paths fall through to the honeypot like any probe.
+        if ($method === 'GET' && $this->download !== null && $this->download->matches($path)) {
+            $this->download->handle($ctx, $clientIp);
 
             return;
         }

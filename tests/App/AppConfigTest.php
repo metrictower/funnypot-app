@@ -17,6 +17,9 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_MODE', 'FUNNYPOT_STYLE', 'FUNNYPOT_DB', 'FUNNYPOT_LOG', 'FUNNYPOT_ATTACK',
         'FUNNYPOT_DECOY_ARCHIVE', 'FUNNYPOT_PROTOCOLS', 'FUNNYPOT_RETAIN_DAYS', 'FUNNYPOT_RETAIN_GB',
         'FUNNYPOT_DASHBOARD_PATH', 'FUNNYPOT_CEILING', 'FUNNYPOT_JITTER_MS',
+        'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
+        'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
+        'FUNNYPOT_DL_FALLBACK_CAP_MB',
     ];
 
     protected function setUp(): void
@@ -48,6 +51,39 @@ final class AppConfigTest extends TestCase
         self::assertTrue($c->protocolsEnabled);
         self::assertSame(0, $c->retainDays);
         self::assertSame('/__fp/', $c->dashboardPath);
+    }
+
+    public function test_endless_download_defaults(): void
+    {
+        $c = AppConfig::fromEnv('/app/demo');
+
+        self::assertTrue($c->endlessDownload);        // on by default
+        self::assertSame(100, $c->dlChunkMinKb);
+        self::assertSame(200, $c->dlChunkMaxKb);
+        self::assertSame(100, $c->dlIntervalMs);
+        self::assertSame(50, $c->dlVaryPct);
+        self::assertSame(20, $c->dlEasePeriodS);
+        self::assertSame(50, $c->dlFallbackCapMb);
+    }
+
+    public function test_endless_download_off_and_clamped(): void
+    {
+        putenv('FUNNYPOT_ENDLESS_DOWNLOAD=0');
+        putenv('FUNNYPOT_DL_CHUNK_MIN_KB=0');        // -> clamped up to 1
+        putenv('FUNNYPOT_DL_CHUNK_MAX_KB=99999');    // -> clamped down to 1024
+        putenv('FUNNYPOT_DL_INTERVAL_MS=1');         // -> clamped up to 10
+        putenv('FUNNYPOT_DL_VARY_PCT=250');          // -> clamped down to 95
+        putenv('FUNNYPOT_DL_EASE_PERIOD_S=0');       // -> clamped up to 1
+        putenv('FUNNYPOT_DL_FALLBACK_CAP_MB=100000'); // -> clamped down to 500
+        $c = AppConfig::fromEnv('/app/demo');
+
+        self::assertFalse($c->endlessDownload);
+        self::assertSame(1, $c->dlChunkMinKb);
+        self::assertSame(1024, $c->dlChunkMaxKb);
+        self::assertSame(10, $c->dlIntervalMs);
+        self::assertSame(95, $c->dlVaryPct);
+        self::assertSame(1, $c->dlEasePeriodS);
+        self::assertSame(500, $c->dlFallbackCapMb);
     }
 
     public function test_env_overrides(): void

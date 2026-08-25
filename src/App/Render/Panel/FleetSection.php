@@ -131,12 +131,28 @@ final class FleetSection extends AbstractPanelSection
         foreach (['reboot', 'stop', 'restart', 'snapshot'] as $a) {
             $buttons .= ' <a class="alte-btn" href="' . $this->esc($navBase . '/fleet/' . $hostL . '/' . $a) . '">' . ucfirst($a) . '</a>';
         }
+        // "Download latest backup" bait: a native download of /backup.zip. A registered service worker
+        // fabricates an endless throttled stream client-side; without it the server sends a capped
+        // fallback. Either way the fetch is logged as intel. The whole feature is gated at the Router
+        // mount layer, so when it is off these paths fall through to the honeypot and the link is inert.
+        $dlHref = '/backup.zip?host=' . rawurlencode($hostL);
+        $buttons .= ' <a class="alte-btn" id="fp-dl-backup" href="' . $this->esc($dlHref) . '" download="backup.zip">Download latest backup</a>';
         $buttons .= '</div>';
+        $buttons .= '<script>' . $this->downloadJs() . '</script>';
 
         return $this->breadcrumbHtml($crumbs)
             . $this->card((string) $s['host'], $gauges . $kv . $buttons, (string) $s['os'])
             . $this->card('Services', $ps, 'ps')
             . $this->card('Listening sockets', $sock, 'ss -tlnp');
+    }
+
+    /** Register the download service worker (scope "/") so it can intercept /backup.zip. Best-effort:
+     *  if registration fails or SW is unsupported, the plain download link still hits the server
+     *  fallback. No inline handlers, no external script. */
+    private function downloadJs(): string
+    {
+        return "(function(){if('serviceWorker' in navigator){"
+            . "navigator.serviceWorker.register('/__dl/sw.js',{scope:'/'}).catch(function(){});}})();";
     }
 
     /** @param array{summary:array<string,mixed>,facts:\Funnypot\Shell\Host\HostFacts} $detail */

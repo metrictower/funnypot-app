@@ -25,6 +25,7 @@ use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
+use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\Router;
@@ -194,4 +195,22 @@ $console = new ConsoleRouter(
     \Funnypot\Shell\Fs\HostSecret::resolve(__DIR__ . '/storage'),
 );
 
-(new Router($config, $honeypot, $dashboard, $corporate, $aiApi, $console))->dispatch($context, $clientIp, $tokenVerdict);
+// Endless throttled backup-download bait — on by default; the feature is gated here (null = off) so
+// disabling it removes the /__dl/* + /backup.zip routes entirely. Throttle knobs come from config and
+// are handed to the client service worker via the manifest.
+$download = null;
+if ($config->endlessDownload) {
+    $download = new DownloadRouter(
+        $store,
+        $config->personaSeed,
+        (string) @file_get_contents(dirname(__DIR__) . '/src/App/Download/sw.js'),
+        $config->dlChunkMinKb,
+        $config->dlChunkMaxKb,
+        $config->dlIntervalMs,
+        $config->dlVaryPct,
+        $config->dlEasePeriodS,
+        $config->dlFallbackCapMb,
+    );
+}
+
+(new Router($config, $honeypot, $dashboard, $corporate, $aiApi, $console, $download))->dispatch($context, $clientIp, $tokenVerdict);

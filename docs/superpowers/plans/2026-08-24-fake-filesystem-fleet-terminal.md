@@ -581,7 +581,10 @@ Each becomes its own detailed plan (spec §Phasing) once Phase 1's real signatur
 
 - **Phase 6 — Procedural Endless Throttled Backup-Download Bait (FP-0051)**:
   - **Spec:** `funnypot/docs/superpowers/specs/2026-08-25-endless-download-design.md` (operator approved).
-  - **Status:** SPEC APPROVED, READY TO IMPLEMENT.
+  - **Status:** BUILT (`AppConfig` knobs + `DownloadRouter` + `sw.js` + `FleetSection` button + Router
+    mount, GET-only + gate-exempt + off-disablable). Tests: `AppConfigTest` (+2), `DownloadRouterTest`
+    (9). `node --check` clean on `sw.js`. Deviation: download button rendered unconditionally (feature
+    gated at the Router mount layer, not in the deep-nested panel section) — see FP-0051 notes.
   - **Architecture:**
     - `AppConfig`: Central configuration knobs (`FUNNYPOT_ENDLESS_DOWNLOAD` default ON, chunk size 100–200 KB, interval 100ms, vary 50%, ease period 20s, fallback cap 50MB) with bounds clamping.
     - `FleetSection`: "Download latest backup" button + scoped JS registering Service Worker `/__dl/sw.js`. On click pings `/__dl/manifest` (logs `event=download`) and triggers download of `/backup.zip`.

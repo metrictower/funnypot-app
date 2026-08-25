@@ -1,0 +1,295 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Funnypot\App\Http;
+
+use Closure;
+use Funnypot\App\AiApi\StreamEmitter;
+use Funnypot\App\Render\Fake\Fleet;
+use Funnypot\App\Storage\HitStore;
+use Funnypot\RequestContext;
+use Funnypot\Shell\Fs\Draw;
+
+/**
+ * Endless throttled backup-download bait (the fleet console's "Download latest backup"). A Router-level
+ * GET seam, gate-exempt like the console, mounted only when the feature is on.
+ *
+ * Three paths:
+ *   GET /__dl/sw.js      — the service worker (served as application/javascript, Service-Worker-Allowed: /)
+ *   GET /__dl/manifest   — JSON {seed, files:[{path,size}], throttle:{...}}; also the bait-taken intel ping
+ *   GET /backup.zip      — NON-JS fallback only (a browser's active SW intercepts this before it reaches
+ *                          us); a server-side throttled, HARD-CAPPED finite zip so curl/scanners still get
+ *                          a plausible large download instead of a dead link.
+ *
+ * The browser path costs us one tiny manifest fetch — the SW fabricates every byte client-side and streams
+ * an ENDLESS store-method zip (never a valid extractable archive; the central directory is never written),
+ * throttled to a believable ~1-2 MB/s so it reads like a real broadband download and the attacker gets
+ * bored and cancels. Cancelable, NOT a zip bomb. All throttle knobs come from AppConfig and are handed to
+ * the SW via the manifest, so speed/variability are centrally configured, never hardcoded in the JS.
+ *
+ * Safety: nothing executes; bytes are procedural. The manifest and headers are resolved before any byte is
+ * flushed, so a fault degrades to an empty/plain response, never a 500 (a 500 is itself a tell).
+ */
+final class DownloadRouter
+{
+    public const SW_PATH = '/__dl/sw.js';
+    public const MANIFEST_PATH = '/__dl/manifest';
+    public const ZIP_PATH = '/backup.zip';
+
+    private const MANIFEST_FILES = 40;   // entries advertised in the manifest
+    private const NAME_MAX = 200;        // host param cap
+
+    private Closure $emitterFactory;
+    private Closure $sleep;
+
+    /**
+     * @param int $chunkMinKb minimum chunk size (KiB)   @param int $chunkMaxKb maximum chunk size (KiB)
+     * @param int $intervalMs base inter-chunk delay (ms) @param int $varyPct   breathing amplitude (% of base)
+     * @param int $easePeriodS breathing cycle length (s) @param int $fallbackCapMb non-JS hard cap (MiB)
+     */
+    public function __construct(
+        private HitStore $hits,
+        private int $personaSeed,
+        private string $swScript,
+        private int $chunkMinKb = 100,
+        private int $chunkMaxKb = 200,
+        private int $intervalMs = 100,
+        private int $varyPct = 50,
+        private int $easePeriodS = 20,
+        private int $fallbackCapMb = 50,
+        ?Closure $emitterFactory = null,
+        ?Closure $sleep = null
+    ) {
+        // No artificial per-chunk delay inside the emitter — this router paces itself via $sleep so it can
+        // apply the sine-eased breathing rate the SW also uses.
+        $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
+        $this->sleep = $sleep ?? static function (int $ms): void {
+            if ($ms > 0) {
+                usleep($ms * 1000);
+            }
+        };
+    }
+
+    public function matches(string $path): bool
+    {
+        return $path === self::SW_PATH || $path === self::MANIFEST_PATH || $path === self::ZIP_PATH;
+    }
+
+    public function handle(RequestContext $ctx, string $clientIp): void
+    {
+        if ($ctx->path === self::SW_PATH) {
+            $this->emit(200, ['Content-Type' => 'application/javascript; charset=utf-8', 'Service-Worker-Allowed' => '/', 'Cache-Control' => 'no-store'], $this->swScript);
+
+            return;
+        }
+        if ($ctx->path === self::MANIFEST_PATH) {
+            $host = $this->hostFromQuery($ctx->query);
+            $this->logBait($clientIp, $ctx->method, $host);
+            $json = '';
+            try {
+                $json = (string) json_encode($this->manifest($host));
+            } catch (\Throwable $e) {
+                $json = '{}';
+            }
+            $this->emit(200, ['Content-Type' => 'application/json; charset=utf-8', 'Cache-Control' => 'no-store'], $json);
+
+            return;
+        }
+        // /backup.zip — non-JS fallback: a browser with the SW active never reaches here.
+        $this->logBait($clientIp, $ctx->method, $this->hostFromQuery($ctx->query));
+        $this->streamFallback();
+    }
+
+    /**
+     * A plausible backup manifest for one fleet host, deterministic from its seed: canonical
+     * backup contents (db dumps, configs, keys, tarballs) with seed-drawn sizes. The client fabricates
+     * the bytes, so this only needs believable names + sizes. Coherent per host (same seed → same list).
+     *
+     * @return array{seed:int,host:string,files:array<int,array{path:string,size:int}>,throttle:array<string,int>}
+     */
+    public function manifest(string $host): array
+    {
+        $fleet = Fleet::fromSeed($this->personaSeed);
+        $detail = $fleet->detail($host);
+        $seed = $detail !== null ? (int) $detail['summary']['seed'] : $this->personaSeed;
+        $hostname = $detail !== null ? (string) $detail['summary']['host'] : 'backup-host';
+        $fsSeed = Draw::seed('dl|' . $seed);
+
+        $dirs = ['var/backups', 'etc', 'srv/www', 'home/admin', 'opt/app/config', 'var/lib/mysql'];
+        $stems = ['dump', 'db_full', 'config', 'settings', 'credentials', 'accounts', 'wp-config', 'app', 'secrets', 'ldap', 'vault', 'nginx', 'archive', 'snapshot', 'export'];
+        $exts = ['sql', 'sql.gz', 'tar.gz', 'conf', 'env', 'json', 'yml', 'pem', 'bak', 'xml'];
+
+        $files = [];
+        for ($i = 0; $i < self::MANIFEST_FILES; $i++) {
+            $dir = (string) Draw::pick($fsSeed, $i * 4, $dirs);
+            $stem = (string) Draw::pick($fsSeed, $i * 4 + 1, $stems);
+            $ext = (string) Draw::pick($fsSeed, $i * 4 + 2, $exts);
+            $n = Draw::intBelow($fsSeed, $i * 4 + 3, 1000);
+            // Heavy-tailed sizes: mostly small configs, a few large dumps (bytes).
+            $size = Draw::heavyTailedInt($fsSeed, $i * 8, 512, 64 * 1024 * 1024);
+            $files[] = ['path' => $dir . '/' . $stem . '-' . $n . '.' . $ext, 'size' => $size];
+        }
+
+        return ['seed' => $seed, 'host' => $hostname, 'files' => $files, 'throttle' => $this->throttleBlock()];
+    }
+
+    /** @return array<string,int> the client SW reads these — one source of truth for speed/variability. */
+    public function throttleBlock(): array
+    {
+        $min = $this->chunkMinKb;
+        $max = max($min, $this->chunkMaxKb); // tolerate a misconfigured max < min
+        $wt = $this->easePeriodS;
+
+        return [
+            'chunkMinKb' => $min,
+            'chunkMaxKb' => $max,
+            'intervalMs' => $this->intervalMs,
+            'varyPct' => $this->varyPct,
+            'easePeriodS' => $wt,
+        ];
+    }
+
+    /**
+     * A ZIP local file header (store method, general-purpose bit 3 set so sizes live in a trailing data
+     * descriptor and need not be known up front). Pure + testable. Little-endian throughout.
+     */
+    public function localFileHeader(string $name): string
+    {
+        $name = substr($name, 0, 255);
+
+        return "PK\x03\x04"
+            . pack('v', 20)      // version needed
+            . pack('v', 0x0008)  // flags: bit 3 (data descriptor)
+            . pack('v', 0)       // compression: store
+            . pack('v', 0)       // mod time
+            . pack('v', 0)       // mod date
+            . pack('V', 0)       // crc32 (in descriptor)
+            . pack('V', 0)       // compressed size (in descriptor)
+            . pack('V', 0)       // uncompressed size (in descriptor)
+            . pack('v', strlen($name))
+            . pack('v', 0)       // extra length
+            . $name;
+    }
+
+    /** Deterministic, ASCII-ish filler for one file's store bytes — looks like config/dump text. */
+    public function fill(int $seed, int $len): string
+    {
+        if ($len <= 0) {
+            return '';
+        }
+        $block = base64_encode(hash('sha256', 'fill|' . $seed, true) . hash('sha256', 'fill2|' . $seed, true));
+        $out = str_repeat($block, (int) ceil($len / strlen($block)));
+
+        return substr($out, 0, $len);
+    }
+
+    /** Inter-chunk delay for the n-th chunk under the sine-eased breathing rate (ms). Pure + testable. */
+    public function easedDelayMs(int $n): int
+    {
+        $base = $this->intervalMs;
+        // Advance phase by ~one base interval per chunk (elapsed ≈ n * base).
+        $elapsedS = ($n * $base) / 1000.0;
+        $period = max(1, $this->easePeriodS);
+        $factor = 1.0 + ($this->varyPct / 100.0) * sin(2 * M_PI * ($elapsedS / $period));
+        if ($factor < 0.2) {
+            $factor = 0.2;
+        }
+        $delay = (int) round($base / $factor);
+        $lo = (int) round($base * 0.2);
+        $hi = (int) round($base * 5);
+
+        return max($lo, min($hi, $delay));
+    }
+
+    /**
+     * Non-JS fallback zip: emit local-file-header + store bytes per manifest entry until the byte cap.
+     * No central directory — a capped download simply looks truncated (the point is the time/bandwidth
+     * sink, not an extractable archive). Yields chunks so tests can drain without streaming or sleeping.
+     *
+     * @return \Generator<int,string>
+     */
+    public function fallbackChunks(string $host, int $capBytes): \Generator
+    {
+        $m = $this->manifest($host);
+        $sent = 0;
+        $chunkBytes = max(1, $this->chunkMinKb) * 1024;
+        foreach ($m['files'] as $idx => $f) {
+            if ($sent >= $capBytes) {
+                return;
+            }
+            $header = $this->localFileHeader((string) $f['path']);
+            yield $header;
+            $sent += strlen($header);
+
+            $remainingForFile = (int) $f['size'];
+            $fileSeed = ($m['seed'] ^ ($idx * 2654435761)) & PHP_INT_MAX;
+            while ($remainingForFile > 0 && $sent < $capBytes) {
+                $take = (int) min($chunkBytes, $remainingForFile, $capBytes - $sent);
+                $chunk = $this->fill($fileSeed + $sent, $take);
+                yield $chunk;
+                $sent += strlen($chunk);
+                $remainingForFile -= $take;
+            }
+        }
+    }
+
+    private function streamFallback(): void
+    {
+        $cap = $this->fallbackCapMb * 1024 * 1024;
+        // Pick the host from the query if present; else host 0 (the persona box).
+        $host = ''; // manifest() falls back to persona seed on empty/unknown host
+
+        $emitter = ($this->emitterFactory)();
+        $emitter->begin(200, [
+            'Content-Type' => 'application/zip',
+            'Content-Disposition' => 'attachment; filename="backup.zip"',
+            'Cache-Control' => 'no-store',
+        ]);
+        try {
+            $n = 0;
+            foreach ($this->fallbackChunks($host, $cap) as $chunk) {
+                $emitter->chunk($chunk);
+                ($this->sleep)($this->easedDelayMs($n));
+                $n++;
+            }
+        } catch (\Throwable $e) {
+            // Headers already sent — a mid-stream fault just ends the download early, never a 500.
+        }
+    }
+
+    private function hostFromQuery(string $query): string
+    {
+        parse_str($query, $q);
+        $h = isset($q['host']) && is_string($q['host']) ? $q['host'] : '';
+
+        return substr($h, 0, self::NAME_MAX);
+    }
+
+    private function logBait(string $ip, string $method, string $host): void
+    {
+        $this->hits->append([
+            'ts' => time(),
+            'ip' => $ip,
+            'method' => $method,
+            'path' => self::ZIP_PATH,
+            'matched' => true,
+            'served' => true,
+            'severity' => 'info',
+            'event' => 'download',
+            'body' => $host !== '' ? 'host=' . $host : '',
+        ]);
+    }
+
+    /** @param array<string,string> $headers */
+    private function emit(int $status, array $headers, string $body): void
+    {
+        $emitter = ($this->emitterFactory)();
+        $emitter->begin($status, $headers);
+        if ($body !== '') {
+            foreach (str_split($body, 8192) as $chunk) {
+                $emitter->chunk($chunk);
+            }
+        }
+    }
+}

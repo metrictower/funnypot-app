@@ -91,6 +91,15 @@ final class AppConfig
         /** Raw persona material (pre-hash). Passed to core Config so the template tier derives the
          *  SAME per-deploy PersonaIdentity via seedFromMaterial. Private per-deploy value — never emit. */
         public string $personaMaterial,
+        /** Endless throttled backup-download bait (fleet console). On by default; the client SW reads
+         *  the throttle knobs below from the manifest, so speed/variability are centrally configured. */
+        public bool $endlessDownload,
+        public int $dlChunkMinKb,
+        public int $dlChunkMaxKb,
+        public int $dlIntervalMs,
+        public int $dlVaryPct,
+        public int $dlEasePeriodS,
+        public int $dlFallbackCapMb,
     ) {
     }
 
@@ -180,6 +189,15 @@ final class AppConfig
             // PersonaIdentity for one deployment.
             personaSeed: PersonaIdentity::seedFromMaterial($personaMaterial),
             personaMaterial: $personaMaterial,
+            // Endless-download bait: on unless explicitly "0". Throttle knobs clamped to sane bounds so
+            // a bad env value can't produce a firehose (instant tell + fills disk) or a dead stall.
+            endlessDownload: $onUnless0('FUNNYPOT_ENDLESS_DOWNLOAD'),
+            dlChunkMinKb: max(1, min(1024, (int) $str('FUNNYPOT_DL_CHUNK_MIN_KB', '100'))),
+            dlChunkMaxKb: max(1, min(1024, (int) $str('FUNNYPOT_DL_CHUNK_MAX_KB', '200'))),
+            dlIntervalMs: max(10, min(5000, (int) $str('FUNNYPOT_DL_INTERVAL_MS', '100'))),
+            dlVaryPct: max(0, min(95, (int) $str('FUNNYPOT_DL_VARY_PCT', '50'))),
+            dlEasePeriodS: max(1, min(600, (int) $str('FUNNYPOT_DL_EASE_PERIOD_S', '20'))),
+            dlFallbackCapMb: max(1, min(500, (int) $str('FUNNYPOT_DL_FALLBACK_CAP_MB', '50'))),
         );
     }
 }
