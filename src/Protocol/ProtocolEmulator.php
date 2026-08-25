@@ -25,6 +25,7 @@ final class ProtocolEmulator
     private DirectiveRenderer $renderer;
     private Codec $codec;
     private ?FakeShell $shell = null;
+    private ?\Funnypot\Shell\Host\HostIdentity $hostId = null;
 
     /** @param array<string,mixed> $protocol compiled protocol rules */
     public function __construct(
@@ -40,15 +41,20 @@ final class ProtocolEmulator
     /** Bytes to send the moment a connection opens (before any input), or '' for silent. */
     public function banner(ProtocolSession $s): string
     {
-        $banner = $this->renderer->render((string) ($this->protocol['banner'] ?? ''), [], $s->seed);
-        // Interactive shell (telnet): negotiate server-side echo + character-at-a-time (IAC WILL
-        // ECHO, IAC WILL SGA) so a real telnet client hands us each keystroke and we own the line
-        // editing — otherwise the client's Enter (a bare CR) never terminates a line for us.
+        // Interactive shell (telnet): the login banner must name the SAME host + distro the shell will,
+        // so banner -> prompt -> uname don't contradict each other. Render it from the shell's identity,
+        // and negotiate server-side echo + char-at-a-time (IAC WILL ECHO, WILL SGA) for line editing.
         if (isset($this->protocol['shell'])) {
-            return "\xff\xfb\x01\xff\xfb\x03" . $banner;
+            $id = $this->hostId();
+            return "\xff\xfb\x01\xff\xfb\x03\r\n" . $id->distroPretty() . "\r\n" . $id->hostname() . ' login: ';
         }
 
-        return $banner;
+        return $this->renderer->render((string) ($this->protocol['banner'] ?? ''), [], $s->seed);
+    }
+
+    private function hostId(): \Funnypot\Shell\Host\HostIdentity
+    {
+        return $this->hostId ??= \Funnypot\Shell\Host\HostIdentity::fromSeed($this->identitySeed ?? 0);
     }
 
     /**
@@ -283,7 +289,11 @@ final class ProtocolEmulator
                 return TrollStream::frame($s->trollFrame++);
             }
 
-            return (string) ($cfg['motd'] ?? "\r\nWelcome.\r\n\r\n") . $this->prompt($s, $host);
+            // MOTD names the same distro + kernel as uname/os-release (coherent with the banner + shell).
+            $id = $this->hostId();
+            $motd = "\r\nWelcome to " . $id->distroPretty() . " (GNU/Linux " . $id->kernel() . " x86_64)\r\n\r\n";
+
+            return $motd . $this->prompt($s, $host);
         }
 
         $out = $this->fakeShell()->run($line, $s);

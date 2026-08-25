@@ -37,12 +37,17 @@ final class SshServer
     public function __construct(
         private HostKey $hostKey,
         private $logger,
-        private string $serverVersion = 'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10',
+        private string $serverVersion = '',
         ?int $rejectBudget = null,
         private ?int $identitySeed = null,
         private ?string $secret = null
     ) {
         $this->rejectBudget = $rejectBudget ?? (int) (getenv('FUNNYPOT_SSH_REJECT_BUDGET') ?: 0);
+        // Default the SSH ident to the distro-coherent one (matches the shell's os-release/uname); an
+        // explicit non-empty serverVersion still wins.
+        if ($this->serverVersion === '') {
+            $this->serverVersion = \Funnypot\Shell\Host\HostIdentity::fromSeed($this->identitySeed ?? 0)->sshBanner();
+        }
     }
 
     /** Bind and serve forever. $bind is "host:port", e.g. "0.0.0.0:2222". */

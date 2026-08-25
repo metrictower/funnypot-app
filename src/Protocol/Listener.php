@@ -94,13 +94,21 @@ final class Listener
                 }
                 $conns[$id]['last'] = $now;
                 $ip = $conns[$id]['ip'];
-                $resp = $this->emulator->feed(
-                    $data,
-                    $conns[$id]['sess'],
-                    function (string $cmd) use ($ip, $port): void {
-                        $this->log('command', $ip, $port, $cmd);
-                    }
-                );
+                // A fault handling ONE connection must never kill the whole listener process (which
+                // serves every port-23 connection) — drop just this session, like the SSH server does.
+                try {
+                    $resp = $this->emulator->feed(
+                        $data,
+                        $conns[$id]['sess'],
+                        function (string $cmd) use ($ip, $port): void {
+                            $this->log('command', $ip, $port, $cmd);
+                        }
+                    );
+                } catch (\Throwable $e) {
+                    $this->log('error', $ip, $port, 'session dropped: ' . $e->getMessage());
+                    $this->close($conns, $perIp, $id);
+                    continue;
+                }
                 if ($resp !== '') {
                     $conns[$id]['wbuf'] .= $resp; // queued; flushed below (may be a partial write)
                 }

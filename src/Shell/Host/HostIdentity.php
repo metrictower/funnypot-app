@@ -120,6 +120,19 @@ final class HostIdentity
         return $this->d['gcc'];
     }
 
+    /** The SSH identification string, with the distro-correct OpenSSH package tag (coherent with os()). */
+    public function sshBanner(): string
+    {
+        switch ($this->d['id']) {
+            case 'ubuntu':
+                return 'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10';
+            case 'debian':
+                return 'SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3';
+            default: // rhel / rocky / almalinux / centos / amzn — el9 ships OpenSSH 8.7, no distro suffix
+                return 'SSH-2.0-OpenSSH_8.7';
+        }
+    }
+
     /** Plausible distro kernel build host for /proc/version (not the honeypot itself). */
     public function builder(): string
     {

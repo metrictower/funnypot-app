@@ -33,20 +33,26 @@ final class HostSecret
         if (!is_dir($storageDir)) {
             @mkdir($storageDir, 0700, true);
         }
-        $ok = @file_put_contents($path, $secret, LOCK_EX);
-        @chmod($path, 0600);
+        // Exclusive-create so exactly ONE process wins the first-boot race: the telnet and ssh listeners
+        // (separate processes) must converge on the same secret, or they'd present different boxes. A
+        // last-writer-wins put + re-read does NOT guarantee that; O_EXCL does.
+        $fp = @fopen($path, 'xb');
+        if ($fp !== false) {
+            fwrite($fp, $secret);
+            fclose($fp);
+            @chmod($path, 0600);
 
-        // A concurrent first-boot writer may have won the race; adopt whatever is now on disk so all
-        // processes converge on ONE secret (a per-process-fresh secret would reshuffle host identity).
+            return $secret;
+        }
+        // Lost the race (or the file already existed) — adopt whatever is on disk.
         $onDisk = @file_get_contents($path);
         if (is_string($onDisk) && $onDisk !== '') {
             return $onDisk;
         }
-        if ($ok === false) {
-            // Never silent: an unpersistable secret means identity won't survive a restart — a tell.
-            error_log('funnypot: FS host secret could not be persisted to ' . $path
-                . ' — set FUNNYPOT_FS_SECRET or fix the data-volume permissions');
-        }
+        // Couldn't create AND couldn't read → unwritable dir. Never silent: identity won't survive a
+        // restart and may differ between listeners (a tell). Degrade to a per-process secret.
+        error_log('funnypot: FS host secret could not be persisted to ' . $path
+            . ' — set FUNNYPOT_FS_SECRET or fix the data-volume permissions');
 
         return $secret;
     }
