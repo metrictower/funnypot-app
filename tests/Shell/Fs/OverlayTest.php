@@ -85,4 +85,26 @@ final class OverlayTest extends TestCase
         self::assertSame('aa', $r->fileBytes('/tmp/a'));
         self::assertTrue($r->isRemoved('/var/log'));
     }
+
+    public function test_overlay_refuses_growth_past_the_byte_ceiling(): void
+    {
+        // Bound the persisted per-session diff: past ~256 KiB, a net-growth write is a no-op (ENOSPC).
+        $o = new Overlay();
+        $blob = str_repeat('x', 4096);
+        for ($i = 0; $i < 200; $i++) {                 // 200 * 4 KiB ~= 800 KiB attempted
+            $o = $o->withFile('/tmp/f' . $i, $blob);
+        }
+        $bytes = strlen((string) json_encode($o->toArray()));
+        self::assertLessThan(300000, $bytes);          // capped well under the attempted 800 KiB
+
+        // Overwriting an existing key (no net growth) is still allowed even at the ceiling.
+        $existing = null;
+        foreach ($o->toArray()['files'] as $path => $_) {
+            $existing = (string) $path;
+            break;
+        }
+        self::assertNotNull($existing);
+        $o2 = $o->withFile($existing, 'small');
+        self::assertSame('small', $o2->fileBytes($existing));
+    }
 }

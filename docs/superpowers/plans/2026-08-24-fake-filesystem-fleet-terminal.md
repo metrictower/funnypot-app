@@ -565,10 +565,32 @@ Each becomes its own detailed plan (spec §Phasing) once Phase 1's real signatur
 - **Phase 2 — `HostFacts`** (`src/Shell/Host/HostFacts.php`): wrap `ServerProfile::fromSeed($identitySeed)`; add process table (read-only reuse of `MinerRig::fromSeed()->summary()` + `FakeCron::fromSeed()->processes([...])` — the same generators `ProcessesSection` uses), `/proc/{cpuinfo,meminfo,loadavg,uptime,version,self}` + numeric PID dirs, `df` mounts, `netstat` sockets, `passwd`/uid map. **This-box host: `$identitySeed = personaSeed`** (so panel/shell/fleet `ps` agree — fable residual #1); FS content keys always fold the secret. Coherence tests: fleet number == shell `free`/`df`/`ps`. **Two seed spaces (state explicitly):** the this-box `HostFacts` feeds the INT `personaSeed` to `ServerProfile::fromSeed(int)`, while the FS is built with `hostSeedBytes = Draw::seed($secret . "\0" . $personaSeed . "\0" . $role)` — never pass the int `personaSeed` where raw `hostSeedBytes` is expected. Reuse is read-only: `MinerRig::summary()` and `FakeCron::processes(array $miner=[])` are public (verified) — do not edit them (Agent B WIP).
 - **Phase 3 — `ShellInterpreter` + SSH/telnet refactor** (`src/Shell/ShellInterpreter.php`, `ShellSession` iface; modify `src/Protocol/Shell/FakeShell.php`, `src/Protocol/ProtocolEmulator.php`, `src/Protocol/Ssh/SshConnection.php`): two-tier dispatch, broad command set, writes→overlay, `du/df/$?/history/pipes/perms//proc`, fail-loud, pacing metadata; thread the host-identity seed into `FakeShell` (today seedless); per-user `/home/<dept>/<user>` from `Org`. No SSH/telnet regressions; shell fingerprint rows; scanner-in-the-loop.
 - **Phase 4 — Fleet console** (`src/App/Render/Panel/FleetSection.php` + `src/App/Render/Fake/Fleet.php`; register in `PanelRegistry` + nav slug): fleet + detail views from `HostFacts` per host, INERT actions, Console POST-launcher button, per-host seeds + "this-box" designation, persona-company breadcrumbs (not the base hardcode). Fleet fingerprint rows.
-- **Phase 5 — Streaming web terminal** (`src/App/Http/ConsoleRouter.php` wired in `src/App/Http/Router.php` `public()`+`stealth()` as a POST sibling of `AiApiRouter`; reuse `src/App/AiApi/StreamEmitter.php`; `src/App/Shell/ConsoleSessionStore.php` = SQLite overlay store on the data volume, keyed by an HMAC'd opaque cookie (mundane name e.g. `sid`), bounded entries+bytes + TTL + LRU): resolve-full-output-in-try/catch then paced-stream; velocity-gate-exempt with its own per-session cap; terminal UI (scoped inline JS, no client FS state); `event:'shell'` logging via `HitStore::append` + a dashboard `shell` quick-filter. **Notes:** `StreamEmitter::begin(int $status, array $headers)` — pass `Content-Type: text/plain; charset=utf-8` (invariant 5; OB-drain + `X-Accel-Buffering: no` are internal to `begin()`). The HMAC cookie signing key persists like `fs_secret` (Task 9 mechanism generalises). Reuse the `SqliteHitStore`/`llm_cache.sqlite` pattern (`pdo_sqlite` proven present) for the overlay store; `Draw::assertEnv()` on the web path routes through the endpoint try/catch so a 32-bit box degrades, never 500s.
-- **Phase 6 (separate later ticket)** — procedural endless download reusing the engine.
+- **Phase 5 — Streaming web terminal** (`src/App/Http/ConsoleRouter.php` wired in `src/App/Http/Router.php` `public()`+`stealth()` as a POST sibling of `AiApiRouter`; reuse `src/App/AiApi/StreamEmitter.php`; `src/App/Shell/ConsoleSessionStore.php` = SQLite overlay store on the data volume, keyed by an HMAC'd opaque cookie e.g. `sid`; bounded entries+bytes + TTL + LRU):
+  - **Status:** BUILT + MULTI-AGENT REVIEWED (review workflow `w2enhj7zu`, 19 agents, 10 confirmed fixes landed in working tree).
+  - **Key fixes applied:**
+    1. Overlay ENOSPC-style byte-budget cap (256 KiB ceiling) preventing unbounded memory growth.
+    2. Non-string coercion for host/command avoiding PHP string warnings.
+    3. Reload coherence: dynamic empty POST prompt fetching on client refresh.
+    4. Stopped/offline host connect failure handling (`ssh: connect to host ... Connection refused/No route`) + console button gating.
+    5. Lazy `ConsoleSessionStore` opening inside fault guard.
+    6. Console emitter delay set to 0 (no FPM worker hold).
+    7. Clean session exit/logout deletes store row and prints disconnect notice.
+    8. Output cap aligned with `FakeShell` (8192 bytes).
+    9. Hostname deduplication in `Fleet::fromSeed()` ensuring unique fleet hostnames across all 24 seeds.
+  - **Unit tests:** `ConsoleRouterTest` (12 tests), `OverlayTest` (8 tests), `FleetSectionTest` (4 tests) passing.
 
-## Self-review (Phase 1)
-- **Spec coverage:** engine (§Component 1) fully covered by Tasks 1–9; fingerprint enforcement (B1) by Task 10; secret persistence (B4) by Task 9; determinism traps + two-seed content key by Tasks 1/5. ✓
-- **Placeholders:** none — every code step carries real code; pools content is specified as ≥150 factual entries with concrete examples.
-- **Type consistency:** `Draw::seed`→string bytes; `FakeFilesystem` ctor takes `hostSeedBytes` (bytes from `Draw::seed`/`HostSecret`), `role`; `Overlay` immutable `with*`; `Node` public props — consistent across tasks.
+- **Phase 6 — Procedural Endless Throttled Backup-Download Bait (FP-0051)**:
+  - **Spec:** `funnypot/docs/superpowers/specs/2026-08-25-endless-download-design.md` (operator approved).
+  - **Status:** SPEC APPROVED, READY TO IMPLEMENT.
+  - **Architecture:**
+    - `AppConfig`: Central configuration knobs (`FUNNYPOT_ENDLESS_DOWNLOAD` default ON, chunk size 100–200 KB, interval 100ms, vary 50%, ease period 20s, fallback cap 50MB) with bounds clamping.
+    - `FleetSection`: "Download latest backup" button + scoped JS registering Service Worker `/__dl/sw.js`. On click pings `/__dl/manifest` (logs `event=download`) and triggers download of `/backup.zip`.
+    - `DownloadRouter`: Gate-exempt POST/GET sibling handling `/__dl/sw.js` (application/javascript with `Service-Worker-Allowed: /`), `/__dl/manifest` (JSON seed/files/throttle info), and `/backup.zip` (non-JS server-side capped fallback).
+    - Service Worker `src/App/Download/sw.js`: Intercepts `/backup.zip` and serves a `ReadableStream` emitting endless ZIP local file headers with procedural store-method bytes throttled by a sine-eased breathing formula ($\sim 1\text{--}2\text{ MB/s}$).
+    - Intel: Logs hit `event=download` on manifest fetch or fallback download.
+    - Safety: Cancelable, non-bomb (CFAA safe), never 500s.
+
+## Self-review (Phases 1–5)
+- **Spec coverage:** engine (§Component 1) fully covered by Tasks 1–9; HostFacts/HostIdentity unified; FakeShell live-wired; Fleet console & Streaming web terminal built and multi-agent reviewed; Endless download bait specced and ready.
+- **Invariants enforced:** Purity, determinism, never-500, output bounds, fingerprint safety against denylist.
+

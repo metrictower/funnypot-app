@@ -54,9 +54,16 @@ final class Fleet
     public function servers(): array
     {
         $out = [];
-        for ($i = 0; $i < $this->count; $i++) {
+        $seen = [];
+        // Skip any peer whose hostname collides with one already taken: hostnames must be unique across
+        // the fleet or detail()/the web console would resolve a name to the wrong box (name != seed).
+        for ($i = 0; count($out) < $this->count && $i < $this->count * 8; $i++) {
             $ss = $this->serverSeed($i);
             $id = HostIdentity::fromSeed($ss);
+            if (isset($seen[$id->hostname()])) {
+                continue;
+            }
+            $seen[$id->hostname()] = true;
             $sp = ServerProfile::fromSeed($ss);
             $status = $i === 0 ? 'running' : $this->status($ss); // host 0 is "this box" — always up
             $live = $status === 'running' || $status === 'degraded';

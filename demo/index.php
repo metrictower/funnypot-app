@@ -22,8 +22,10 @@ use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
+use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Llm\CircuitBreaker;
@@ -183,4 +185,13 @@ if ($config->aiApiEnabled) {
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier());
 $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
-(new Router($config, $honeypot, $dashboard, $corporate, $aiApi))->dispatch($context, $clientIp, $tokenVerdict);
+// Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
+// Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.
+$console = new ConsoleRouter(
+    new ConsoleSessionStore(dirname($config->dbPath) . '/console.sqlite'),
+    $store,
+    $config->personaSeed,
+    \Funnypot\Shell\Fs\HostSecret::resolve(__DIR__ . '/storage'),
+);
+
+(new Router($config, $honeypot, $dashboard, $corporate, $aiApi, $console))->dispatch($context, $clientIp, $tokenVerdict);

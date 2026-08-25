@@ -22,6 +22,7 @@ final class Router
         private DashboardController $dashboard,
         private CorporateController $corporate,
         private ?AiApiRouter $aiApi = null,
+        private ?ConsoleRouter $console = null,
     ) {
     }
 
@@ -49,6 +50,13 @@ final class Router
         // OpenAI/ollama client gets a proper stream; unmatched paths fall through unchanged.
         if ($method === 'POST' && $this->aiApi !== null && $this->aiApi->matches($path)) {
             $this->aiApi->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Streaming web terminal (fleet console). Also ahead of the catch-all so interactive typing
+        // (many POSTs) never trips the per-IP velocity/bulk-scan gate.
+        if ($method === 'POST' && $this->console !== null && $this->console->matches($path)) {
+            $this->console->handle($ctx, $clientIp);
 
             return;
         }
@@ -118,6 +126,13 @@ final class Router
         // OpenAI/ollama client gets a proper stream; unmatched paths fall through unchanged.
         if ($method === 'POST' && $this->aiApi !== null && $this->aiApi->matches($path)) {
             $this->aiApi->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Streaming web terminal (fleet console). Also ahead of the catch-all so interactive typing
+        // (many POSTs) never trips the per-IP velocity/bulk-scan gate.
+        if ($method === 'POST' && $this->console !== null && $this->console->matches($path)) {
+            $this->console->handle($ctx, $clientIp);
 
             return;
         }
