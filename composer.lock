@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "cc9bc3df6c8f9d393b9d50041d85b899",
+    "content-hash": "8613402b5f9f73aaecbb5302c8e8dcf2",
     "packages": [
         {
             "name": "metrictower/funnypot-core",
-            "version": "v0.3.0",
+            "version": "v0.4.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/metrictower/funnypot-core.git",
-                "reference": "222d5ab02562dec22e49772e39da7d8646b58fe3"
+                "reference": "0c456793af5dbd1eb66e0f32c2c1e686cc00d0f0"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/222d5ab02562dec22e49772e39da7d8646b58fe3",
-                "reference": "222d5ab02562dec22e49772e39da7d8646b58fe3",
+                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/0c456793af5dbd1eb66e0f32c2c1e686cc00d0f0",
+                "reference": "0c456793af5dbd1eb66e0f32c2c1e686cc00d0f0",
                 "shasum": ""
             },
             "require": {
@@ -54,10 +54,10 @@
             ],
             "description": "funnypot core engine: turn a scanner's own nuclei detection template into a matching fake-vulnerable HTTP response. Pure-PHP runtime, inert by default.",
             "support": {
-                "source": "https://github.com/metrictower/funnypot-core/tree/v0.3.0",
+                "source": "https://github.com/metrictower/funnypot-core/tree/v0.4.0",
                 "issues": "https://github.com/metrictower/funnypot-core/issues"
             },
-            "time": "2026-08-25T10:53:11+00:00"
+            "time": "2026-08-25T12:37:15+00:00"
         }
     ],
     "packages-dev": [
