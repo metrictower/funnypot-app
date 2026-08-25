@@ -112,6 +112,7 @@ final class FingerprintSafetyTest extends TestCase
             'phpmyadmin' => ['/phpmyadmin/', 102],
             'grafana' => ['/grafana/d/x', 103],
             'adminlte (admin)' => ['/admin/users', 104],
+            'adminlte fleet console' => ['/admin/fleet', 106],
             'generic (no product analog)' => ['/hr/portal', 105],
         ];
     }

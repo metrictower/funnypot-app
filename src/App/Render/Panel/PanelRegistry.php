@@ -29,6 +29,7 @@ final class PanelRegistry
         $this->sections = [
             'dashboard' => $dashboard,
             'system' => new SystemSection(),
+            'fleet' => new FleetSection(),
             'databases' => $databases,
             'users' => $databases,   // the users loot table is a Databases drill-down (T1 fix)
             'backups' => new BackupsSection(),
@@ -59,6 +60,8 @@ final class PanelRegistry
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
             'system-info' => 'system', 'servers' => 'system', 'server' => 'system',
+            'hosts' => 'fleet', 'cluster' => 'fleet', 'nodes' => 'fleet', 'compute' => 'fleet',
+            'vms' => 'fleet', 'hypervisors' => 'fleet', 'control-panel' => 'fleet',
             'database' => 'databases', 'db' => 'databases',
             'backup' => 'backups',
             'api-keys' => 'keys', 'tokens' => 'keys', 'secrets' => 'keys',

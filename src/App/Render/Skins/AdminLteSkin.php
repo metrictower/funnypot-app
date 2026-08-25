@@ -44,6 +44,7 @@ final class AdminLteSkin extends AbstractSkin
         ],
         'IT & Platform' => [
             ['Servers', 'system'],
+            ['Server Fleet', 'fleet'],
             ['Databases', 'databases'],
             ['Backups', 'backups'],
             ['Users & Roles', 'users'],
@@ -83,6 +84,7 @@ final class AdminLteSkin extends AbstractSkin
     private const TITLES = [
         'search' => 'Search', 'activity' => 'Activity Feed', 'feed' => 'Activity Feed',
         'system' => 'System Information', 'system-info' => 'System Information', 'servers' => 'System Information',
+        'fleet' => 'Server Fleet', 'hosts' => 'Server Fleet', 'cluster' => 'Server Fleet', 'compute' => 'Server Fleet',
         'databases' => 'Databases', 'database' => 'Databases', 'db' => 'Databases', 'users' => 'Users',
         'backups' => 'Backups', 'backup' => 'Backups',
         'keys' => 'API Keys', 'api-keys' => 'API Keys', 'tokens' => 'API Keys',
