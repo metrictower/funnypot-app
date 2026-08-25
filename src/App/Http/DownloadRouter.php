@@ -41,7 +41,6 @@ final class DownloadRouter
     private const NAME_MAX = 200;        // host param cap
 
     private Closure $emitterFactory;
-    private Closure $sleep;
 
     /**
      * @param int $chunkMinKb minimum chunk size (KiB)   @param int $chunkMaxKb maximum chunk size (KiB)
@@ -58,17 +57,9 @@ final class DownloadRouter
         private int $varyPct = 50,
         private int $easePeriodS = 20,
         private int $fallbackCapMb = 50,
-        ?Closure $emitterFactory = null,
-        ?Closure $sleep = null
+        ?Closure $emitterFactory = null
     ) {
-        // No artificial per-chunk delay inside the emitter — this router paces itself via $sleep so it can
-        // apply the sine-eased breathing rate the SW also uses.
         $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
-        $this->sleep = $sleep ?? static function (int $ms): void {
-            if ($ms > 0) {
-                usleep($ms * 1000);
-            }
-        };
     }
 
     public function matches(string $path): bool
@@ -97,8 +88,9 @@ final class DownloadRouter
             return;
         }
         // /backup.zip — non-JS fallback: a browser with the SW active never reaches here.
-        $this->logBait($clientIp, $ctx->method, $this->hostFromQuery($ctx->query));
-        $this->streamFallback();
+        $host = $this->hostFromQuery($ctx->query);
+        $this->logBait($clientIp, $ctx->method, $host);
+        $this->streamFallback($host);
     }
 
     /**
@@ -126,8 +118,9 @@ final class DownloadRouter
             $stem = (string) Draw::pick($fsSeed, $i * 4 + 1, $stems);
             $ext = (string) Draw::pick($fsSeed, $i * 4 + 2, $exts);
             $n = Draw::intBelow($fsSeed, $i * 4 + 3, 1000);
-            // Heavy-tailed sizes: mostly small configs, a few large dumps (bytes).
-            $size = Draw::heavyTailedInt($fsSeed, $i * 8, 512, 64 * 1024 * 1024);
+            // Heavy-tailed sizes: mostly small configs, a few large dumps (bytes). Its draw index sits
+            // past the name picks' index space (0..FILES*4-1) so the two never collide.
+            $size = Draw::heavyTailedInt($fsSeed, self::MANIFEST_FILES * 4 + $i, 512, 64 * 1024 * 1024);
             $files[] = ['path' => $dir . '/' . $stem . '-' . $n . '.' . $ext, 'size' => $size];
         }
 
@@ -184,7 +177,11 @@ final class DownloadRouter
         return substr($out, 0, $len);
     }
 
-    /** Inter-chunk delay for the n-th chunk under the sine-eased breathing rate (ms). Pure + testable. */
+    /**
+     * Inter-chunk delay for the n-th chunk under the sine-eased breathing rate (ms). The PHP mirror of
+     * the client SW's easedDelay(); the server no longer paces its fallback (see streamFallback), so this
+     * is the canonical reference for the throttle formula and its bounds, exercised by the unit tests.
+     */
     public function easedDelayMs(int $n): int
     {
         $base = $this->intervalMs;
@@ -234,11 +231,16 @@ final class DownloadRouter
         }
     }
 
-    private function streamFallback(): void
+    /**
+     * Non-JS fallback: stream the capped zip as fast as the socket drains — NO server-side pacing. The
+     * throttle is a browser-side deception (the SW's job, on the attacker's own CPU); pacing here would
+     * only pin a php-fpm worker for the whole transfer on a gate-exempt, unauthenticated route, and a
+     * curl/scanner client judges no "broadband realism" anyway. So this is just a bounded static-ish
+     * download, no worse than serving any capped file.
+     */
+    private function streamFallback(string $host): void
     {
         $cap = $this->fallbackCapMb * 1024 * 1024;
-        // Pick the host from the query if present; else host 0 (the persona box).
-        $host = ''; // manifest() falls back to persona seed on empty/unknown host
 
         $emitter = ($this->emitterFactory)();
         $emitter->begin(200, [
@@ -247,11 +249,8 @@ final class DownloadRouter
             'Cache-Control' => 'no-store',
         ]);
         try {
-            $n = 0;
             foreach ($this->fallbackChunks($host, $cap) as $chunk) {
                 $emitter->chunk($chunk);
-                ($this->sleep)($this->easedDelayMs($n));
-                $n++;
             }
         } catch (\Throwable $e) {
             // Headers already sent — a mid-stream fault just ends the download early, never a 500.

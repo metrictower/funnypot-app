@@ -31,7 +31,6 @@ final class DownloadRouterTest extends TestCase
 
     private function router(): DownloadRouter
     {
-        // no-op sleep so the fallback stream test never actually paces
         return new DownloadRouter(
             $this->hits,
             self::SEED,
@@ -41,9 +40,7 @@ final class DownloadRouterTest extends TestCase
             100,
             50,
             20,
-            2, // 2 MiB fallback cap
-            null,
-            static function (int $ms): void { /* no sleep in tests */ }
+            2 // 2 MiB fallback cap
         );
     }
 
@@ -101,7 +98,7 @@ final class DownloadRouterTest extends TestCase
     {
         $captured = '';
         $emitter = new StreamEmitter(static function (string $b) use (&$captured): void { $captured .= $b; }, 0);
-        $r = new DownloadRouter($this->hits, self::SEED, "/* the worker */", 100, 200, 100, 50, 20, 2, static fn (): StreamEmitter => $emitter, static function (int $ms): void { });
+        $r = new DownloadRouter($this->hits, self::SEED, "/* the worker */", 100, 200, 100, 50, 20, 2, static fn (): StreamEmitter => $emitter);
         $r->handle(new RequestContext('GET', '/__dl/sw.js'), '203.0.113.5');
         $this->assertStringContainsString('the worker', $captured);
         $this->assertSame('application/javascript; charset=utf-8', $emitter->headers()['Content-Type'] ?? '');
@@ -145,8 +142,7 @@ final class DownloadRouterTest extends TestCase
             return new StreamEmitter(static function (string $b) use (&$captured): void { $captured .= $b; }, 0);
         };
         $r = new DownloadRouter(
-            $this->hits, self::SEED, "/* sw */", 100, 200, 100, 50, 20, 2, $factory,
-            static function (int $ms): void { /* no sleep */ }
+            $this->hits, self::SEED, "/* sw */", 100, 200, 100, 50, 20, 2, $factory
         );
         $r->handle(new RequestContext($method, $path, $query), '203.0.113.7');
 
