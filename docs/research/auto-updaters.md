@@ -7,7 +7,7 @@ exists — the template to mirror. Part (b) designs the three new workflows the 
 asked for, reusing that template's shape and adding the two safety gates that don't exist
 yet anywhere in the repo: fingerprint-safety and license-compatibility.
 
-Repos: `funnypot` (app, `github.com/metrictower/funnypot`) and `funnypot-core` (HTTP
+Repos: `funnypot-app` (app, `github.com/metrictower/funnypot-app`) and `funnypot-core` (HTTP
 deception engine, `github.com/metrictower/funnypot-core`), the latter vendored read-only
 into `funnypot/vendor/metrictower/funnypot-core` via composer (`dev-main`) — confirmed
 byte-identical to the source repo's copy (`diff` of both `update-templates.yml` files is

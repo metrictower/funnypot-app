@@ -5,7 +5,7 @@ All facts confirmed against the code (`password_hash` at `AdminLteSkin.php:223`;
 **Status:** buildable design, merged from six module brainstorms (facilities, security/life-safety, IoT amenities, energy/BMS, HR, finance, IT/comms), the HomeAssistant-mining breadth study, the UI/IA routing study, and the adversarial critique. Every critique fix (T1–T7, S1–S6, F1–F6) is folded in as a normative rule, not an option.
 
 **Ground truth verified in-repo (2026-08-24):**
-- App `metrictower/funnypot` requires **PHP >= 8.0**; `metrictower/funnypot-core` requires **PHP >= 7.3**. Skins and `Funnypot\App\Render\Fake\*` live in the **app**, so they may use 8.0 syntax. Only push a fact into core (7.3-clean) when a core template needs it.
+- App `metrictower/funnypot-app` requires **PHP >= 8.0**; `metrictower/funnypot-core` requires **PHP >= 7.3**. Skins and `Funnypot\App\Render\Fake\*` live in the **app**, so they may use 8.0 syntax. Only push a fact into core (7.3-clean) when a core template needs it.
 - `AbstractSkin` helpers present: `esc()`, `tableHtml()`, `navHtml()`, `navHref()` (private, slugifies to `[a-z0-9-]`), `navBase()`, `statCardsHtml()`, `kvTableHtml()`, `downloadTableHtml()`, `preScrollHtml()`.
 - `AdminLteSkin`: `matches()` @40 (claims `admin|dashboard|manage|panel|console|cp|administrator`), `viewFor()` @112 uses **last segment only** (`end($segs)`), `sectionFor()` @158, `filesCard()` download links route via `navBase . '/files/download/<name>'`.
 - **T1 confirmed:** `lootCard()` renders a raw `password_hash` column at **`AdminLteSkin.php:223`**, composed onto the dashboard view (@179). Must move.

@@ -1,6 +1,6 @@
 {
-    "name": "metrictower/funnypot",
-    "description": "funnypot: a standalone multi-protocol honeypot. HTTP nuclei-inversion deception (via funnypot-core) plus SSH, telnet, redis, mysql and 14 more TCP service emulators, with a live attacker dashboard.",
+    "name": "metrictower/funnypot-app",
+    "description": "funnypot-app: a standalone multi-protocol honeypot. HTTP nuclei-inversion deception (via funnypot-core) plus SSH, telnet, redis, mysql and 14 more TCP service emulators, with a live attacker dashboard.",
     "type": "project",
     "license": "MIT",
     "minimum-stability": "dev",
