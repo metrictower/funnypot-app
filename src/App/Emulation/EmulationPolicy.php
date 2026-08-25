@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Funnypot\Policy;
+namespace Funnypot\App\Emulation;
 
 /**
  * The operator's on/off choices layered over the {@see EmulationCatalog}. Choices live in a small

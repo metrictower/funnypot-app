@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Funnypot\Compiler;
+namespace Funnypot\App\Build;
 
 use Symfony\Component\Yaml\Yaml;
 
 /**
- * Derives the emulation catalog (see {@see \Funnypot\Policy\EmulationCatalog}) from the templates
+ * Derives the emulation catalog (see {@see \Funnypot\App\Emulation\EmulationCatalog}) from the templates
  * on disk — attack rules, product/route decoys, protocol services — plus the compiled nuclei
  * corpus as one group entry. Build-time only (needs symfony/yaml); the output is pure data.
  *

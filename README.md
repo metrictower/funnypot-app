@@ -4,6 +4,15 @@
 [![PHP](https://img.shields.io/badge/php-%3E%3D8.0-777bb3.svg)](composer.json)
 [![Engine](https://img.shields.io/badge/engine-funnypot--core-blue.svg)](https://github.com/metrictower/funnypot-core)
 
+> **Not sure you're in the right place?**
+> - Want a ready-to-run **honeypot box** to deploy → funnypot-app **← you are here**
+> - Protecting a **Laravel** app → [funnypot-laravel](https://github.com/metrictower/funnypot-laravel)
+> - Protecting a **WordPress** site → [funnypot-wordpress](https://github.com/metrictower/funnypot-wordpress)
+> - Detection **and** IP reporting in any PHP app, batteries included → [funnypot](https://github.com/metrictower/funnypot)
+> - Embedding the deception/detection **engine** in your own PHP / PSR-15 app → [funnypot-core](https://github.com/metrictower/funnypot-core)
+> - Querying / reporting to the **IP-reputation service** from code (the SDK) → [funnypot-mainnet-client](https://github.com/metrictower/funnypot-mainnet-client)
+> - Building on the low-level **decision/policy engine** → [funnypot-policy](https://github.com/metrictower/funnypot-policy)
+
 **A honeypot that answers a scanner's probe with the fake-vulnerable response it was fishing for.**
 
 funnypot is the opposite of a [nuclei](https://github.com/projectdiscovery/nuclei) scanner. A scanner

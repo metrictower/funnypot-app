@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Funnypot\Compiler;
+namespace Funnypot\App\Build;
 
 use Funnypot\Core\Template\DirectiveRenderer;
 use RuntimeException;

@@ -23,7 +23,9 @@
     },
     "autoload": {
         "psr-4": {
-            "Funnypot\\": "src/"
+            "Funnypot\\App\\": "src/App/",
+            "Funnypot\\Protocol\\": "src/Protocol/",
+            "Funnypot\\Shell\\": "src/Shell/"
         }
     },
     "autoload-dev": {

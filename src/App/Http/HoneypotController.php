@@ -15,7 +15,7 @@ use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
 use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Core\RequestContext;
 use Geo;
 

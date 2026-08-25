@@ -7,8 +7,8 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
-use Funnypot\Policy\EmulationCatalog;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Emulation\EmulationCatalog;
+use Funnypot\App\Emulation\EmulationPolicy;
 use Geo;
 
 /**

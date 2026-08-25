@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Funnypot\Policy;
+namespace Funnypot\App\Emulation;
 
 /**
  * The catalog of everything funnypot can emulate — attack classes, protocol services, product
  * decoys, and the nuclei-reflection corpus — DERIVED at build time from the templates themselves
- * (see {@see \Funnypot\Compiler\CatalogCompiler}), never hand-maintained. Adding a template and
+ * (see {@see \Funnypot\App\Build\CatalogCompiler}), never hand-maintained. Adding a template and
  * recompiling auto-registers a new entry, so the operator's on/off list can never drift out of
  * sync with what the engine actually ships.
  *
@@ -31,7 +31,10 @@ final class EmulationCatalog
 
     public static function fromPackage(): self
     {
-        return self::fromFile(dirname(__DIR__, 2) . '/resources/compiled/funnypot-catalog.php');
+        // Depth is counted from src/App/Emulation/ to the repo root. Keep it in step if this class
+        // ever moves again — a wrong depth resolves to a path that simply does not exist, so the
+        // catalog silently comes back empty and every emulation reads as enabled.
+        return self::fromFile(dirname(__DIR__, 3) . '/resources/compiled/funnypot-catalog.php');
     }
 
     /** @return array<string,array<string,mixed>> */
