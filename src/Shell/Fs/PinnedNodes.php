@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Shell\Fs;
 
 use Funnypot\App\Render\Fake\FrozenClock;
+use Funnypot\App\Render\Fake\Org;
 use Funnypot\Shell\Host\HostIdentity;
 
 /**
@@ -44,10 +45,15 @@ final class PinnedNodes
         $admin = (string) Draw::pick($seed, 1, self::ADMIN_NAMES);
         $lastchg = 19000 + Draw::intBelow($seed, 30, 800);
 
+        // Staff accounts, drawn from the SAME Org roster the web-facing fakes use, so a name found
+        // in /etc/passwd or /home also appears in the directory, the mail headers and the tickets.
+        // One host is one company; an attacker who cross-references should find agreement.
+        $staff = self::staff($seed, $identitySeed);
+
         $content = [
             '/etc/hostname' => $id->hostname() . "\n",
             '/etc/os-release' => $id->osRelease(),
-            '/etc/passwd' => self::passwd($admin, $fam),
+            '/etc/passwd' => self::passwd($admin, $fam, $staff),
             '/etc/shadow' => self::shadow($seed, $admin, $fam, $lastchg),
         ];
 
@@ -62,7 +68,17 @@ final class PinnedNodes
         $nodes['/etc/localtime'] = new Node('localtime', 'link', 0, 0, 27, 0o777, $now - 31000000, '/usr/share/zoneinfo/Etc/UTC');
         $nodes['/etc/mtab'] = new Node('mtab', 'link', 0, 0, 17, 0o777, $now - 30000000, '/proc/self/mounts');
 
-        return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam];
+        // /home is pinned rather than generated. Left to the generic generator it produced files
+        // like ld.so.cache and resolvconf — /etc content sitting in /home, which is exactly the
+        // incoherence a careful attacker reads as a tell.
+        $uid = 1000;
+        foreach (array_merge([$admin], array_keys($staff)) as $user) {
+            $home = '/home/' . $user;
+            $nodes[$home] = new Node($user, 'dir', $uid, $uid, 4096, 0o750, $now - Draw::intBelow($seed, 400 + $uid, 20000000), null);
+            $uid++;
+        }
+
+        return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam, 'homes' => array_merge([$admin], array_keys($staff))];
     }
 
     private static function cryptB64(string $seed, int $base, int $len): string
@@ -139,9 +155,51 @@ final class PinnedNodes
         ];
     }
 
-    private static function passwd(string $admin, string $fam): string
+    /** @param array<string,string> $staff username => display name */
+    private static function passwd(string $admin, string $fam, array $staff = []): string
     {
-        return implode("\n", array_values(self::users($admin, $fam))) . "\n";
+        $lines = array_values(self::users($admin, $fam));
+
+        $uid = 1001;
+        foreach ($staff as $user => $display) {
+            $shell = $fam === 'rhel' ? '/bin/bash' : '/bin/bash';
+            $lines[] = "{$user}:x:{$uid}:{$uid}:{$display}:/home/{$user}:{$shell}";
+            $uid++;
+        }
+
+        return implode("\n", $lines) . "\n";
+    }
+
+    /**
+     * Staff usernames drawn from the Org roster, in the first-initial + surname shape the admin
+     * pool already uses. Seeded by the host identity, so the same host always has the same people.
+     *
+     * @return array<string,string> username => display name
+     */
+    private static function staff(string $seed, int $identitySeed): array
+    {
+        $org = Org::fromSeed($identitySeed);
+        $count = 3 + Draw::intBelow($seed, 300, 4);
+        $out = [];
+
+        foreach ($org->people($count + 2) as $person) {
+            if (count($out) >= $count) {
+                break;
+            }
+            $first = isset($person['first']) ? (string) $person['first'] : '';
+            $last = isset($person['last']) ? (string) $person['last'] : '';
+            if ($first === '' || $last === '') {
+                continue;
+            }
+            $user = strtolower(substr($first, 0, 1) . preg_replace('/[^A-Za-z]/', '', $last));
+            // A collision with the admin account would put two entries on one uid.
+            if ($user === '' || isset($out[$user])) {
+                continue;
+            }
+            $out[$user] = $first . ' ' . $last;
+        }
+
+        return $out;
     }
 
     private static function shadow(string $seed, string $admin, string $fam, int $lastchg): string

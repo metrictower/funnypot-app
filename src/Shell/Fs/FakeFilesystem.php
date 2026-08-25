@@ -40,6 +40,12 @@ class FakeFilesystem
     private const SIZE_CAP = 65536;
     private const CHILD_CACHE_MAX = 4096;    // FIFO-evicted so a long-lived crawler can't grow it unbounded
 
+    /**
+     * Directories whose children come ONLY from pins, never from the procedural generator.
+     * Keep this list short: it is for paths where the real-world contents are a closed set.
+     */
+    private const PINNED_EXCLUSIVE_DIRS = ['/home'];
+
     /** @var array<string,Node[]> buildChildren cache, keyed by canonical dir path */
     private array $childCache = [];
 
@@ -265,7 +271,13 @@ class FakeFilesystem
         // they put in it. Skipping generation here is what makes `mkdir foo && ls foo` show an empty dir.
         $overlayCreated = $this->overlay !== null && $this->overlay->isCreatedDir($canonDir);
 
-        if (!$overlayCreated) {
+        // Some directories are FULLY described by their pins, and generating siblings into them is
+        // an incoherence rather than realism: a real /home holds user directories and nothing else,
+        // so procedural names like ld.so.cache or resolvconf appearing there read as /etc content in
+        // the wrong place — precisely the kind of detail a careful attacker checks.
+        $pinnedExclusive = in_array($canonDir, self::PINNED_EXCLUSIVE_DIRS, true);
+
+        if (!$overlayCreated && !$pinnedExclusive) {
             foreach (Scaffold::childrenOf($canonDir) ?? [] as $name) {
                 $result[] = $this->makeNode($canonDir, $name, true);
                 $used[$name] = true;

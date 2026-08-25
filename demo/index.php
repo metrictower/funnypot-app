@@ -57,6 +57,30 @@ use Funnypot\Core\Support\Chrome\WordpressSkin;
 use Funnypot\Core\Support\PersonaIdentity;
 use Funnypot\Core\Support\VisualPersona;
 
+// Fault containment. An internet-facing honeypot must NEVER render a PHP error — a leaked trace, path,
+// or class name is an information leak and a decisive tell. display_errors is Off in the prod ini; here
+// we also turn any uncaught exception or fatal into a bare 404 (logged, not shown), so a bug degrades
+// like a missing page instead of exposing internals. Generalises the engine's "only ever upgrade a
+// 404, never escape as a 500" invariant to the whole front controller.
+@ini_set('display_errors', '0');
+$funnypotFault = static function (string $where, string $msg, string $file, int $line): void {
+    error_log("funnypot {$where}: {$msg} @ {$file}:{$line}");
+    if (!headers_sent()) {
+        http_response_code(404);
+        header('Content-Type: text/html; charset=UTF-8');
+        echo '<!doctype html><title>404 Not Found</title>404 Not Found';
+    }
+};
+set_exception_handler(static function (\Throwable $e) use ($funnypotFault): void {
+    $funnypotFault('uncaught', $e->getMessage(), $e->getFile(), $e->getLine());
+});
+register_shutdown_function(static function () use ($funnypotFault): void {
+    $e = error_get_last();
+    if ($e !== null && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+        $funnypotFault('fatal', $e['message'], $e['file'], (int) $e['line']);
+    }
+});
+
 $config = AppConfig::fromEnv(__DIR__);
 @mkdir(dirname($config->logPath), 0777, true);
 
