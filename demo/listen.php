@@ -68,15 +68,20 @@ if (!$policy->isEnabled('service-' . $protocol)) {
     exit(0);
 }
 
+// The fake shell's host identity: the deploy persona seed (so it's stable per deploy) + a private,
+// persisted per-install secret (keys the procedural filesystem against oracle-replay; never committed).
+$fsSecret = \Funnypot\Shell\Fs\HostSecret::resolve(__DIR__ . '/storage');
+$fsSeed = $config->personaSeed;
+
 // SSH is a full crypto server (pure PHP), not a data-driven emulator: it terminates the
 // SSH-2.0 handshake and drops the attacker into the same fake shell telnet uses.
 if ($protocol === 'ssh') {
     $keyPath = getenv('FUNNYPOT_SSH_HOSTKEY') ?: __DIR__ . '/storage/ssh_host_ed25519';
-    (new SshServer(HostKey::load($keyPath), $log))->run($bind);
+    (new SshServer(HostKey::load($keyPath), $log, identitySeed: $fsSeed, secret: $fsSecret))->run($bind);
     exit(0);
 }
 
-$set = ProtocolTemplateSet::fromPackage();
+$set = ProtocolTemplateSet::fromPackage($fsSeed, $fsSecret);
 $emulator = $set->emulator($protocol);
 if ($emulator === null) {
     fwrite(STDERR, "unknown protocol '{$protocol}' (have: " . implode(', ', $set->ids()) . ")\n");

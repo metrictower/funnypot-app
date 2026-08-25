@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol;
 
+use Funnypot\Shell\Fs\Overlay;
+
 /**
  * Per-connection state for the protocol engine: the inbound byte buffer, a request counter,
  * the per-attacker seed (so {{fake.*}} values are stable-but-distinct per source), and a
@@ -21,6 +23,17 @@ final class ProtocolSession
     public string $cwd = '/root';
     public bool $authed = false;
     public int $authTries = 0;
+
+    // Fake-filesystem shell state, carried across commands for this ONE connection (the emulator is
+    // shared across connections, so this per-connection state must live here, not on the FakeShell).
+    public ?Overlay $fsOverlay = null;
+    public int $lastExit = 0;
+    /** @var array<string,string> */
+    public array $shellEnv = [];
+    /** @var string[] */
+    public array $shellHistory = [];
+    /** The peer's IP, set by the listener, so `netstat`/`w` can show the attacker's own connection. */
+    public string $peerIp = '';
 
     // Interactive line editing for the telnet-style shell: the in-progress line, and a flag to
     // swallow the LF of a CR-LF pair so one Enter is one line whether the client sends \r, \r\n or \n.

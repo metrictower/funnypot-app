@@ -102,7 +102,9 @@ final class SshConnection
         private ProtocolSession $session,
         private $logger,
         private string $serverVersion = 'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10',
-        int $authRejectBudget = 0
+        int $authRejectBudget = 0,
+        private ?int $identitySeed = null,
+        private ?string $secret = null
     ) {
         $this->transport = new Transport();
         // Seed the reject count per attacker so a source sees a stable K, not a per-attempt coin
@@ -609,7 +611,8 @@ final class SshConnection
         $display = $cwd === '/root' ? '~' : $cwd;
         $user = $this->session->user !== '' ? $this->session->user : 'root';
         $mark = $user === 'root' ? '#' : '$';
-        $this->shellData("{$user}@web01:{$display}{$mark} ");
+        // Prompt host = the shell's own hostname, so it matches uname / hostname / /etc/hostname.
+        $this->shellData("{$user}@{$this->shell()->host()}:{$display}{$mark} ");
     }
 
     /** Send channel data to the client, chunked to the negotiated max packet and window. */
@@ -678,7 +681,7 @@ final class SshConnection
 
     private function shell(): FakeShell
     {
-        return $this->shell ??= new FakeShell();
+        return $this->shell ??= new FakeShell($this->identitySeed, $this->secret);
     }
 
     private function log(string $event, string $detail): void

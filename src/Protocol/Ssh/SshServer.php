@@ -38,7 +38,9 @@ final class SshServer
         private HostKey $hostKey,
         private $logger,
         private string $serverVersion = 'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10',
-        ?int $rejectBudget = null
+        ?int $rejectBudget = null,
+        private ?int $identitySeed = null,
+        private ?string $secret = null
     ) {
         $this->rejectBudget = $rejectBudget ?? (int) (getenv('FUNNYPOT_SSH_REJECT_BUDGET') ?: 0);
     }
@@ -151,12 +153,15 @@ final class SshServer
         }
         stream_set_blocking($sock, false);
         $session = new ProtocolSession(crc32($ip));
+        $session->peerIp = $ip;
         $conn = new SshConnection(
             $this->hostKey,
             $session,
             fn (string $event, string $detail) => $this->log($ip, $port, $event, $detail),
             $this->serverVersion,
-            $this->rejectBudget
+            $this->rejectBudget,
+            $this->identitySeed,
+            $this->secret
         );
         $conn->onConnect();
         $id = get_resource_id($sock);

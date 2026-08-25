@@ -183,6 +183,7 @@ final class Listener
         }
         stream_set_blocking($sock, false);
         $sess = new ProtocolSession(crc32($ip)); // per-attacker seed for {{fake.*}}
+        $sess->peerIp = $ip;                     // so the shell's netstat/w can show the attacker's conn
         $id = get_resource_id($sock);
         $conns[$id] = ['sock' => $sock, 'sess' => $sess, 'ip' => $ip, 'last' => $now, 'wbuf' => '', 'lastFrame' => 0.0];
         $perIp[$ip] = ($perIp[$ip] ?? 0) + 1;

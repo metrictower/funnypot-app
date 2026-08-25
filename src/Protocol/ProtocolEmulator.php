@@ -29,7 +29,9 @@ final class ProtocolEmulator
     /** @param array<string,mixed> $protocol compiled protocol rules */
     public function __construct(
         private array $protocol,
-        ?DirectiveRenderer $renderer = null
+        ?DirectiveRenderer $renderer = null,
+        private ?int $identitySeed = null,
+        private ?string $secret = null
     ) {
         $this->renderer = $renderer ?? new DirectiveRenderer();
         $this->codec = self::codecFor((string) ($protocol['framing'] ?? 'line'));
@@ -291,6 +293,8 @@ final class ProtocolEmulator
 
     private function prompt(ProtocolSession $s, string $host): string
     {
+        // The prompt host must equal the shell's hostname (uname/hostname/etc), not the protocol config.
+        $host = $this->fakeShell()->host();
         $cwd = $s->cwd === '/root' ? '~' : $s->cwd;
 
         return $s->user . '@' . $host . ':' . $cwd . ($s->user === 'root' ? '# ' : '$ ');
@@ -298,7 +302,7 @@ final class ProtocolEmulator
 
     private function fakeShell(): FakeShell
     {
-        return $this->shell ??= new FakeShell();
+        return $this->shell ??= new FakeShell($this->identitySeed, $this->secret);
     }
 
     /**
