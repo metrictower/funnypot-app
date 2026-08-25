@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests;
 
-use Funnypot\Compiler\CatalogCompiler;
+use Funnypot\App\Build\CatalogCompiler;
 use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
-use Funnypot\Policy\EmulationCatalog;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Emulation\EmulationCatalog;
+use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Core\RequestContext;
 use Funnypot\Core\Store\PhpArrayStore;
 use Funnypot\Core\Template\TemplateAttackEmulator;

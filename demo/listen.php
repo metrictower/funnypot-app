@@ -18,7 +18,7 @@ use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Protocol\Listener;
 use Funnypot\Protocol\ProtocolTemplateSet;
 use Funnypot\Protocol\Ssh\HostKey;

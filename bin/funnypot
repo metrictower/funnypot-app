@@ -15,10 +15,10 @@ declare(strict_types=1);
  * has its own `compile` commands; this CLI only owns the app-side artifacts. Needs `composer install`.
  */
 
-use Funnypot\Compiler\CatalogCompiler;
-use Funnypot\Compiler\ProtocolCompiler;
-use Funnypot\Policy\EmulationCatalog;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Build\CatalogCompiler;
+use Funnypot\App\Build\ProtocolCompiler;
+use Funnypot\App\Emulation\EmulationCatalog;
+use Funnypot\App\Emulation\EmulationPolicy;
 
 $root = dirname(__DIR__);
 $autoload = $root . '/vendor/autoload.php';

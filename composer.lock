@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "f44f0c1629fd43e814ba81799b740256",
+    "content-hash": "cc9bc3df6c8f9d393b9d50041d85b899",
     "packages": [
         {
             "name": "metrictower/funnypot-core",
-            "version": "dev-main",
+            "version": "v0.3.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/metrictower/funnypot-core.git",
-                "reference": "42aec08d2a2e35764efe7b2a03e080fec28cf0d9"
+                "reference": "222d5ab02562dec22e49772e39da7d8646b58fe3"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/42aec08d2a2e35764efe7b2a03e080fec28cf0d9",
-                "reference": "42aec08d2a2e35764efe7b2a03e080fec28cf0d9",
+                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/222d5ab02562dec22e49772e39da7d8646b58fe3",
+                "reference": "222d5ab02562dec22e49772e39da7d8646b58fe3",
                 "shasum": ""
             },
             "require": {
@@ -32,31 +32,21 @@
                 "symfony/yaml": "^5.4"
             },
             "suggest": {
-                "ext-openssl": "Required only for the pure-PHP SSH honeypot server (Protocol\\Ssh): the aes256-ctr transport cipher.",
-                "ext-sodium": "Required only for the pure-PHP SSH honeypot server (Protocol\\Ssh): curve25519 key exchange + ed25519 host key.",
-                "illuminate/support": "Required only to use the Laravel bridge (Laravel\\FunnypotServiceProvider).",
+                "ext-sodium": "Required only to verify signed rule releases (Rules\\SignatureVerifier); the engine itself needs no extensions.",
                 "psr/http-factory": "Required only to use the PSR-15 adapter (response/stream factories passed to Http\\HoneypotMiddleware).",
                 "psr/http-message": "Required only to use the PSR-15 adapter (Http\\PsrRequestMapper / Http\\PsrResponseMapper).",
                 "psr/http-server-middleware": "Required only to use the PSR-15 adapter (Http\\HoneypotMiddleware).",
                 "symfony/yaml": "Required only to compile templates (bin/funnypot). Runtime needs PHP alone."
             },
-            "default-branch": true,
             "type": "library",
-            "extra": {
-                "laravel": {
-                    "providers": [
-                        "Funnypot\\Laravel\\FunnypotServiceProvider"
-                    ]
-                }
-            },
             "autoload": {
                 "psr-4": {
-                    "Funnypot\\": "src/"
+                    "Funnypot\\Core\\": "src/"
                 }
             },
             "autoload-dev": {
                 "psr-4": {
-                    "Funnypot\\Tests\\": "tests/"
+                    "Funnypot\\Core\\Tests\\": "tests/"
                 }
             },
             "license": [
@@ -64,10 +54,10 @@
             ],
             "description": "funnypot core engine: turn a scanner's own nuclei detection template into a matching fake-vulnerable HTTP response. Pure-PHP runtime, inert by default.",
             "support": {
-                "source": "https://github.com/metrictower/funnypot-core/tree/main",
+                "source": "https://github.com/metrictower/funnypot-core/tree/v0.3.0",
                 "issues": "https://github.com/metrictower/funnypot-core/issues"
             },
-            "time": "2026-08-24T05:59:57+00:00"
+            "time": "2026-08-25T10:53:11+00:00"
         }
     ],
     "packages-dev": [
@@ -2083,9 +2073,7 @@
     ],
     "aliases": [],
     "minimum-stability": "dev",
-    "stability-flags": {
-        "metrictower/funnypot-core": 20
-    },
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {

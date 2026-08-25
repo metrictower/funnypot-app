@@ -12,8 +12,8 @@ declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
 
-use Funnypot\Policy\EmulationCatalog;
-use Funnypot\Policy\EmulationPolicy;
+use Funnypot\App\Emulation\EmulationCatalog;
+use Funnypot\App\Emulation\EmulationPolicy;
 
 $out = getenv('FUNNYPOT_VULNS') ?: __DIR__ . '/storage/funnypot-vulns.json';
 
