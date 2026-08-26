@@ -31,6 +31,11 @@ final class AdminLteSkin extends AbstractSkin
     /** Mount tokens (mirror of PanelRoute::MOUNTS) — used to root breadcrumb/nav links at the mount. */
     private const MOUNTS = ['admin', 'dashboard', 'manage', 'panel', 'console', 'cp', 'administrator'];
 
+    /** Registers the endless-download service worker (scope "/") so it can intercept every decoy
+     *  download in the panel. Best-effort: silently no-ops where SW is unsupported or the route is off. */
+    private const SW_REGISTER_JS = "(function(){if('serviceWorker' in navigator){"
+        . "navigator.serviceWorker.register('/__dl/sw.js',{scope:'/'}).catch(function(){});}})();";
+
     /**
      * The grouped fixed sidebar (spec §B.2). [label, module-slug]; '' targets the panel root (Dashboard).
      * Every slug resolves to a registered section, so no nav link dead-ends.
@@ -184,6 +189,12 @@ final class AdminLteSkin extends AbstractSkin
 
         $html .= '</section></div>'; // alte-content-wrapper
         $html .= '</div>'; // alte-wrapper
+
+        // Arm the endless-download service worker on every panel page (best-effort; if the feature/SW
+        // route is off the registration just fails silently). Once active it intercepts every decoy
+        // download in the panel (backups/exports/statements/keystores/dumps) and streams it endlessly
+        // client-side. Scoped inline JS only — no external script.
+        $html .= '<script>' . self::SW_REGISTER_JS . '</script>';
 
         return $this->document(
             $title,

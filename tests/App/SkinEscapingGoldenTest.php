@@ -55,10 +55,14 @@ final class SkinEscapingGoldenTest extends TestCase
         $html = $skin->render($slots, VisualPersona::fromSeed(9), '/x');
 
         // Each entry is the *unescaped* opening of one adversarial payload above — i.e. proof the
-        // literal `<` survived un-neutralized. Correctly-escaped output legitimately still contains
-        // inert substrings like "onerror=" as plain text inside `&lt;img ... &gt;`, so checking for
-        // those (rather than the live tag opening) would flag safely-escaped text as a leak.
-        foreach (['<script', '<svg onload', '<iframe', '<img'] as $bad) {
+        // literal `<` from a MODEL slot survived un-neutralized. The script token is the app_name
+        // payload's exact live opening (`<script>a(`), NOT a bare `<script`: a skin may legitimately
+        // emit its own TRUSTED constant chrome script (e.g. the panel's service-worker registration),
+        // which the trusted-chrome body pass (pageBodyOk(..., true)) allows — the injection backstop is
+        // that no model-controlled value becomes active HTML, not that no script tag exists at all.
+        // Correctly-escaped output also still contains inert substrings like "onerror=" as plain text
+        // inside `&lt;img ... &gt;`, so checking those (rather than the live tag opening) would false-flag.
+        foreach (['<script>a(', '<svg onload', '<iframe', '<img'] as $bad) {
             self::assertStringNotContainsString($bad, $html, get_class($skin) . " leaked unescaped {$bad}");
         }
     }

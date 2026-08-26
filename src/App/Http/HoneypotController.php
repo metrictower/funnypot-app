@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Http;
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Download\EndlessArchive;
 use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
@@ -301,17 +302,11 @@ final class HoneypotController
         }
         [$decoy, $ctype] = $mapped;
 
-        $full = $this->decoyDir . '/' . $decoy;
-        if (!is_file($full)) {
-            return false;
-        }
-        $bytes = (string) file_get_contents($full);
-
         $name = basename($r->path);
         if ($name === '' || strpos($name, '.') === false) {
             $name = $decoy;
         }
-        $name = preg_replace('/[^\w.\-]/', '_', $name);
+        $name = (string) preg_replace('/[^\w.\-]/', '_', $name);
 
         $this->store->append([
             'ts' => gmdate('c'),
@@ -323,6 +318,37 @@ final class HoneypotController
             'geo' => $this->geo->lookup($clientIp),
             'known_attacker' => $this->known($clientIp),
         ]);
+
+        // Bulk lures (.zip/.tar.gz/.gz/.sql/.csv/.bak) become an endless client-side stream in a real
+        // browser (service worker); a non-JS client (curl/scanner) reaches here and gets a large,
+        // format-matched, HARD-CAPPED procedural stream so the link is never dead — bounded because an
+        // unbounded server stream would pin a worker. Streamed (no Content-Length), no server-side
+        // pacing. A mid-stream fault can't 500 (headers already sent).
+        if (EndlessArchive::handles($r->path)) {
+            $cap = max(1, $this->config->dlFallbackCapMb) * 1024 * 1024;
+            http_response_code(200);
+            header('Content-Type: ' . $ctype);
+            header('Content-Disposition: attachment; filename="' . $name . '"');
+            header('Cache-Control: no-store');
+            while (ob_get_level() > 0) {
+                ob_end_flush();
+            }
+            $archive = new EndlessArchive();
+            foreach ($archive->chunks($r->path, $cap) as $chunk) {
+                echo $chunk;
+                flush();
+            }
+
+            return true;
+        }
+
+        // Small "inspect-me" credential/real-magic decoys (wallet.json keystore, .pem/.cer certs, real
+        // .tar/.tar.bz2) — never endless (that would destroy the bait). Serve the static asset as-is.
+        $full = $this->decoyDir . '/' . $decoy;
+        if (!is_file($full)) {
+            return false;
+        }
+        $bytes = (string) file_get_contents($full);
 
         http_response_code(200);
         header('Content-Type: ' . $ctype);
