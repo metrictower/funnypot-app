@@ -53,6 +53,23 @@ final class AppConfigTest extends TestCase
         self::assertSame('/__fp/', $c->dashboardPath);
     }
 
+    public function test_style_and_http_style_fallback(): void
+    {
+        putenv('FUNNYPOT_STYLE=malformed');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertSame('malformed', $c->style);      // protocol tier sees the real value
+        self::assertTrue($c->isMalformed());
+        self::assertSame('realistic', $c->httpStyle()); // HTTP/core tier falls back (core supports realistic|taunt)
+
+        putenv('FUNNYPOT_STYLE=taunt');
+        self::assertSame('taunt', AppConfig::fromEnv('/app/demo')->httpStyle());
+
+        putenv('FUNNYPOT_STYLE=nonsense');
+        $c2 = AppConfig::fromEnv('/app/demo');
+        self::assertSame('realistic', $c2->httpStyle()); // any invalid style -> realistic for HTTP
+        self::assertFalse($c2->isMalformed());
+    }
+
     public function test_endless_download_defaults(): void
     {
         $c = AppConfig::fromEnv('/app/demo');

@@ -162,7 +162,7 @@ final class HoneypotController
             mode: 'respond',
             gate: static fn (RequestContext $r): bool => true,          // standalone honeypot: everything hostile-looking gets a fake
             severityCeiling: $this->config->severityCeiling,
-            responseStyle: $this->config->style,
+            responseStyle: $this->config->httpStyle(), // core supports realistic|taunt; 'malformed' (protocol-only) -> realistic here
             personaSeed: static fn (RequestContext $r) => $clientIp ?: 'anon',
             // Per-deploy identity material shared with the app tier: once the engine wires deploySeed()
             // into its renderers, the template tier's {{persona.*}} resolves the SAME company/domain/admin

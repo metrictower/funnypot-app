@@ -110,6 +110,17 @@ final class AppConfig
         return $this->style === 'malformed';
     }
 
+    /**
+     * The style handed to the HTTP/core engine. Core supports only realistic + taunt; any other value
+     * (the protocol-only 'malformed' style, or a typo) falls back to realistic so the HTTP tier never
+     * degrades to a bare/unknown style. 'malformed' is a protocol-layer style read directly by
+     * MalformedStream; HTTP malformed is a separate ticket (FP-0110), so HTTP stays realistic here.
+     */
+    public function httpStyle(): string
+    {
+        return in_array($this->style, ['realistic', 'taunt'], true) ? $this->style : 'realistic';
+    }
+
     public static function fromEnv(string $baseDir): self
     {
         $store = rtrim($baseDir, '/') . '/storage';
