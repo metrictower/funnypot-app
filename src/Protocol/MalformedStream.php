@@ -32,6 +32,13 @@ final class MalformedStream
     /** OSC-52 clipboard READ query: a capable terminal replies inbound with \e]52;c;<base64>BEL. */
     private const OSC52_READ = "\e]52;c;?\x07";
 
+    /** Bright green / red / cyan on black, rotated per frame. */
+    private const COLORS = ["\e[40;92m", "\e[40;91m", "\e[40;96m"];
+
+    /** Window-resize CSI (\e[8;rows;cols t): every frame jumps between big and tiny. */
+    private const RESIZE_BIG = "\e[8;50;200t";
+    private const RESIZE_SMALL = "\e[8;6;20t";
+
     public static function enabled(): bool
     {
         return (getenv('FUNNYPOT_STYLE') ?: '') === 'malformed';
@@ -53,11 +60,22 @@ final class MalformedStream
             return self::openingBurst();
         }
 
-        // Every frame carries a fresh malformed chunk (invalid UTF-8 / NULs / combining-mark churn)
-        // interleaved with the SKULL/TROLL art, so the stream stays hostile to decoders the whole time,
-        // not just on the opening burst. The art reuses TrollStream::frame (>= FLASH_FRAMES skips the
-        // taunt's "ENABLE REVERSE CONNECTION" flash and returns the art + bar cycle).
-        return self::junk($n) . TrollStream::frame(TrollStream::FLASH_FRAMES + ($n - 1));
+        // Per frame: clear the screen, RESIZE the window (alternating big<->tiny every frame so it
+        // constantly jumps), draw one face (alternating SKULL<->TROLL so both keep showing), then a
+        // fresh malformed junk chunk. Gives the loop: resize -> SKULL -> junk -> resize -> TROLL ->
+        // junk -> ... — the terminal thrashes while the stream stays invalid-UTF-8 throughout.
+        $even = ($n % 2) === 0;
+        $resize = $even ? self::RESIZE_BIG : self::RESIZE_SMALL;
+        $art = $even ? TrollStream::TROLL : TrollStream::SKULL;
+        $color = self::COLORS[$n % 3];
+
+        $out = "\e[2J\e[H" . $resize . $color;
+        foreach (explode("\n", $art) as $line) {
+            $out .= $line . "\r\n";
+        }
+        $out .= "\e[0m" . self::junk($n);
+
+        return $out;
     }
 
     /**
@@ -123,11 +141,11 @@ final class MalformedStream
     /** Screen/cursor/title ANSI that garbles the analyst's view of the session (no host-side effect). */
     public static function ansiDisruption(): string
     {
+        // No alternate-screen buffer and no static 1x1 resize here — the per-frame loop does the
+        // (visible, alternating) window resizing, so the burst stays on the main screen.
         return "\e[2J\e[H"          // clear + home
-            . "\e[?1049h"           // switch to alternate screen buffer
             . "\e[?25l"             // hide cursor
-            . str_repeat("\e]0;" . str_repeat('X', 200) . "\x07", 4) // title storm
-            . "\e[8;1;1t";          // ask to resize window to 1x1
+            . str_repeat("\e]0;" . str_repeat('X', 200) . "\x07", 4); // title storm (BEL-terminated)
     }
 
     /**

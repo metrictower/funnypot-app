@@ -33,7 +33,7 @@ final class TrollStream
     /** @var string[]|null memoised progress-bar labels */
     private static ?array $messages = null;
 
-    private const SKULL = <<<'ART'
+    public const SKULL = <<<'ART'
                           ud$$$**$$$$$$$bc.
                        u@**"        4$$$$$$$Nu
                      J                ""#$$$$$$r
@@ -77,7 +77,7 @@ $$$$$$$b   *u    ^$L            $$  $$$$$$$$$$$$u@       $$  d$$$$$$
                                                      ^$$$*
 ART;
 
-    private const TROLL = <<<'ART'
+    public const TROLL = <<<'ART'
 ⠀⠀⠀⠀⠀⣀⣠⠤⠶⠶⣖⡛⠛⠿⠿⠯⠭⠍⠉⣉⠛⠚⠛⠲⣄⠀⠀⠀⠀⠀
 ⠀⠀⢀⡴⠋⠁⠀⡉⠁⢐⣒⠒⠈⠁⠀⠀⠀⠈⠁⢂⢅⡂⠀⠀⠘⣧⠀⠀⠀⠀
 ⠀⠀⣼⠀⠀⠀⠁⠀⠀⠀⠂⠀⠀⠀⠀⢀⣀⣤⣤⣄⡈⠈⠀⠀⠀⠘⣇⠀⠀⠀

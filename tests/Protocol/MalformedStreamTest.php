@@ -47,18 +47,29 @@ final class MalformedStreamTest extends TestCase
         self::assertStringNotContainsString('\\a', $b);
     }
 
-    public function test_frame0_is_burst_later_frames_carry_junk_plus_troll_art(): void
+    public function test_frame0_is_burst_later_frames_resize_alternate_art_and_carry_junk(): void
     {
         self::assertSame(MalformedStream::openingBurst(), MalformedStream::frame(0));
-        $f1 = MalformedStream::frame(1);
+
+        $f1 = MalformedStream::frame(1); // odd
+        $f2 = MalformedStream::frame(2); // even
         self::assertNotSame('', $f1);
-        // Reuses the SKULL/TROLL animation, NOT the taunt's "ENABLE REVERSE CONNECTION" login flash.
         self::assertStringNotContainsString('ENABLE REVERSE', $f1);
-        // Every frame now interleaves a malformed chunk, so each ~1s frame is itself invalid UTF-8.
+
+        // Each ~1s frame is itself invalid UTF-8 + carries NULs (junk interleaved with the art).
         self::assertFalse(mb_check_encoding($f1, 'UTF-8'), 'each frame carries malformed bytes');
         self::assertStringContainsString("\x00", $f1, 'each frame carries embedded NULs');
-        // Varied per frame (not byte-identical junk each tick).
-        self::assertNotSame(MalformedStream::junk(1), MalformedStream::junk(2));
+        self::assertNotSame(MalformedStream::junk(1), MalformedStream::junk(2), 'junk varies per frame');
+
+        // Every frame resizes the window, alternating tiny <-> big so it constantly jumps.
+        self::assertStringContainsString("\e[8;6;20t", $f1, 'odd frame resizes small');
+        self::assertStringContainsString("\e[8;50;200t", $f2, 'even frame resizes big');
+
+        // The two faces alternate every frame so both SKULL and TROLL keep showing.
+        self::assertNotSame($f1, $f2);
+        // SKULL is ASCII art ($$$...); TROLL is braille. Odd frame = SKULL, even = TROLL.
+        self::assertStringContainsString('$$$', $f1, 'odd frame shows SKULL');
+        self::assertStringNotContainsString('$$$', $f2, 'even frame shows TROLL (braille), not SKULL');
     }
 
     public function test_stream_is_bounded(): void
