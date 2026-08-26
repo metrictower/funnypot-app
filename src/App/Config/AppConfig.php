@@ -103,6 +103,13 @@ final class AppConfig
     ) {
     }
 
+    /** The active-sabotage "malformed" style (FUNNYPOT_STYLE=malformed) — off by default, explicit
+     *  opt-in. The interactive socket honeypots answer with a bounded malformed trickle, not a shell. */
+    public function isMalformed(): bool
+    {
+        return $this->style === 'malformed';
+    }
+
     public static function fromEnv(string $baseDir): self
     {
         $store = rtrim($baseDir, '/') . '/storage';

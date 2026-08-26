@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Ssh;
 
+use Funnypot\Protocol\MalformedStream;
 use Funnypot\Protocol\ProtocolSession;
 
 /**
@@ -122,7 +123,9 @@ final class SshServer
             if ($trolling) {
                 $mt = microtime(true);
                 foreach ($conns as $id => $c) {
-                    if ($c['conn']->isTrolling() && $mt - $c['lastFrame'] >= self::FRAME_INTERVAL) {
+                    // Malformed style trickles once per second (bounded ~120s); taunt animates fast.
+                    $fi = MalformedStream::enabled() ? 1.0 : self::FRAME_INTERVAL;
+                    if ($c['conn']->isTrolling() && $mt - $c['lastFrame'] >= $fi) {
                         $c['conn']->pushTrollFrame();
                         $conns[$id]['wbuf'] .= $c['conn']->takeOut();
                         $conns[$id]['lastFrame'] = $mt;

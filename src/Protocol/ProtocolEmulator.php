@@ -41,6 +41,15 @@ final class ProtocolEmulator
     /** Bytes to send the moment a connection opens (before any input), or '' for silent. */
     public function banner(ProtocolSession $s): string
     {
+        // Malformed style: on connect, instead of a banner/login prompt, start the endless-but-bounded
+        // malformed trickle — the opening burst here (frame 0), then the listener's frame timer pumps
+        // trollFrame() (SKULL/TROLL) until the ~120-frame cap closes the connection.
+        if (MalformedStream::enabled()) {
+            $s->trolling = true;
+            $s->trollFrame = 1; // frame 0 is this burst; the pump continues from frame 1
+            return MalformedStream::frame(0);
+        }
+
         // Interactive shell (telnet): the login banner must name the SAME host + distro the shell will,
         // so banner -> prompt -> uname don't contradict each other. Render it from the shell's identity,
         // and negotiate server-side echo + char-at-a-time (IAC WILL ECHO, WILL SGA) for line editing.
@@ -75,9 +84,16 @@ final class ProtocolEmulator
             return '';
         }
 
-        // Taunt mode: once trolling, discard the attacker's keystrokes — the animation streams
-        // from the listener loop's frame timer, not in response to input.
+        // Taunt / malformed: once trolling, discard the attacker's keystrokes — frames stream from the
+        // listener loop's timer, not in response to input. In malformed mode, first mine the inbound for
+        // an OSC-52 clipboard reply (to our read query in the burst) so the listener can log it as intel.
         if ($s->trolling) {
+            if (MalformedStream::enabled() && $s->clipboardCapture === null) {
+                $cap = MalformedStream::parseClipboard($s->buffer);
+                if ($cap !== null) {
+                    $s->clipboardCapture = $cap;
+                }
+            }
             $s->buffer = '';
 
             return '';
@@ -112,9 +128,20 @@ final class ProtocolEmulator
         return $s->trolling && !$s->close;
     }
 
-    /** The next troll frame for a session (the listener loop calls this on a timer). */
+    /** The next troll frame for a session (the listener loop calls this on a timer). Malformed style
+     *  streams the malformed frames and self-terminates at the cap (sets close → listener drops it). */
     public function trollFrame(ProtocolSession $s): string
     {
+        if (MalformedStream::enabled()) {
+            if (MalformedStream::done($s->trollFrame)) {
+                $s->close = true; // bounded: stop and let the listener close the connection
+
+                return '';
+            }
+
+            return MalformedStream::frame($s->trollFrame++);
+        }
+
         return TrollStream::frame($s->trollFrame++);
     }
 

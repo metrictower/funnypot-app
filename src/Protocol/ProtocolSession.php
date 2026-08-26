@@ -44,6 +44,9 @@ final class ProtocolSession
     public bool $trolling = false;
     public int $trollFrame = 0;
 
+    /** Malformed style: an OSC-52 clipboard value read back from the client, awaiting an intel log. */
+    public ?string $clipboardCapture = null;
+
     public function __construct(public int $seed = 0)
     {
     }

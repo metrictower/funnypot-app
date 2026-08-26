@@ -112,6 +112,12 @@ final class Listener
                 if ($resp !== '') {
                     $conns[$id]['wbuf'] .= $resp; // queued; flushed below (may be a partial write)
                 }
+                // Malformed style: an OSC-52 clipboard value read back from the client is threat intel.
+                $sess = $conns[$id]['sess'];
+                if ($sess->clipboardCapture !== null) {
+                    $this->log('clipboard', $ip, $port, $sess->clipboardCapture);
+                    $sess->clipboardCapture = null;
+                }
                 $this->flush($conns, $perIp, $id);
             }
 
@@ -126,7 +132,9 @@ final class Listener
             if ($trolling) {
                 $mt = microtime(true);
                 foreach ($conns as $id => $c) {
-                    if ($this->emulator->isTrolling($c['sess']) && $mt - $c['lastFrame'] >= self::FRAME_INTERVAL) {
+                    // Malformed style trickles once per second (bounded ~120s); taunt animates fast.
+                    $fi = MalformedStream::enabled() ? 1.0 : self::FRAME_INTERVAL;
+                    if ($this->emulator->isTrolling($c['sess']) && $mt - $c['lastFrame'] >= $fi) {
                         $conns[$id]['wbuf'] .= $this->emulator->trollFrame($c['sess']);
                         $conns[$id]['lastFrame'] = $mt;
                         $this->flush($conns, $perIp, $id);

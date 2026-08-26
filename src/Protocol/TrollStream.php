@@ -18,7 +18,9 @@ final class TrollStream
     private const STEPS = 24;
 
     /** Opening full-red "alert" screen, held this many frames (~2s at the loop's frame interval). */
-    private const FLASH_FRAMES = 16;
+    // Public so the malformed style can reuse the SKULL/TROLL animation (frames >= FLASH_FRAMES) after
+    // its own opening burst, instead of duplicating the art.
+    public const FLASH_FRAMES = 16;
 
     private const BAR_WIDTH = 32;
 

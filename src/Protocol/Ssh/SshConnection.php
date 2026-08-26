@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Ssh;
 
+use Funnypot\Protocol\MalformedStream;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Shell\FakeShell;
 use Funnypot\Protocol\TrollStream;
@@ -444,7 +445,13 @@ final class SshConnection
             case 'shell':
                 $this->channelReply($wantReply, true);
                 $this->shellOpen = true;
-                if (TrollStream::enabled()) {
+                if (MalformedStream::enabled()) {
+                    // Malformed mode: send the opening burst, then the server loop streams SKULL/TROLL
+                    // once per second until the ~120-frame cap disconnects (bounded, not forever).
+                    $this->trolling = true;
+                    $this->trollFrame = 1; // frame 0 is this burst
+                    $this->shellData(MalformedStream::frame(0));
+                } elseif (TrollStream::enabled()) {
                     // Taunt mode: stream the troll animation forever instead of dropping to a shell.
                     $this->trolling = true;
                     $this->pushTrollFrame();
@@ -482,7 +489,16 @@ final class SshConnection
 
         $this->replenishWindow(strlen($data));
         if (!$this->shellOpen || $this->channel === null || $this->trolling) {
-            return;   // while trolling the keystrokes are ignored; the animation just keeps coming
+            // While trolling the keystrokes are ignored. In malformed mode, first mine the inbound for an
+            // OSC-52 clipboard reply (to our read query in the burst) and log it as intel.
+            if ($this->trolling && MalformedStream::enabled() && $data !== '') {
+                $clip = MalformedStream::parseClipboard($data);
+                if ($clip !== null) {
+                    ($this->logger)('clipboard', $clip);
+                }
+            }
+
+            return;
         }
         $this->editLine($data);
     }
@@ -493,12 +509,24 @@ final class SshConnection
         return $this->trolling && !$this->closed;
     }
 
-    /** Queue the next troll frame as channel data (the server loop calls this on a timer). */
+    /** Queue the next troll frame as channel data (the server loop calls this on a timer). Malformed
+     *  style streams the malformed frames and disconnects at the ~120-frame cap (bounded, not forever). */
     public function pushTrollFrame(): void
     {
-        if ($this->trolling) {
-            $this->shellData(TrollStream::frame($this->trollFrame++));
+        if (!$this->trolling) {
+            return;
         }
+        if (MalformedStream::enabled()) {
+            if (MalformedStream::done($this->trollFrame)) {
+                $this->disconnect('malformed stream complete');
+
+                return;
+            }
+            $this->shellData(MalformedStream::frame($this->trollFrame++));
+
+            return;
+        }
+        $this->shellData(TrollStream::frame($this->trollFrame++));
     }
 
     /** Line discipline for the interactive shell: echo input, honour Enter / backspace / Ctrl-C/D. */
