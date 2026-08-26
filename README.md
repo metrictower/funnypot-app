@@ -221,7 +221,7 @@ funnypot is built so it can only ever mislead an attacker, never help one.
 - **Emulate output, never run input.** The fake shell is a lookup table: no `exec`, `proc_open` or
   `eval`, no real filesystem, no outbound socket. `wget` and `curl` return canned text and the URL is
   logged, never fetched.
-- **Reflect, never harm.** No decompression bombs (decoy archives are a few KB), no retaliation, no
+- **Reflect, never harm.** No decompression bombs (decoy archives are small + bounded, a few KB to ~1 MB), no retaliation, no
   outbound requests. Every response is size-capped.
 - **Never reflects attacker input**, never deserializes a request body. Every synthesized header is
   CRLF and NUL safe.
