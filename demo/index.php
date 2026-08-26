@@ -220,8 +220,8 @@ $console = new ConsoleRouter(
 );
 
 // Endless throttled backup-download bait — on by default; the feature is gated here (null = off) so
-// disabling it removes the /__dl/* + /backup.zip routes entirely. Throttle knobs come from config and
-// are handed to the client service worker via the manifest.
+// disabling it removes the /__dl/* routes entirely. Throttle knobs come from config and are handed to
+// the client service worker via the manifest.
 $download = null;
 if ($config->endlessDownload) {
     $download = new DownloadRouter(

@@ -26,6 +26,20 @@ final class StreamEmitterTest extends TestCase
         self::assertSame(['Content-Type' => 'application/x-ndjson'], $emitter->headers());
     }
 
+    public function test_real_response_path_keeps_no_copy_of_the_body(): void
+    {
+        // Memory guard: without a sink the bytes go straight out. A response can be tens of MB (the
+        // download bait), so retaining it would hold the whole body in the worker for the transfer.
+        $emitter = new StreamEmitter(null, 0);
+
+        ob_start();
+        $emitter->chunk('xy');
+        $printed = (string) ob_get_clean();
+
+        self::assertSame('xy', $printed);
+        self::assertSame('', $emitter->captured());
+    }
+
     public function test_sink_path_never_calls_real_header_functions(): void
     {
         // Regression guard: begin() with a sink injected must not call header()/http_response_code(),

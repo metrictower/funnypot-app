@@ -87,6 +87,8 @@ final class ConsoleRouterTest extends TestCase
         $this->assertCount(1, $shell);
         $this->assertSame('uname -a', $shell[0]['body']);
         $this->assertTrue($shell[0]['served']);
+        // ts is stored as TEXT and retention compares it lexicographically, so it must be ISO-8601.
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T/', (string) $shell[0]['ts']);
     }
 
     public function testBlankCommandIsNotLogged(): void

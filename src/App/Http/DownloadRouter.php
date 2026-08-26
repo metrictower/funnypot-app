@@ -15,12 +15,18 @@ use Funnypot\Shell\Fs\Draw;
  * Endless throttled backup-download bait (the fleet console's "Download latest backup"). A Router-level
  * GET seam, gate-exempt like the console, mounted only when the feature is on.
  *
- * Three paths:
- *   GET /__dl/sw.js      — the service worker (served as application/javascript, Service-Worker-Allowed: /)
- *   GET /__dl/manifest   — JSON {seed, files:[{path,size}], throttle:{...}}; also the bait-taken intel ping
- *   GET /backup.zip      — NON-JS fallback only (a browser's active SW intercepts this before it reaches
- *                          us); a server-side throttled, HARD-CAPPED finite zip so curl/scanners still get
- *                          a plausible large download instead of a dead link.
+ * Three paths, all under /__dl/:
+ *   GET /__dl/sw.js        — the service worker (served as application/javascript, Service-Worker-Allowed: /)
+ *   GET /__dl/manifest     — JSON {seed, files:[{path,size}], throttle:{...}}; also the bait-taken intel ping
+ *   GET /__dl/backup.zip   — NON-JS fallback only (a browser's active SW intercepts this before it reaches
+ *                            us); a HARD-CAPPED finite zip so curl/scanners still get a plausible large
+ *                            download instead of a dead link. The Content-Disposition filename is still
+ *                            backup.zip, so what lands on the attacker's disk reads the same.
+ *
+ * The zip lives under /__dl/ and NOT at the bare /backup.zip because that literal path is already honeypot
+ * surface: the honeypot serves the nested decoy archive there and, more importantly, runs the detection
+ * engine, the payload classifier and the AbuseIPDB / Threat Intel enqueue. A router seam ahead of the
+ * catch-all would swallow every scanner hit on it and silence the app's only reporting path.
  *
  * The browser path costs us one tiny manifest fetch — the SW fabricates every byte client-side and streams
  * an ENDLESS store-method zip (never a valid extractable archive; the central directory is never written),
@@ -35,7 +41,7 @@ final class DownloadRouter
 {
     public const SW_PATH = '/__dl/sw.js';
     public const MANIFEST_PATH = '/__dl/manifest';
-    public const ZIP_PATH = '/backup.zip';
+    public const ZIP_PATH = '/__dl/backup.zip';
 
     private const MANIFEST_FILES = 40;   // entries advertised in the manifest
     private const NAME_MAX = 200;        // host param cap
@@ -87,7 +93,7 @@ final class DownloadRouter
 
             return;
         }
-        // /backup.zip — non-JS fallback: a browser with the SW active never reaches here.
+        // /__dl/backup.zip — non-JS fallback: a browser with the SW active never reaches here.
         $host = $this->hostFromQuery($ctx->query);
         $this->logBait($clientIp, $ctx->method, $host);
         $this->streamFallback($host);
@@ -251,6 +257,9 @@ final class DownloadRouter
         try {
             foreach ($this->fallbackChunks($host, $cap) as $chunk) {
                 $emitter->chunk($chunk);
+                if (connection_aborted() !== 0) {
+                    return;   // client hung up — stop fabricating bytes
+                }
             }
         } catch (\Throwable $e) {
             // Headers already sent — a mid-stream fault just ends the download early, never a 500.
@@ -268,7 +277,7 @@ final class DownloadRouter
     private function logBait(string $ip, string $method, string $host): void
     {
         $this->hits->append([
-            'ts' => time(),
+            'ts' => gmdate('c'),
             'ip' => $ip,
             'method' => $method,
             'path' => self::ZIP_PATH,

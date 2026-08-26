@@ -587,9 +587,9 @@ Each becomes its own detailed plan (spec §Phasing) once Phase 1's real signatur
     gated at the Router mount layer, not in the deep-nested panel section) — see FP-0051 notes.
   - **Architecture:**
     - `AppConfig`: Central configuration knobs (`FUNNYPOT_ENDLESS_DOWNLOAD` default ON, chunk size 100–200 KB, interval 100ms, vary 50%, ease period 20s, fallback cap 50MB) with bounds clamping.
-    - `FleetSection`: "Download latest backup" button + scoped JS registering Service Worker `/__dl/sw.js`. On click pings `/__dl/manifest` (logs `event=download`) and triggers download of `/backup.zip`.
-    - `DownloadRouter`: Gate-exempt POST/GET sibling handling `/__dl/sw.js` (application/javascript with `Service-Worker-Allowed: /`), `/__dl/manifest` (JSON seed/files/throttle info), and `/backup.zip` (non-JS server-side capped fallback).
-    - Service Worker `src/App/Download/sw.js`: Intercepts `/backup.zip` and serves a `ReadableStream` emitting endless ZIP local file headers with procedural store-method bytes throttled by a sine-eased breathing formula ($\sim 1\text{--}2\text{ MB/s}$).
+    - `FleetSection`: "Download latest backup" button + scoped JS registering Service Worker `/__dl/sw.js`. On click pings `/__dl/manifest` (logs `event=download`) and triggers download of `/__dl/backup.zip`.
+    - `DownloadRouter`: Gate-exempt POST/GET sibling handling `/__dl/sw.js` (application/javascript with `Service-Worker-Allowed: /`), `/__dl/manifest` (JSON seed/files/throttle info), and `/__dl/backup.zip` (non-JS server-side capped fallback; the bare `/backup.zip` stays honeypot surface so its scanners are still reported).
+    - Service Worker `src/App/Download/sw.js`: Intercepts `/__dl/backup.zip` and serves a `ReadableStream` emitting endless ZIP local file headers with procedural store-method bytes throttled by a sine-eased breathing formula ($\sim 1\text{--}2\text{ MB/s}$).
     - Intel: Logs hit `event=download` on manifest fetch or fallback download.
     - Safety: Cancelable, non-bomb (CFAA safe), never 500s.
 

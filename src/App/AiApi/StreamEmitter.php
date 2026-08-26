@@ -16,7 +16,7 @@ use Closure;
  *
  * A $sink closure is injectable for tests: when present, begin()/chunk() write through the closure
  * instead of calling the real header()/http_response_code()/echo functions, so a test process never
- * tries to emit real HTTP headers.
+ * tries to emit real HTTP headers, and only then is the body also kept in memory for captured().
  */
 final class StreamEmitter
 {
@@ -60,19 +60,21 @@ final class StreamEmitter
     public function chunk(string $bytes): void
     {
         if ($this->sink !== null) {
+            // Only the test sink keeps a copy. On the real path the response can be tens of MB (the
+            // download bait), and retaining it would hold the whole body in the worker's memory.
             ($this->sink)($bytes);
+            $this->captured .= $bytes;
         } else {
             print $bytes;
             flush();
         }
-        $this->captured .= $bytes;
 
         if ($this->delayMs !== 0) {
             usleep($this->delayMs * 1000);
         }
     }
 
-    /** Test-only: every byte written so far, in order. */
+    /** Test-only: every byte written so far, in order. Empty unless a sink was injected. */
     public function captured(): string
     {
         return $this->captured;

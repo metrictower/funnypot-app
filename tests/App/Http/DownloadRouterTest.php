@@ -49,10 +49,22 @@ final class DownloadRouterTest extends TestCase
         $r = $this->router();
         $this->assertTrue($r->matches('/__dl/sw.js'));
         $this->assertTrue($r->matches('/__dl/manifest'));
-        $this->assertTrue($r->matches('/backup.zip'));
+        $this->assertTrue($r->matches('/__dl/backup.zip'));
         $this->assertFalse($r->matches('/__dl'));
-        $this->assertFalse($r->matches('/backup.zip.bak'));
+        $this->assertFalse($r->matches('/__dl/backup.zip.bak'));
         $this->assertFalse($r->matches('/'));
+    }
+
+    /**
+     * The bait must never claim the bare /backup.zip. That path is honeypot surface: it serves the
+     * nested decoy archive and, decisively, is where the detection engine + classifier queue the
+     * AbuseIPDB / Threat Intel report. A seam ahead of the catch-all would silence those reports.
+     */
+    public function testNeverClaimsTheHoneypotOwnedBackupZip(): void
+    {
+        $r = $this->router();
+        $this->assertFalse($r->matches('/backup.zip'));
+        $this->assertStringStartsWith('/__dl/', DownloadRouter::ZIP_PATH);
     }
 
     public function testManifestIsSeededAndEchoesThrottle(): void
@@ -91,6 +103,8 @@ final class DownloadRouterTest extends TestCase
         $dl = array_values(array_filter($this->hits->appended, static fn (array $e): bool => ($e['event'] ?? '') === 'download'));
         $this->assertCount(1, $dl);
         $this->assertStringContainsString('host=', (string) $dl[0]['body']);
+        // ts is stored as TEXT and retention compares it lexicographically, so it must be ISO-8601.
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T/', (string) $dl[0]['ts']);
         $this->assertJson($out);
     }
 
@@ -107,7 +121,7 @@ final class DownloadRouterTest extends TestCase
 
     public function testFallbackStaysUnderCapAndStartsWithZipHeader(): void
     {
-        $out = $this->handle('/backup.zip', 'host=' . $this->host, 'GET');
+        $out = $this->handle('/__dl/backup.zip', 'host=' . $this->host, 'GET');
         $this->assertSame("PK\x03\x04", substr($out, 0, 4));
         $this->assertLessThanOrEqual(2 * 1024 * 1024, strlen($out)); // <= cap
         $this->assertGreaterThan(1024 * 1024, strlen($out));         // and it actually streamed a lot

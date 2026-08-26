@@ -1,6 +1,6 @@
 // funnypot — endless backup-download service worker (decoy bait).
 //
-// Intercepts /backup.zip and answers with a ReadableStream that fabricates an ENDLESS, THROTTLED,
+// Intercepts /__dl/backup.zip and answers with a ReadableStream that fabricates an ENDLESS, THROTTLED,
 // store-method zip entirely in the attacker's browser — near-zero server cost. It never writes a
 // central directory, so it is intentionally not an extractable archive: the point is a believable,
 // cancelable time/bandwidth sink, not a working backup and NOT a zip bomb. All speed/variability comes
@@ -11,7 +11,9 @@ self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim(
 
 self.addEventListener('fetch', function (event) {
   var url = new URL(event.request.url);
-  if (url.pathname !== '/backup.zip') { return; }
+  // Only the bait path. The bare /backup.zip is honeypot surface and must reach the server so the
+  // scanner that asked for it is detected and reported.
+  if (url.pathname !== '/__dl/backup.zip') { return; }
   event.respondWith(makeResponse(url));
 });
 

@@ -102,7 +102,7 @@ final class ConsoleRouter
         // stopped/offline box's console is still signal.
         if (trim($command) !== '') {
             $this->hits->append([
-                'ts' => time(),
+                'ts' => gmdate('c'),
                 'ip' => $ip,
                 'method' => $method,
                 'path' => '/console/' . strtolower($hostname),

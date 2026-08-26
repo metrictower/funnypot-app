@@ -64,6 +64,12 @@ final class SqliteHitStore implements HitStore
             $entry['body'] = self::clean((string) $entry['body'], 2000);
         }
 
+        // ts is TEXT and retention compares it lexicographically, so it must always be ISO-8601.
+        // Normalise an epoch int from a caller rather than let its rows sort before every date.
+        if (isset($entry['ts']) && !is_string($entry['ts'])) {
+            $entry['ts'] = gmdate('c', (int) $entry['ts']);
+        }
+
         // Export + stderr first (so a row is never lost even if the canonical insert throws), then
         // the canonical DB write. Logging must never break the honeypot.
         $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n";

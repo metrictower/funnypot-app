@@ -53,24 +53,27 @@ FleetSection (decoy panel)
         1. register /__dl/sw.js  (scope "/", Service-Worker-Allowed)
         2. on activate, enable the button
         3. on click: GET /__dl/manifest?host=<h>   ← intel ping (bait taken, logged event=download)
-                     then navigate an <iframe>/<a download> to /backup.zip
+                     then navigate an <iframe>/<a download> to /__dl/backup.zip
 DownloadRouter  (gate-exempt, ahead of the honeypot catch-all; only mounted when endlessDownload=on)
   ├─ GET /__dl/sw.js       → the service-worker script (application/javascript, Service-Worker-Allowed:/)
   ├─ GET /__dl/manifest    → JSON {seed, files:[{path,size}...], throttle:{...config...}}  + logs the ping
-  └─ GET /backup.zip       → NON-JS fallback only: server-side throttled, HARD-CAPPED finite stream
+  └─ GET /__dl/backup.zip  → NON-JS fallback only: HARD-CAPPED finite stream
                               (the SW intercepts this path for browsers, so PHP only sees non-SW clients)
 Service worker (/__dl/sw.js, client side)
-  └─ fetch handler for /backup.zip:
+  └─ fetch handler for /__dl/backup.zip:
         respond with a ReadableStream whose pull() emits procedural zip bytes, throttled per the
         manifest's throttle profile, FOREVER (endless). Bytes fabricated in JS → near-zero server cost.
 ```
 
-### Why the SW intercepts `/backup.zip`
+### Why the SW intercepts `/__dl/backup.zip`
 
-The download anchor points at the realistic path `/backup.zip`. Once the SW is active (scope `/`), its
-`fetch` handler answers that path from the client-generated endless stream. A client with no SW (curl, or
-a browser on the very first click before activation) falls through to the server, where `DownloadRouter`
-serves the capped finite fallback. So browsers get endless-client-gen; everything else gets a bounded
+The download anchor points at `/__dl/backup.zip` and the saved file is still named `backup.zip` via
+`Content-Disposition`. It is deliberately NOT the bare `/backup.zip`: that literal path is already
+honeypot surface (nested decoy archive, detection engine, payload classifier, and the app's only
+AbuseIPDB / Threat Intel enqueue), so a router seam claiming it would silence every scanner report on
+it. Once the SW is active (scope `/`), its `fetch` handler answers the bait path from the
+client-generated endless stream. A client with no SW (curl, or a browser on the very first click before
+activation) falls through to the server, where `DownloadRouter` serves the capped finite fallback. So browsers get endless-client-gen; everything else gets a bounded
 server stream. Both log the ping.
 
 ### Zip byte structure (endless, store method)
@@ -97,12 +100,13 @@ delay  = clamp(base / factor, base*0.2, base*5) // faster when factor>1, slower 
 chunk  = random(chunkMinKb, chunkMaxKb) * 1024
 ```
 
-The server-side fallback uses the same formula via `StreamEmitter`'s pacing (or a `usleep` loop) but
-stops at `dlFallbackCapMb`.
+The formula is client-side only. The server fallback does NOT pace: pinning a php-fpm worker for the
+whole transfer on an unauthenticated route is a self-DoS, and a curl client judges no realism anyway.
+It just streams up to `dlFallbackCapMb` as fast as the socket drains, and stops on a client abort.
 
 ## Intel
 
-- Manifest fetch logs one hit: `event=download`, `method=GET`, `path=/backup.zip`,
+- Manifest fetch logs one hit: `event=download`, `method=GET`, `path=/__dl/backup.zip`,
   `served=true`, `severity=info`, `body=host=<h>` — the "attacker took the bait" signal. Dashboard gets a
   quick-filter **"backup bait"** (`event=download`) mirroring the `shell`/`panel` filters.
 - The non-JS fallback GET also logs the same event (so curl pulls are captured too), de-duped by IP within
@@ -115,25 +119,27 @@ stops at `dlFallbackCapMb`.
 2. **Never-500.** `DownloadRouter::handle` resolves everything in a try/catch before the first byte; a
    fault degrades to an empty 200 (or the plain 404 when the feature is off), never a 500.
 3. **On by default, cleanly disablable.** `Router` consults `DownloadRouter` only when `endlessDownload`
-   is on (the default); with `FUNNYPOT_ENDLESS_DOWNLOAD=0` all `/__dl/*` and `/backup.zip` requests fall
+   is on (the default); with `FUNNYPOT_ENDLESS_DOWNLOAD=0` all `/__dl/*` requests fall
    through to the normal honeypot catch-all (still logged + fake-served like any probe — no behavioural
    tell either way). The bait link in the panel is likewise only rendered when the feature is on.
 4. **No fingerprint tells.** `/__dl/sw.js` is served as `application/javascript` with a normal
-   `Service-Worker-Allowed` header (every PWA sends it). `backup.zip` uses `Content-Type: application/zip`
+   `Service-Worker-Allowed` header (every PWA sends it). The bait zip uses `Content-Type: application/zip`
    + `Content-Disposition: attachment; filename="backup.zip"`. The throttle makes the transfer rate
    believable. No scanner/matcher signature strings anywhere.
 5. **Cancelable, not a bomb.** The attacker can cancel at any time (it's a normal browser download); we
    never auto-expand or crash them.
 6. **Bounded server cost.** Browsers cost us one tiny manifest fetch. Non-JS clients cost us at most
-   `dlFallbackCapMb`, throttled.
+   `dlFallbackCapMb`, streamed unpaced and abandoned as soon as the client hangs up; the bytes are never
+   buffered, so a fallback holds only one chunk in memory.
 
 ## Testing
 
 - `AppConfig` parses + clamps every new env knob (unit).
-- `DownloadRouter::matches` owns exactly `/__dl/sw.js`, `/__dl/manifest`, `/backup.zip`; nothing else.
+- `DownloadRouter::matches` owns exactly `/__dl/sw.js`, `/__dl/manifest`, `/__dl/backup.zip`; nothing
+  else — in particular never the bare `/backup.zip`, which stays honeypot surface.
 - Manifest JSON: valid shape, files come from the seeded FakeFilesystem for the requested host, throttle
   block echoes the clamped config, and a hit is logged `event=download` (HitStore spy).
-- Feature OFF → `DownloadRouter` not mounted → `/backup.zip` falls through to the honeypot (Router test).
+- Feature OFF → `DownloadRouter` not mounted → `/__dl/backup.zip` falls through to the honeypot.
 - Non-JS fallback: streams ≤ cap bytes, throttled, `application/zip`, never-500 on a broken host.
 - SW script: `node --check src/App/Download/sw.js` (no JS test runner; syntax-check only), plus a byte-
   structure assertion on the local-file-header bytes the shared PHP helper emits for the fallback.
