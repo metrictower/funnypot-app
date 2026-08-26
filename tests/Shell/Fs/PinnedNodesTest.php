@@ -84,6 +84,72 @@ final class PinnedNodesTest extends TestCase
         self::assertNotSame($digA, $digB, 'digest must vary');
     }
 
+    /** @return string[] the login field of every line in a passwd/shadow-shaped file */
+    private function logins(string $file): array
+    {
+        $out = [];
+        foreach (explode("\n", trim($file)) as $line) {
+            if ($line !== '') {
+                $out[] = substr($line, 0, (int) strpos($line, ':'));
+            }
+        }
+
+        return $out;
+    }
+
+    public function test_passwd_and_shadow_enumerate_the_same_users(): void
+    {
+        // pwck flags any login present in one file and missing from the other, so the staff accounts
+        // added to passwd must carry a shadow line too — same set, same order.
+        for ($i = 0; $i < 20; $i++) {
+            $fs = new FakeFilesystem(Draw::seed("s\0h\0ops"), 'ops', $i);
+            $passwd = $this->logins($fs->read('/etc/passwd'));
+            $shadow = $this->logins($fs->read('/etc/shadow'));
+            self::assertSame($passwd, $shadow, "passwd/shadow disagree at seed {$i}");
+            self::assertSame(count($passwd), count(array_unique($passwd)), "duplicate login at seed {$i}");
+
+            // Every /home entry is one of those logins.
+            foreach ($fs->list('/home') as $n) {
+                self::assertContains($n->name, $passwd, "/home/{$n->name} has no passwd line (seed {$i})");
+            }
+        }
+    }
+
+    public function test_shadow_digests_have_no_fixed_structure_across_installs(): void
+    {
+        // A digest drawn by walking consecutive Draw indices mod 64 repeats one alphabet pattern on
+        // every install — instantly recognisable as synthetic. Each install must get its own bytes.
+        $digests = [];
+        $columns = [];
+        for ($i = 0; $i < 200; $i++) {
+            $shadow = (new FakeFilesystem(Draw::seed("secret{$i}\0h\0dev"), 'developer', 7))->read('/etc/shadow');
+            self::assertSame(1, preg_match('/\$6\$[^$:]{16}\$([^:]{86})/', $shadow, $m), 'no sha512-shaped digest');
+            $digests[$m[1]] = true;
+            for ($p = 0; $p < 86; $p++) {
+                $columns[$p][$m[1][$p]] = true;
+            }
+        }
+        self::assertCount(200, $digests, 'digests must not collapse onto a small set of patterns');
+        foreach ($columns as $p => $seen) {
+            self::assertGreaterThan(30, count($seen), "digest position {$p} is structurally constrained");
+        }
+    }
+
+    public function test_shadow_digest_is_not_periodic(): void
+    {
+        // The old sequential draw cycled through the whole 64-char alphabet, so byte 64 always
+        // repeated byte 0. Real crypt output has no such period.
+        $periodic = 0;
+        for ($i = 0; $i < 50; $i++) {
+            $shadow = (new FakeFilesystem(Draw::seed("secret{$i}\0h\0dev"), 'developer', 7))->read('/etc/shadow');
+            preg_match('/\$6\$[^$:]{16}\$([^:]{86})/', $shadow, $m);
+            if (substr($m[1], 0, 22) === substr($m[1], 64, 22)) {
+                $periodic++;
+            }
+        }
+        self::assertSame(0, $periodic, 'digest repeats with a 64-character period');
+    }
+
     private function firstSeedOfFamily(string $family): ?FakeFilesystem
     {
         for ($i = 0; $i < 80; $i++) {

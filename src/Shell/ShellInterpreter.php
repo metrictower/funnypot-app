@@ -260,11 +260,14 @@ final class ShellInterpreter
     {
         $long = false;
         $all = false;
+        $dotEntries = false;
         $paths = [];
         foreach ($args as $a) {
             if ($a !== '' && $a[0] === '-') {
                 $long = $long || strpos($a, 'l') !== false;
+                // -a and -A both reveal dotfiles; only -a adds the '.' and '..' entries.
                 $all = $all || strpos($a, 'a') !== false || strpos($a, 'A') !== false;
+                $dotEntries = $dotEntries || strpos($a, 'a') !== false;
             } else {
                 $paths[] = $a;
             }
@@ -288,16 +291,20 @@ final class ShellInterpreter
                 $out .= "ls: cannot access '{$p}': No such file or directory\n";
                 continue;
             }
-            $out .= $this->renderListing($nodes, $target, $long, $all, $fs);
+            $out .= $this->renderListing($nodes, $target, $long, $all, $dotEntries, $fs);
         }
 
         return $out;
     }
 
     /** @param Node[] $nodes */
-    private function renderListing(array $nodes, string $dir, bool $long, bool $all, FakeFilesystem $fs): string
+    private function renderListing(array $nodes, string $dir, bool $long, bool $all, bool $dotEntries, FakeFilesystem $fs): string
     {
-        if ($all) {
+        if (!$all) {
+            // Without -a/-A a real ls hides dotfiles; showing them unasked is a tell in every front-end.
+            $nodes = array_values(array_filter($nodes, static fn (Node $n): bool => strncmp($n->name, '.', 1) !== 0));
+        }
+        if ($dotEntries) {
             $nodes = array_merge([
                 new Node('.', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null),
                 new Node('..', 'dir', 0, 0, 4096, 0o755, FrozenClock::epoch(), null),

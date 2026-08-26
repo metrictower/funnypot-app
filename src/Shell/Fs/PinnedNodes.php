@@ -13,13 +13,23 @@ use Funnypot\Shell\Host\HostIdentity;
  *
  * Host identity (OS, hostname, distro family) comes from ONE source: ServerProfile::fromSeed($identitySeed)
  * — the same source the System panel and HostFacts use — so /etc/os-release, /etc/hostname, uname, the
- * panel, and the fleet all agree. Per-host SECRETS (the admin shadow salt+digest, the admin username) are
+ * panel, and the fleet all agree. Per-host SECRETS (the shadow salts+digests, the admin username) are
  * seeded from the private-secret-keyed pinned seed, so they vary per install even at the same identity.
- * Inert: the shadow digest is drawn noise in the crypt alphabet, never a real or shared hash.
+ * Inert: every shadow digest is drawn noise in the crypt alphabet, never a real or shared hash.
  */
 final class PinnedNodes
 {
     private const CRYPT_B64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+    // Draw index namespaces owned here. Two helpers sharing an index are locked together forever, so
+    // every helper gets its own band: 1 admin name, 30 shadow lastchg, 100+ one per pinned /etc file,
+    // 400+uid home mtimes (uid starts at 1000), 700 staff headcount. Shadow salts/digests do not draw
+    // from Draw at all — see cryptB64.
+    private const IDX_ADMIN_NAME = 1;
+    private const IDX_LASTCHG = 30;
+    private const IDX_FILE_MTIME = 100;
+    private const IDX_HOME_MTIME = 400;
+    private const IDX_STAFF_COUNT = 700;
 
     private const ADMIN_NAMES = [
         'jmartin', 'akhan', 'dsilva', 'rprice', 'lchen', 'mwilson', 'sokafor', 'tbauer', 'nsingh', 'grossi',
@@ -42,26 +52,26 @@ final class PinnedNodes
         $id = HostIdentity::fromSeed($identitySeed);
         $fam = $id->family();
 
-        $admin = (string) Draw::pick($seed, 1, self::ADMIN_NAMES);
-        $lastchg = 19000 + Draw::intBelow($seed, 30, 800);
+        $admin = (string) Draw::pick($seed, self::IDX_ADMIN_NAME, self::ADMIN_NAMES);
+        $lastchg = 19000 + Draw::intBelow($seed, self::IDX_LASTCHG, 800);
 
         // Staff accounts, drawn from the SAME Org roster the web-facing fakes use, so a name found
         // in /etc/passwd or /home also appears in the directory, the mail headers and the tickets.
         // One host is one company; an attacker who cross-references should find agreement.
-        $staff = self::staff($seed, $identitySeed);
+        $staff = self::staff($seed, $identitySeed, $admin);
 
         $content = [
             '/etc/hostname' => $id->hostname() . "\n",
             '/etc/os-release' => $id->osRelease(),
             '/etc/passwd' => self::passwd($admin, $fam, $staff),
-            '/etc/shadow' => self::shadow($seed, $admin, $fam, $lastchg),
+            '/etc/shadow' => self::shadow($seed, $admin, $fam, $lastchg, $staff),
         ];
 
         $nodes = [];
         $i = 0;
         foreach ($content as $path => $bytes) {
             $mode = $path === '/etc/shadow' ? 0o640 : 0o644;
-            $mtime = $now - Draw::intBelow($seed, 100 + $i, 31536000);
+            $mtime = $now - Draw::intBelow($seed, self::IDX_FILE_MTIME + $i, 31536000);
             $nodes[$path] = new Node(PathCanon::basename($path), 'file', 0, 0, strlen($bytes), $mode, $mtime, null);
             $i++;
         }
@@ -74,18 +84,32 @@ final class PinnedNodes
         $uid = 1000;
         foreach (array_merge([$admin], array_keys($staff)) as $user) {
             $home = '/home/' . $user;
-            $nodes[$home] = new Node($user, 'dir', $uid, $uid, 4096, 0o750, $now - Draw::intBelow($seed, 400 + $uid, 20000000), null);
+            $mtime = $now - Draw::intBelow($seed, self::IDX_HOME_MTIME + $uid, 20000000);
+            $nodes[$home] = new Node($user, 'dir', $uid, $uid, 4096, 0o750, $mtime, null);
             $uid++;
         }
 
-        return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam, 'homes' => array_merge([$admin], array_keys($staff))];
+        return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam];
     }
 
-    private static function cryptB64(string $seed, int $base, int $len): string
+    /**
+     * A run of characters in the crypt alphabet, cut from a hash stream keyed by $tag.
+     *
+     * Deliberately NOT a walk of consecutive Draw indices: fnv1a64's low bits follow the last input
+     * byte alone, so consecutive indices reduced mod 64 lay down the same alphabet pattern on every
+     * install — a digest an attacker can recognise on sight. md5 blocks avalanche fully, and 256 is
+     * an exact multiple of 64 so masking the low 6 bits of each byte stays uniform.
+     */
+    private static function cryptB64(string $seed, string $tag, int $len): string
     {
         $out = '';
-        for ($i = 0; $i < $len; $i++) {
-            $out .= self::CRYPT_B64[Draw::intBelow($seed, $base + $i, 64)];
+        $block = 0;
+        while (strlen($out) < $len) {
+            $bytes = md5($seed . "\0" . $tag . "\0" . $block, true);
+            for ($i = 0; $i < 16 && strlen($out) < $len; $i++) {
+                $out .= self::CRYPT_B64[ord($bytes[$i]) & 63];
+            }
+            $block++;
         }
 
         return $out;
@@ -156,14 +180,13 @@ final class PinnedNodes
     }
 
     /** @param array<string,string> $staff username => display name */
-    private static function passwd(string $admin, string $fam, array $staff = []): string
+    private static function passwd(string $admin, string $fam, array $staff): string
     {
         $lines = array_values(self::users($admin, $fam));
 
         $uid = 1001;
         foreach ($staff as $user => $display) {
-            $shell = $fam === 'rhel' ? '/bin/bash' : '/bin/bash';
-            $lines[] = "{$user}:x:{$uid}:{$uid}:{$display}:/home/{$user}:{$shell}";
+            $lines[] = "{$user}:x:{$uid}:{$uid}:{$display}:/home/{$user}:/bin/bash";
             $uid++;
         }
 
@@ -176,13 +199,15 @@ final class PinnedNodes
      *
      * @return array<string,string> username => display name
      */
-    private static function staff(string $seed, int $identitySeed): array
+    private static function staff(string $seed, int $identitySeed, string $admin): array
     {
         $org = Org::fromSeed($identitySeed);
-        $count = 3 + Draw::intBelow($seed, 300, 4);
+        $count = 3 + Draw::intBelow($seed, self::IDX_STAFF_COUNT, 4);
         $out = [];
 
-        foreach ($org->people($count + 2) as $person) {
+        // Over-fetch generously: initial+surname collapses distinct people onto one username, and a
+        // clash with the admin is skipped too, so a tight window would silently under-fill the roster.
+        foreach ($org->people($count * 4 + 8) as $person) {
             if (count($out) >= $count) {
                 break;
             }
@@ -193,7 +218,7 @@ final class PinnedNodes
             }
             $user = strtolower(substr($first, 0, 1) . preg_replace('/[^A-Za-z]/', '', $last));
             // A collision with the admin account would put two entries on one uid.
-            if ($user === '' || isset($out[$user])) {
+            if ($user === '' || $user === $admin || isset($out[$user])) {
                 continue;
             }
             $out[$user] = $first . ' ' . $last;
@@ -202,26 +227,37 @@ final class PinnedNodes
         return $out;
     }
 
-    private static function shadow(string $seed, string $admin, string $fam, int $lastchg): string
+    /** @param array<string,string> $staff username => display name */
+    private static function shadow(string $seed, string $admin, string $fam, int $lastchg, array $staff): string
     {
-        // One shadow line per passwd user. Every fabricated secret is seeded per host — the admin digest
-        // is drawn noise in the crypt alphabet (a sha512-crypt SHAPE), never a real or shared hash.
-        $salt = self::cryptB64($seed, 300, 16);
-        $digest = self::cryptB64($seed, 400, 86);
-        $adminHash = "\$6\${$salt}\${$digest}";
-
+        // One shadow line per passwd user, in passwd's order — pwck reports any file that enumerates a
+        // user the other does not, so the two must be built from the same set. Every fabricated secret
+        // is seeded per host: a login digest is noise in the crypt alphabet (a sha512-crypt SHAPE),
+        // never a real or shared hash.
         $out = '';
         foreach (array_keys(self::users($admin, $fam)) as $name) {
             if ($name === 'root') {
                 $secret = '!';
             } elseif ($name === $admin) {
-                $secret = $adminHash;
+                $secret = self::sha512Shape($seed, $name);
             } else {
                 $secret = '*';
             }
             $out .= "{$name}:{$secret}:{$lastchg}:0:99999:7:::\n";
         }
+        foreach (array_keys($staff) as $name) {
+            $out .= "{$name}:" . self::sha512Shape($seed, $name) . ":{$lastchg}:0:99999:7:::\n";
+        }
 
         return $out;
+    }
+
+    /** An inert sha512-crypt-shaped string for one login, stable per host and per user. */
+    private static function sha512Shape(string $seed, string $user): string
+    {
+        $salt = self::cryptB64($seed, 'shadow-salt:' . $user, 16);
+        $digest = self::cryptB64($seed, 'shadow-digest:' . $user, 86);
+
+        return "\$6\${$salt}\${$digest}";
     }
 }

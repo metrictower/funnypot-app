@@ -10,6 +10,14 @@ namespace Funnypot\Shell\Fs;
  * Draws are counter-based: any value is a pure function of (seed, index) with no shared PRNG state.
  * Only bitwise/modulo on hash output — never + - * / (silent int->float promotion breaks determinism);
  * always mask before % (guards the negative-index trap on signed 64-bit ints).
+ *
+ * STRUCTURAL BIAS — read before adding a caller. fnv1a64 finishes with (h ^ lastByte) * prime, so the
+ * low bits of a draw are a function of the low bits of the LAST input byte alone. Indices below 2^8
+ * apart differ only in that byte, so a sequential walk (i, i+1, i+2 …) reduced by a power-of-two n
+ * produces the same pattern of values on every seed — only the offset moves. Never combine a
+ * sequential index with a power-of-two n for anything an attacker can see in bulk. Either use a
+ * non-power-of-two n, spread the indices far apart, or draw the run from a hash stream instead
+ * (md5/sha256 blocks over a counter, as FakeFilesystem::procContent does).
  */
 final class Draw
 {

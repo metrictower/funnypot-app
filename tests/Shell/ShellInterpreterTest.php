@@ -48,6 +48,23 @@ final class ShellInterpreterTest extends TestCase
         self::assertStringContainsString(' etc', $out);
     }
 
+    public function test_ls_hides_dotfiles_unless_asked(): void
+    {
+        $i = $this->interp();
+        $s = $this->session();
+        $s->overlay = $s->overlay->withFile('/srv/.hidden-key', 'x');
+
+        $bare = $i->run('ls /srv', $s);
+        self::assertStringNotContainsString('.hidden-key', $bare, 'a bare ls must not reveal dotfiles');
+        self::assertStringNotContainsString('..', $bare);
+
+        self::assertStringContainsString('.hidden-key', $i->run('ls -a /srv', $s));
+        // -A is almost-all: dotfiles yes, the '.'/'..' entries no.
+        $almost = $i->run('ls -A /srv', $s);
+        self::assertStringContainsString('.hidden-key', $almost);
+        self::assertStringNotContainsString('..', $almost);
+    }
+
     public function test_cat_pinned_and_proc(): void
     {
         $i = $this->interp();
