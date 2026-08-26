@@ -53,9 +53,29 @@ final class MalformedStream
             return self::openingBurst();
         }
 
-        // Reuse the SKULL/TROLL animation frames (TrollStream::frame >= FLASH_FRAMES skips the taunt's
-        // "ENABLE REVERSE CONNECTION" flash and returns the art + bar cycle).
-        return TrollStream::frame(TrollStream::FLASH_FRAMES + ($n - 1));
+        // Every frame carries a fresh malformed chunk (invalid UTF-8 / NULs / combining-mark churn)
+        // interleaved with the SKULL/TROLL art, so the stream stays hostile to decoders the whole time,
+        // not just on the opening burst. The art reuses TrollStream::frame (>= FLASH_FRAMES skips the
+        // taunt's "ENABLE REVERSE CONNECTION" flash and returns the art + bar cycle).
+        return self::junk($n) . TrollStream::frame(TrollStream::FLASH_FRAMES + ($n - 1));
+    }
+
+    /**
+     * A modest, per-frame-varied malformed chunk to interleave with each SKULL/TROLL frame: invalid
+     * UTF-8, embedded NULs, illegal/continuation bytes, and a slice of combining-mark churn. Varied by
+     * $n so frames are not byte-identical. Bounded (~150-250 bytes) to keep the ~1/sec trickle a
+     * trickle. Deterministic — no RNG.
+     */
+    public static function junk(int $n): string
+    {
+        $iu = self::invalidUtf8();
+        $rot = ($n * 7) % max(1, strlen($iu));
+
+        return substr($iu . $iu, $rot, 48)
+            . str_repeat("\x00", 4 + ($n % 5))
+            . "\xf5\xfe\xff" . str_repeat("\x80", 3 + ($n % 6))
+            . substr(self::randomUnicode(), 0, 60 + ($n % 30))
+            . "\r\n";
     }
 
     /**

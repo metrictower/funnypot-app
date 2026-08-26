@@ -47,13 +47,18 @@ final class MalformedStreamTest extends TestCase
         self::assertStringNotContainsString('\\a', $b);
     }
 
-    public function test_frame0_is_burst_later_frames_are_troll_art(): void
+    public function test_frame0_is_burst_later_frames_carry_junk_plus_troll_art(): void
     {
         self::assertSame(MalformedStream::openingBurst(), MalformedStream::frame(0));
         $f1 = MalformedStream::frame(1);
         self::assertNotSame('', $f1);
         // Reuses the SKULL/TROLL animation, NOT the taunt's "ENABLE REVERSE CONNECTION" login flash.
         self::assertStringNotContainsString('ENABLE REVERSE', $f1);
+        // Every frame now interleaves a malformed chunk, so each ~1s frame is itself invalid UTF-8.
+        self::assertFalse(mb_check_encoding($f1, 'UTF-8'), 'each frame carries malformed bytes');
+        self::assertStringContainsString("\x00", $f1, 'each frame carries embedded NULs');
+        // Varied per frame (not byte-identical junk each tick).
+        self::assertNotSame(MalformedStream::junk(1), MalformedStream::junk(2));
     }
 
     public function test_stream_is_bounded(): void
