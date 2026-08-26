@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Funnypot\App\Http;
 
 use Funnypot\App\Config\AppConfig;
-use Funnypot\App\Download\EndlessArchive;
 use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
@@ -319,31 +318,11 @@ final class HoneypotController
             'known_attacker' => $this->known($clientIp),
         ]);
 
-        // Bulk lures (.zip/.tar.gz/.gz/.sql/.csv/.bak) become an endless client-side stream in a real
-        // browser (service worker); a non-JS client (curl/scanner) reaches here and gets a large,
-        // format-matched, HARD-CAPPED procedural stream so the link is never dead — bounded because an
-        // unbounded server stream would pin a worker. Streamed (no Content-Length), no server-side
-        // pacing. A mid-stream fault can't 500 (headers already sent).
-        if (EndlessArchive::handles($r->path)) {
-            $cap = max(1, $this->config->dlFallbackCapMb) * 1024 * 1024;
-            http_response_code(200);
-            header('Content-Type: ' . $ctype);
-            header('Content-Disposition: attachment; filename="' . $name . '"');
-            header('Cache-Control: no-store');
-            while (ob_get_level() > 0) {
-                ob_end_flush();
-            }
-            $archive = new EndlessArchive();
-            foreach ($archive->chunks($r->path, $cap) as $chunk) {
-                echo $chunk;
-                flush();
-            }
-
-            return true;
-        }
-
-        // Small "inspect-me" credential/real-magic decoys (wallet.json keystore, .pem/.cer certs, real
-        // .tar/.tar.bz2) — never endless (that would destroy the bait). Serve the static asset as-is.
+        // Serve the small static decoy asset as-is. (The endless/streaming download bait lives ONLY in
+        // the fleet console's own /__dl/backup.zip surface, client-side via the service worker — it is
+        // NOT applied to this open scanner-facing decoy-archive path: doing so would (a) let a browser
+        // service worker shadow the honeypot's own reporting of these probes, and (b) turn every
+        // .zip/.sql/.tar.gz probe into a ~50 MB worker-pinning amplifier with no per-IP limit.)
         $full = $this->decoyDir . '/' . $decoy;
         if (!is_file($full)) {
             return false;
