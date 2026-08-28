@@ -422,7 +422,8 @@ final class CctvSection extends AbstractPanelSection
             return 'static';
         }
         // ~1 in 6 online cameras sits on a colour-bar test card. Deterministic per camera id (per seed).
-        if ($cam['status'] === 'online' && (crc32($cam['id']) % 6) === 0) {
+        // abs() because crc32 is negative when the high bit is set on a 32-bit PHP build (% would skew).
+        if ($cam['status'] === 'online' && (abs(crc32($cam['id'])) % 6) === 0) {
             return 'bars';
         }
         return 'live';
@@ -440,19 +441,22 @@ final class CctvSection extends AbstractPanelSection
         $top = ['#bfbfbf', '#bfbf00', '#00bfbf', '#00bf00', '#bf00bf', '#bf0000', '#0000bf'];
         $mid = ['#0000bf', '#131313', '#bf00bf', '#131313', '#00bfbf', '#131313', '#bfbfbf'];
 
+        // Each bar sits at its exact fraction and is drawn 0.5px wider so opaque neighbours overlap (no
+        // sub-pixel seam); the final half-pixel spill past the right edge is clipped by the SVG viewport.
         $g = '<g class="fp-scene-bars">';
         for ($i = 0; $i < 7; $i++) {
             $x = round($i * $col, 2);
-            $cw = round($col + 1, 2);
+            $cw = round($col + 0.5, 2);
             $g .= '<rect x="' . $x . '" y="0" width="' . $cw . '" height="' . $topH . '" fill="' . $top[$i] . '"/>';
             $g .= '<rect x="' . $x . '" y="' . $topH . '" width="' . $cw . '" height="' . $midH . '" fill="' . $mid[$i] . '"/>';
         }
-        // Lower band: -I, 100% white, +Q, black, the 3-step PLUGE, black.
+        // Lower band: -I, 100% white, +Q, black, the 3-step PLUGE, black. Positions accumulate the true
+        // widths (sum to $w); each rect overlaps the next by 0.5px, so no seam and the spill is clipped.
         $bot = [['#0a1a3a', 5], ['#ffffff', 5], ['#2a0a4a', 5], ['#131313', 5], ['#000000', 1], ['#131313', 1], ['#1c1c1c', 1], ['#131313', 5]];
         $x = 0.0;
         foreach ($bot as [$c, $units]) {
             $bw = $w * $units / 28;
-            $g .= '<rect x="' . round($x, 2) . '" y="' . $botY . '" width="' . round($bw + 1, 2) . '" height="' . ($h - $botY) . '" fill="' . $c . '"/>';
+            $g .= '<rect x="' . round($x, 2) . '" y="' . $botY . '" width="' . round($bw + 0.5, 2) . '" height="' . ($h - $botY) . '" fill="' . $c . '"/>';
             $x += $bw;
         }
 
@@ -463,7 +467,7 @@ final class CctvSection extends AbstractPanelSection
     private function staticSvg(int $w, int $h, string $camId): string
     {
         $fid = 'fp-snow-' . substr(hash('sha256', $camId), 0, 10);
-        $seed = crc32($camId) % 100;
+        $seed = abs(crc32($camId)) % 100;
 
         return '<defs><filter id="' . $fid . '" x="0" y="0" width="100%" height="100%">'
             . '<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="' . $seed . '" stitchTiles="stitch" result="n"/>'
