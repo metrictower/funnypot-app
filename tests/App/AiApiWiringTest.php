@@ -9,6 +9,7 @@ use Funnypot\App\AiApi\AiChatHandler;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
+use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Storage\SqliteHitStore;
@@ -143,7 +144,8 @@ final class AiApiWiringTest extends TestCase
         $honeypot = new HoneypotController($store, $geo, $config, $decoys);
         $dashboard = new DashboardController($store, $geo, $config, $assets);
         $corporate = new CorporateController($store, $geo, $config, $assets);
+        $home = new HomeController($store, $geo, $config, $assets);
 
-        return new Router($config, $honeypot, $dashboard, $corporate, $aiApi);
+        return new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi);
     }
 }
