@@ -82,8 +82,10 @@ final class CctvSection extends AbstractPanelSection
         $slice = array_slice($cams, ($page - 1) * self::PER_PAGE, self::PER_PAGE);
 
         $grid = '<div class="fp-cam-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">';
-        foreach ($slice as $c) {
-            $grid .= $this->cameraTile($c, $navBase, false);
+        foreach ($slice as $i => $c) {
+            // Global position (not the page-local slice key) so the every-third-camera pattern is stable
+            // across pages and each page still shows its share of test cards.
+            $grid .= $this->cameraTile($c, $navBase, false, (($page - 1) * self::PER_PAGE) + $i);
         }
         $grid .= '</div>';
 
@@ -127,7 +129,7 @@ final class CctvSection extends AbstractPanelSection
         $body = $this->breadcrumbHtml($crumbs)
             . $this->tabStrip($base, $tab)
             . '<div class="alte-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">'
-            . $this->card('Stream', $this->cameraTile($cam, $navBase, true), $cam['status'] === 'online' ? 'live' : $cam['status'])
+            . $this->card('Stream', $this->cameraTile($cam, $navBase, true, $this->cameraIndex($cctv, $cam['id'])), $cam['status'] === 'online' ? 'live' : $cam['status'])
             . $this->card('Details', $info, $cam['model'])
             . '</div>';
 
@@ -357,11 +359,11 @@ final class CctvSection extends AbstractPanelSection
 
     // --- inline camera tile (SVG placeholder — never <img src>, CSP-clean) ---
 
-    private function cameraTile(array $cam, string $navBase, bool $large): string
+    private function cameraTile(array $cam, string $navBase, bool $large, int $index = 0): string
     {
         $w = $large ? 480 : 320;
         $h = $large ? 270 : 180;
-        $scene = $this->cameraScene($cam);
+        $scene = $this->cameraScene($cam, $index);
         $bg = $scene === 'live' ? '#2c3136' : '#0a0a0a';
 
         // The picture: a live crosshair viewport, an SMPTE colour-bar calibration card, or TV snow on a
@@ -414,20 +416,33 @@ final class CctvSection extends AbstractPanelSection
             . '</a>';
     }
 
-    /** Which picture the tile shows: TV snow for a dead/tampered feed, an SMPTE card for a deterministic
-     *  subset of online cameras (a camera "on the test pattern"), else the live crosshair viewport. */
-    private function cameraScene(array $cam): string
+    /** Which picture the tile shows: TV snow for a dead/tampered feed, an SMPTE card for every third
+     *  online camera (by grid position), else the live crosshair viewport.
+     *
+     *  Scene is by POSITION, not a hash of the id, on purpose: a hash can cluster all the bar cameras onto
+     *  later pages, leaving the first (default) page with none. Position guarantees an evenly-spread mix on
+     *  every page, and is fully deterministic per seed (the camera order is fixed per seed). */
+    private function cameraScene(array $cam, int $index): string
     {
         if (in_array($cam['status'], ['no-signal', 'offline', 'tampering'], true)) {
             return 'static';
         }
-        // ~1 in 3 online cameras sits on a colour-bar test card, so the wall clearly mixes bars + static +
-        // live. Deterministic per camera id (per seed). abs() because crc32 is negative when the high bit is
-        // set on a 32-bit PHP build (% would skew).
-        if ($cam['status'] === 'online' && (abs(crc32($cam['id'])) % 3) === 0) {
+        if ($cam['status'] === 'online' && $index % 3 === 0) {
             return 'bars';
         }
         return 'live';
+    }
+
+    /** A camera's position in the estate, so the detail page shows the SAME scene as the grid tile. A
+     *  fuzzed/synthetic camera not in the list falls to 0 (its own detail still renders). */
+    private function cameraIndex(Cctv $cctv, string $camId): int
+    {
+        foreach ($cctv->cameras() as $i => $c) {
+            if ($c['id'] === $camId) {
+                return $i;
+            }
+        }
+        return 0;
     }
 
     /** SMPTE-style colour bars as SVG rects (never <img>, CSP-clean): 7 top bars, a reverse castellation

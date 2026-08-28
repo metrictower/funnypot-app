@@ -236,14 +236,22 @@ final class CctvSectionTest extends TestCase
         self::assertTrue($found, 'expected at least one degraded camera across the seeds');
     }
 
-    public function test_some_online_cameras_show_an_smpte_test_card(): void
+    public function test_every_landing_first_page_shows_smpte_test_cards(): void
     {
-        // A deterministic subset of online cameras displays SMPTE colour bars (a calibration pattern).
-        $seen = 0;
+        // The guarantee: SMPTE bars are assigned by grid POSITION (every third camera), so the FIRST
+        // (default) page always shows a mix — never a hash that clusters every bar camera onto later pages.
         for ($seed = 0; $seed < 20; $seed++) {
-            $seen += substr_count($this->render($this->route(), $seed), 'fp-scene-bars');
+            $bars = substr_count($this->render($this->route(), $seed), 'fp-scene-bars');
+            self::assertGreaterThan(0, $bars, "seed $seed: landing page 1 must show at least one SMPTE test card");
         }
-        self::assertGreaterThan(0, $seen, 'expected SMPTE test-card tiles across the seeds');
+    }
+
+    public function test_deployed_default_seed_shows_bars_on_page_one(): void
+    {
+        // Regression for the live honeypot: this exact persona seed (default material 'funnypot') used to
+        // render page 1 with ZERO bars because the id-hash clustered them onto pages 2-4.
+        $html = (new CctvSection())->render($this->route(), VisualPersona::fromSeed(485359511181776946), '/admin');
+        self::assertGreaterThan(0, substr_count($html, 'fp-scene-bars'), 'the deployed seed must show bars on page 1');
     }
 
     public function test_test_cards_keep_the_no_external_image_invariant(): void
