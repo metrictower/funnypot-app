@@ -19,7 +19,7 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_DASHBOARD_PATH', 'FUNNYPOT_CEILING', 'FUNNYPOT_JITTER_MS',
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
-        'FUNNYPOT_DL_FALLBACK_CAP_MB',
+        'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN',
     ];
 
     protected function setUp(): void
@@ -34,6 +34,24 @@ final class AppConfigTest extends TestCase
         foreach ($this->keys as $k) {
             putenv($k);
         }
+    }
+
+    public function test_funnypot_page_path_defaults_to_funnypot_and_is_shown(): void
+    {
+        $c = AppConfig::fromEnv('/app/demo');
+
+        self::assertSame('/funnypot', $c->funnypotPath);
+        self::assertFalse($c->hideMainPage);
+    }
+
+    public function test_funnypot_page_path_and_hide_are_configurable(): void
+    {
+        putenv('FUNNYPOT_APP_PATH=/ops-console/');
+        putenv('FUNNYPOT_HIDE_MAIN=1');
+        $c = AppConfig::fromEnv('/app/demo');
+
+        self::assertSame('/ops-console', $c->funnypotPath);
+        self::assertTrue($c->hideMainPage);
     }
 
     public function test_defaults(): void

@@ -100,6 +100,12 @@ final class AppConfig
         public int $dlVaryPct,
         public int $dlEasePeriodS,
         public int $dlFallbackCapMb,
+        /** The path the funnypot dashboard/main page lives at in public mode. Default /funnypot; set
+         *  FUNNYPOT_APP_PATH to move it anywhere. */
+        public string $funnypotPath,
+        /** Hide the funnypot dashboard/main page entirely — its path falls through to the honeypot like
+         *  any probe, so the "Welcome to funnypot" page is never exposed. */
+        public bool $hideMainPage,
     ) {
     }
 
@@ -163,6 +169,8 @@ final class AppConfig
             retainDays: (int) ($str('FUNNYPOT_RETAIN_DAYS', '0')),
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),
             dashboardPath: '/' . trim($str('FUNNYPOT_DASHBOARD_PATH', '/__fp/'), '/') . '/',
+            funnypotPath: '/' . trim($str('FUNNYPOT_APP_PATH', 'funnypot'), '/'),
+            hideMainPage: in_array(strtolower((string) getenv('FUNNYPOT_HIDE_MAIN')), ['1', 'on', 'true', 'yes'], true),
             blocklistEnabled: in_array(strtolower((string) getenv('FUNNYPOT_BLOCKLIST')), ['1', 'on', 'true', 'yes'], true),
             intelDbPath: $str('FUNNYPOT_INTEL_DB', $store . '/intel.sqlite'),
             blocklistMinLists: max(1, (int) $str('FUNNYPOT_BLOCKLIST_MIN_LISTS', '1')),

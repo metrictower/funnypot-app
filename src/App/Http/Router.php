@@ -21,6 +21,7 @@ final class Router
         private HoneypotController $honeypot,
         private DashboardController $dashboard,
         private CorporateController $corporate,
+        private HomeController $home,
         private ?AiApiRouter $aiApi = null,
         private ?ConsoleRouter $console = null,
         private ?DownloadRouter $download = null,
@@ -165,22 +166,49 @@ final class Router
             return;
         }
 
-        // Password-gated admin actions (POST only). The public dashboard view stays open.
-        if ($method === 'POST' && $path === '/' && isset($_GET['admin'])) {
-            $this->dashboard->admin((string) $_GET['admin']);
+        // The funnypot dashboard lives at its own configurable path (default /funnypot), not /, so the
+        // public front door never announces a honeypot. Its live feed + password-gated admin ride the
+        // same path; the shell's JS reads window.FP_BASE for them. FUNNYPOT_HIDE_MAIN hides it entirely,
+        // so the path then falls through to the honeypot like any probe.
+        $fp = rtrim($this->config->funnypotPath, '/');
+        if (!$this->config->hideMainPage && $fp !== '' && rtrim($path, '/') === $fp) {
+            if ($method === 'POST' && isset($_GET['admin'])) {
+                $this->dashboard->admin((string) $_GET['admin']);
 
-            return;
+                return;
+            }
+            if ($method === 'GET' && isset($_GET['feed'])) {
+                $this->dashboard->feed();
+
+                return;
+            }
+            if ($method === 'GET') {
+                $this->dashboard->shell($this->config->funnypotPath);
+
+                return;
+            }
         }
 
-        // Operator dashboard + its live feed. Only a clean "/" or a feed poll; an attack payload on
-        // the homepage, or any /index.php hit, falls through to the honeypot so a scanner never gets
-        // the dashboard back.
-        if ($method === 'GET' && $path === '/' && (isset($_GET['feed']) || $_GET === [])) {
-            if (isset($_GET['feed'])) {
-                $this->dashboard->feed();
-            } else {
-                $this->dashboard->shell();
+        // The generic decoy home at / — a plausible sign-in page hiding three bot-only lures that point
+        // at the /admin/root/* decoys below. A credential POST is captured; a scanner never gets the
+        // dashboard back here.
+        if ($path === '/' && !isset($_GET['admin'])) {
+            if ($method === 'GET' && $_GET === []) {
+                $this->home->index();
+
+                return;
             }
+            if ($method === 'POST') {
+                $this->home->login($clientIp);
+
+                return;
+            }
+        }
+
+        // The home page's lures (a URL in an HTML comment, an invisible link, a hidden form) route to the
+        // honeypot's detect+log+report seam, so a crawler that follows any of them is scored like a probe.
+        if (in_array($path, ['/admin/root/html', '/admin/root/post', '/admin/root/link'], true)) {
+            $this->honeypot->handle($ctx, $clientIp, $tokenVerdict);
 
             return;
         }

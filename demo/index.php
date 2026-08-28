@@ -27,6 +27,7 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Shell\ConsoleSessionStore;
+use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Llm\CircuitBreaker;
@@ -210,6 +211,8 @@ if ($config->aiApiEnabled) {
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier());
 $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
+// The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath.
+$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
 // Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.
 $console = new ConsoleRouter(
@@ -237,4 +240,4 @@ if ($config->endlessDownload) {
     );
 }
 
-(new Router($config, $honeypot, $dashboard, $corporate, $aiApi, $console, $download))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download))->dispatch($context, $clientIp, $tokenVerdict);
