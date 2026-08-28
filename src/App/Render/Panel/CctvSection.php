@@ -421,9 +421,10 @@ final class CctvSection extends AbstractPanelSection
         if (in_array($cam['status'], ['no-signal', 'offline', 'tampering'], true)) {
             return 'static';
         }
-        // ~1 in 6 online cameras sits on a colour-bar test card. Deterministic per camera id (per seed).
-        // abs() because crc32 is negative when the high bit is set on a 32-bit PHP build (% would skew).
-        if ($cam['status'] === 'online' && (abs(crc32($cam['id'])) % 6) === 0) {
+        // ~1 in 3 online cameras sits on a colour-bar test card, so the wall clearly mixes bars + static +
+        // live. Deterministic per camera id (per seed). abs() because crc32 is negative when the high bit is
+        // set on a 32-bit PHP build (% would skew).
+        if ($cam['status'] === 'online' && (abs(crc32($cam['id'])) % 3) === 0) {
             return 'bars';
         }
         return 'live';
