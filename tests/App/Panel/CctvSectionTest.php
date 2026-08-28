@@ -216,6 +216,46 @@ final class CctvSectionTest extends TestCase
         self::assertDoesNotMatchRegularExpression(self::PUBLIC_IP, $html);
     }
 
+    // --- test cards: SMPTE bars + TV static (calibrating / dead feed) ---
+
+    public function test_dead_cameras_render_tv_static_not_a_blank_box(): void
+    {
+        // A no-signal/offline/tampering feed shows procedural TV snow (SVG feTurbulence), image-free.
+        $found = false;
+        for ($seed = 0; $seed < 20 && !$found; $seed++) {
+            foreach (Cctv::fromSeed($seed)->cameras() as $cam) {
+                if (in_array($cam['status'], ['no-signal', 'offline', 'tampering'], true)) {
+                    $html = $this->render($this->route($cam['id']), $seed);
+                    self::assertStringContainsString('feTurbulence', $html, 'a dead feed shows procedural static');
+                    self::assertStringNotContainsString('<img', $html);
+                    $found = true;
+                    break;
+                }
+            }
+        }
+        self::assertTrue($found, 'expected at least one degraded camera across the seeds');
+    }
+
+    public function test_some_online_cameras_show_an_smpte_test_card(): void
+    {
+        // A deterministic subset of online cameras displays SMPTE colour bars (a calibration pattern).
+        $seen = 0;
+        for ($seed = 0; $seed < 20; $seed++) {
+            $seen += substr_count($this->render($this->route(), $seed), 'fp-scene-bars');
+        }
+        self::assertGreaterThan(0, $seen, 'expected SMPTE test-card tiles across the seeds');
+    }
+
+    public function test_test_cards_keep_the_no_external_image_invariant(): void
+    {
+        for ($seed = 0; $seed < 10; $seed++) {
+            $html = $this->render($this->route(), $seed);
+            self::assertStringNotContainsString('<img', $html);
+            self::assertStringNotContainsString('http://', $html);
+            self::assertStringNotContainsString('https://', $html);
+        }
+    }
+
     // --- section: detail + sub-tabs ---
 
     public function test_camera_detail_shows_rtsp_and_recorder(): void

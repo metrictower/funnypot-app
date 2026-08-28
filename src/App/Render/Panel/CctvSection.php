@@ -361,25 +361,31 @@ final class CctvSection extends AbstractPanelSection
     {
         $w = $large ? 480 : 320;
         $h = $large ? 270 : 180;
-        $status = $cam['status'];
-        $dead = $status === 'no-signal' || $status === 'offline';
-        $bg = $dead ? '#1b1d1f' : '#2c3136';
+        $scene = $this->cameraScene($cam);
+        $bg = $scene === 'live' ? '#2c3136' : '#0a0a0a';
 
-        $overlay = '';
-        if ($dead) {
-            $overlay = '<text x="' . ($w / 2) . '" y="' . ($h / 2) . '" text-anchor="middle" '
-                . 'font-family="monospace" font-size="' . ($large ? 22 : 16) . '" fill="#8a9199" letter-spacing="2">NO SIGNAL</text>';
+        // The picture: a live crosshair viewport, an SMPTE colour-bar calibration card, or TV snow on a
+        // dead/tampered feed. Bars + snow are procedural SVG (rects / feTurbulence) — never an <img> (S5).
+        if ($scene === 'bars') {
+            $inner = $this->smpteBarsSvg($w, $h);
+        } elseif ($scene === 'static') {
+            $label = $cam['status'] === 'tampering' ? 'SIGNAL DISTURBED' : 'NO SIGNAL';
+            $bw = $large ? 200 : 140;
+            $inner = $this->staticSvg($w, $h, $cam['id'])
+                . '<rect x="' . ($w / 2 - $bw / 2) . '" y="' . ($h / 2 - 17) . '" width="' . $bw . '" height="34" fill="#000" opacity="0.55"/>'
+                . '<text x="' . ($w / 2) . '" y="' . ($h / 2 + 6) . '" text-anchor="middle" font-family="monospace" font-size="' . ($large ? 20 : 15) . '" fill="#e3e6e8" letter-spacing="2">' . $label . '</text>';
         } else {
             // A faint framing crosshair so the placeholder reads as a live viewport, not a blank box.
             $cx = $w / 2;
             $cy = $h / 2;
-            $overlay = '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($large ? 34 : 22) . '" fill="none" stroke="#3f464d" stroke-width="1"/>'
+            $inner = '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($large ? 34 : 22) . '" fill="none" stroke="#3f464d" stroke-width="1"/>'
                 . '<line x1="' . ($cx - ($large ? 46 : 30)) . '" y1="' . $cy . '" x2="' . ($cx + ($large ? 46 : 30)) . '" y2="' . $cy . '" stroke="#3f464d" stroke-width="1"/>'
                 . '<line x1="' . $cx . '" y1="' . ($cy - ($large ? 46 : 30)) . '" x2="' . $cx . '" y2="' . ($cy + ($large ? 46 : 30)) . '" stroke="#3f464d" stroke-width="1"/>';
         }
 
+        // REC only on a live, recording camera — a test card or dead feed is not a live recording.
         $rec = '';
-        if ($cam['recording'] && !$dead) {
+        if ($scene === 'live' && $cam['recording']) {
             $rec = '<circle cx="' . ($w - 58) . '" cy="18" r="5" fill="#b23b3b"/>'
                 . '<text x="' . ($w - 48) . '" y="22" font-family="monospace" font-size="12" fill="#e3e6e8">REC</text>';
         }
@@ -387,7 +393,7 @@ final class CctvSection extends AbstractPanelSection
         $svg = '<svg viewBox="0 0 ' . $w . ' ' . $h . '" preserveAspectRatio="xMidYMid meet" '
             . 'style="width:100%;height:auto;display:block;background:' . $bg . ';border-radius:4px" role="img">'
             . '<rect x="0" y="0" width="' . $w . '" height="' . $h . '" fill="' . $bg . '"/>'
-            . $overlay
+            . $inner
             . '<text x="10" y="20" font-family="monospace" font-size="12" fill="#c9ccd1">' . $this->esc($cam['timecode']) . '</text>'
             . $rec
             . '<text x="10" y="' . ($h - 12) . '" font-family="monospace" font-size="' . ($large ? 14 : 12) . '" fill="#e3e6e8">'
@@ -406,6 +412,64 @@ final class CctvSection extends AbstractPanelSection
             . '<div style="font-size:.82em;color:#2c3136;margin-top:4px;font-weight:600">' . $this->esc($cam['name']) . '</div>'
             . '<div style="font-size:.74em;color:#9aa1a8">' . $this->esc($this->locationLabel($cam)) . '</div>'
             . '</a>';
+    }
+
+    /** Which picture the tile shows: TV snow for a dead/tampered feed, an SMPTE card for a deterministic
+     *  subset of online cameras (a camera "on the test pattern"), else the live crosshair viewport. */
+    private function cameraScene(array $cam): string
+    {
+        if (in_array($cam['status'], ['no-signal', 'offline', 'tampering'], true)) {
+            return 'static';
+        }
+        // ~1 in 6 online cameras sits on a colour-bar test card. Deterministic per camera id (per seed).
+        if ($cam['status'] === 'online' && (crc32($cam['id']) % 6) === 0) {
+            return 'bars';
+        }
+        return 'live';
+    }
+
+    /** SMPTE-style colour bars as SVG rects (never <img>, CSP-clean): 7 top bars, a reverse castellation
+     *  strip, and a PLUGE row. */
+    private function smpteBarsSvg(int $w, int $h): string
+    {
+        $topH = (int) round($h * 0.67);
+        $midH = (int) round($h * 0.08);
+        $botY = $topH + $midH;
+        $col = $w / 7;
+
+        $top = ['#bfbfbf', '#bfbf00', '#00bfbf', '#00bf00', '#bf00bf', '#bf0000', '#0000bf'];
+        $mid = ['#0000bf', '#131313', '#bf00bf', '#131313', '#00bfbf', '#131313', '#bfbfbf'];
+
+        $g = '<g class="fp-scene-bars">';
+        for ($i = 0; $i < 7; $i++) {
+            $x = round($i * $col, 2);
+            $cw = round($col + 1, 2);
+            $g .= '<rect x="' . $x . '" y="0" width="' . $cw . '" height="' . $topH . '" fill="' . $top[$i] . '"/>';
+            $g .= '<rect x="' . $x . '" y="' . $topH . '" width="' . $cw . '" height="' . $midH . '" fill="' . $mid[$i] . '"/>';
+        }
+        // Lower band: -I, 100% white, +Q, black, the 3-step PLUGE, black.
+        $bot = [['#0a1a3a', 5], ['#ffffff', 5], ['#2a0a4a', 5], ['#131313', 5], ['#000000', 1], ['#131313', 1], ['#1c1c1c', 1], ['#131313', 5]];
+        $x = 0.0;
+        foreach ($bot as [$c, $units]) {
+            $bw = $w * $units / 28;
+            $g .= '<rect x="' . round($x, 2) . '" y="' . $botY . '" width="' . round($bw + 1, 2) . '" height="' . ($h - $botY) . '" fill="' . $c . '"/>';
+            $x += $bw;
+        }
+
+        return $g . '</g>';
+    }
+
+    /** Procedural TV static (SVG feTurbulence, desaturated) — no image, CSP-clean, deterministic per id. */
+    private function staticSvg(int $w, int $h, string $camId): string
+    {
+        $fid = 'fp-snow-' . substr(hash('sha256', $camId), 0, 10);
+        $seed = crc32($camId) % 100;
+
+        return '<defs><filter id="' . $fid . '" x="0" y="0" width="100%" height="100%">'
+            . '<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="' . $seed . '" stitchTiles="stitch" result="n"/>'
+            . '<feColorMatrix in="n" type="saturate" values="0"/>'
+            . '</filter></defs>'
+            . '<rect x="0" y="0" width="' . $w . '" height="' . $h . '" filter="url(#' . $fid . ')" opacity="0.75"/>';
     }
 
     // --- helpers ---
