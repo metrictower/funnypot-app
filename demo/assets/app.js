@@ -28,6 +28,7 @@ function detectSource(r){
   if(r.event==='llm-fake') return 'LLM';
   if(r.event==='ai-api') return 'AI';
   if(r.event==='decoy-archive') return 'Decoy';
+  if(r.event==='panel') return 'Panel';
   const ids=r.templates||[];
   if(ids.some(id=>id.indexOf('attack-crs-')===0)) return 'CRS';
   if(ids.some(id=>id.indexOf('attack-')===0)) return 'Custom';
