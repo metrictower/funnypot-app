@@ -49,6 +49,14 @@ use Funnypot\Protocol\Rtsp\RtspConfig;
 use Funnypot\Protocol\Rtsp\RtspServer;
 use Funnypot\Protocol\Stun\StunConfig;
 use Funnypot\Protocol\Stun\StunServer;
+use Funnypot\Protocol\Dnp3\Dnp3Config;
+use Funnypot\Protocol\Dnp3\Dnp3Server;
+use Funnypot\Protocol\Ipmi\IpmiConfig;
+use Funnypot\Protocol\Ipmi\IpmiServer;
+use Funnypot\Protocol\Coap\CoapConfig;
+use Funnypot\Protocol\Coap\CoapServer;
+use Funnypot\Protocol\Kerberos\KerberosConfig;
+use Funnypot\Protocol\Kerberos\KerberosServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -198,6 +206,34 @@ if ($protocol === 'rtsp') {
 // Binding Request with the client's mapped address, logs the probe; anti-amplification, no TURN relay.
 if ($protocol === 'stun') {
     (new StunServer(StunConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// DNP3: SCADA outstation honeypot (20000) — COTP-free DNP3 link/app layer; captures master addresses +
+// object enumeration; refuses control functions, actuates nothing.
+if ($protocol === 'dnp3') {
+    (new Dnp3Server(Dnp3Config::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// IPMI (UDP): BMC honeypot (623) — captures RAKP usernames (CVE-2013-4786 hash-disclosure vector) +
+// auth attempts; never authenticates; anti-amplification.
+if ($protocol === 'ipmi') {
+    (new IpmiServer(IpmiConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// CoAP (UDP): IoT honeypot (5683) — captures method + Uri-Path/Query + payload; refuses writes;
+// anti-amplification.
+if ($protocol === 'coap') {
+    (new CoapServer(CoapConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// Kerberos: KDC honeypot (88) — captures AS-REQ principal + realm (AS-REP-roast / user enumeration);
+// returns KRB-ERROR, issues no ticket.
+if ($protocol === 'kerberos') {
+    (new KerberosServer(KerberosConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

@@ -114,6 +114,10 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn bacnet      0.0.0.0:47808
     spawn rtsp        0.0.0.0:554
     spawn stun        0.0.0.0:3478
+    spawn dnp3        0.0.0.0:20000
+    spawn ipmi        0.0.0.0:623
+    spawn coap        0.0.0.0:5683
+    spawn kerberos    0.0.0.0:88
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181
