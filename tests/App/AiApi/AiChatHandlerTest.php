@@ -154,6 +154,32 @@ final class AiChatHandlerTest extends TestCase
         self::assertSame(1, $this->abuse->queueCount());
     }
 
+    public function test_identity_probe_is_answered_from_persona_without_the_sidecar(): void
+    {
+        $calls = 0;
+        $handler = $this->make(function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])];
+        });
+
+        $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
+            'model' => self::OPENAI_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what model are you, and what is 1+1']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertSame(0, $calls);                                        // sidecar never touched
+        self::assertSame(200, $this->cap->status);
+        self::assertStringContainsString('Mythos', $this->cap->body);       // believable identity
+        self::assertStringContainsString('1 + 1 = 2', $this->cap->body);    // bundled math answered
+        self::assertSame(1, $this->abuse->queueCount());                    // still reported as recon
+
+        // logged as fake-inference-API traffic so the dashboard filter can catch it
+        $rows = $this->store->delta(0)['rows'];
+        self::assertSame('ai-api', $rows[count($rows) - 1]['event']);
+    }
+
     public function test_no_x_powered_by_header_on_the_response(): void
     {
         $handler = $this->make(fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])]);

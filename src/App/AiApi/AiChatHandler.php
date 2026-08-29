@@ -140,6 +140,14 @@ class AiChatHandler
      */
     private function resolveText(ChatRequest $req, RequestContext $ctx, string $ip): string
     {
+        // Identity/capability probes ("what model are you") get a believable hardcoded persona answer —
+        // no sidecar call, no gate. Answering these plainly is what reads as a live box and keeps a
+        // scanner engaged, while the canned text stays useless as free compute. serve() still logs +
+        // reports the recon. Checked first, so an identity probe is never diverted to the troll path.
+        if (IdentityResponder::matches($req->userText)) {
+            return IdentityResponder::answer($req->userText);
+        }
+
         // Code requests get a static wrong-language snippet — no model call, no gate. (serve() still
         // logs + reports it; the recon intel is the point.)
         if (NonsenseFallback::isCodeRequest($req->userText)) {
@@ -253,6 +261,9 @@ class AiChatHandler
             'method' => $ctx->method,
             'path' => substr($ctx->path, 0, 200),
             'ua' => substr($ctx->headers['User-Agent'] ?? '', 0, 160),
+            // Tags the row as fake-inference-API traffic so the dashboard can filter to it (the "AI API"
+            // quick view), distinct from the LLM-generated fake pages that carry event 'llm-fake'.
+            'event' => 'ai-api',
             'matched' => true,
             'severity' => AttackClassifier::severityFor(AttackClassifier::AI_API_RECON),
             'templates' => ['payload-' . AttackClassifier::AI_API_RECON],

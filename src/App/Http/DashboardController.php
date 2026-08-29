@@ -233,6 +233,8 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"event":"trap"}\'>spider trap</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"panel"}\'>admin panel</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"shell"}\'>web console</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"event":"ai-api"}\'>AI API</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"event":"llm-fake"}\'>LLM pages</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"VNC"}\'>VNC</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"SIP"}\'>SIP logs</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"SIP","recording":"1"}\'>SIP recordings</button>';

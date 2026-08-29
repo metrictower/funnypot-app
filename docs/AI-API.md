@@ -2,8 +2,12 @@
 
 funnypot impersonates three AI-inference HTTP APIs so a scanner hunting exposed LLM servers (to
 steal GPU / free inference) believes it found a fat multi-model rig. The recon surface is
-byte-identical to the real APIs; when an attacker actually chats with a model, they get a
-deliberately wrong answer.
+byte-identical to the real APIs. When an attacker chats, the reply is deliberately wrong on purpose —
+so the box is worthless as free compute — with one exception: the cheap identity/capability probes a
+scanner opens with ("what model are you", "who made you") are answered *plainly and believably*, since
+a coherent "I'm &lt;model&gt; by &lt;vendor&gt;" is what reads as a live box and keeps the scanner
+engaged. Those answers are hardcoded (no sidecar call), so believability never costs a real generation
+or hands the attacker a working model.
 
 | Dialect | Endpoints |
 |---|---|
@@ -67,6 +71,14 @@ The chat handler never asks the model to "be wrong" — live testing showed it j
 answers correctly. Instead it corrupts the *question* and has the model answer the corrupted question
 straight:
 
+0. **Identity/capability probes are answered for real** (checked first, so they never reach the troll
+   path). A message that reads as "what model are you / who made you / what can you do" gets a
+   deterministic hardcoded persona line (house identity: **Mythos**, by **Anthropic** — cosmetic,
+   swap it in `IdentityResponder`), with a correct answer to a bundled trivial sum appended when the
+   probe carries one ("what model are you, and what is 1+1" → "…And 1 + 1 = 2."). No sidecar call, no
+   gate: the answer is cheap and canned, so it convinces without becoming usable compute. The detector
+   is deliberately narrower than a bare "model" so it doesn't misfire on requests like "download the
+   model file".
 1. **Word-swap.** Content words in the attacker's message are swapped for absurd nouns (pineapple,
    walrus, trombone, ...) while function words and sentence shape are kept, so "what is the capital of
    France" becomes a still-grammatical "what is the trombone of pineapple" — and the model answers
@@ -93,7 +105,9 @@ for every generated answer, never a model-driven redirect and never a 500.
 ## Threat intel
 
 Every chat-path hit is logged (path, method, IP, requested model, whether a key was sent) and
-classified `ai_api_recon` (medium severity), then reported to AbuseIPDB the same way any other attack
-class is — through the existing self-guarded reporter, so `FUNNYPOT_SELF_IPS` still protects the
+classified `ai_api_recon` (medium severity). The row is tagged with event `ai-api`, so the dashboard's
+**AI API** quick-view filter narrows the feed to this surface (distinct from the LLM-generated fake
+pages, which carry event `llm-fake` behind the **LLM pages** filter). It is then reported to AbuseIPDB
+the same way any other attack class is — through the existing self-guarded reporter, so `FUNNYPOT_SELF_IPS` still protects the
 operator's own test traffic from being reported. Confirm your test egress IP is in
 `FUNNYPOT_SELF_IPS` before probing this surface against prod.

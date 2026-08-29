@@ -26,6 +26,7 @@ function detectSource(r){
   if(r.method==='VNC'||r.proto==='vnc') return 'VNC';
   if(r.method==='SIP'||r.proto==='sip') return 'SIP';
   if(r.event==='llm-fake') return 'LLM';
+  if(r.event==='ai-api') return 'AI';
   if(r.event==='decoy-archive') return 'Decoy';
   const ids=r.templates||[];
   if(ids.some(id=>id.indexOf('attack-crs-')===0)) return 'CRS';
