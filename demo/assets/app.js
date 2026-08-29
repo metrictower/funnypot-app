@@ -23,6 +23,7 @@ function applyFilter(){document.querySelectorAll('#rows tr').forEach(tr=>tr.clas
 // Which layer answered this hit, derived from the served template ids / event. Precedence order
 // (nuclei-exact > CRS-class > custom attack > LLM) is mirrored here so the label names what served.
 function detectSource(r){
+  if(r.method==='VNC'||r.proto==='vnc') return 'VNC';
   if(r.event==='llm-fake') return 'LLM';
   if(r.event==='decoy-archive') return 'Decoy';
   const ids=r.templates||[];

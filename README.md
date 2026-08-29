@@ -200,6 +200,21 @@ Set with the `FUNNYPOT_STYLE` environment variable (the demo defaults to `realis
 Fuller content is checked against the matcher before use. If a fuller body would not satisfy the scanner
 it falls back to minimal, so the extra detail can never break the guarantee.
 
+`FUNNYPOT_VNC_STYLE` overrides the global style for the VNC honeypot alone (deployments always set the
+global — the Docker image defaults it to `realistic` — so a per-service override must win to mean
+anything). Under `taunt`, the VNC desktop shows a realistic fake ETH staking wallet desktop with an arrow
+cursor, and the clipboard is hijacked on connect. The first click springs a two-phase trap: a fake
+`Reverse VNC connection?` Windows dialog appears (`FUNNYPOT_VNC_POPUP_DELAY`, default 2s), then the
+storm starts — skull cursor, accordion resize that accordions between a tiny desktop and a fake
+8192-wide six-monitor layout (`ExtendedDesktopSize`, falling back to legacy `DesktopSize`), flashing
+trollface/skull animation, and beeps — and the connection is dropped after `FUNNYPOT_VNC_TAUNT_DURATION`
+(default 4s), so a reconnecting client walks straight back into it. While the dialog is up it dodges
+the pointer so it can never be clicked (`FUNNYPOT_VNC_DODGE_POPUP`), and just before the drop the
+server sprays a burst of invalid RFB — a bogus version banner, a rectangle with an unknown encoding,
+a length-lying clipboard message, unknown message types — to confuse the attacker's viewer
+(`FUNNYPOT_VNC_MALFORMED_EXIT`). Frame buffering is capped so a client that stops reading during the
+storm can never exhaust the listener's memory.
+
 ## The emulation catalog
 
 Every capability funnypot can emulate (attack classes, product decoys, protocol services, the nuclei

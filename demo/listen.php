@@ -23,6 +23,8 @@ use Funnypot\Protocol\Listener;
 use Funnypot\Protocol\ProtocolTemplateSet;
 use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\SshServer;
+use Funnypot\Protocol\Vnc\VncConfig;
+use Funnypot\Protocol\Vnc\VncServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -78,6 +80,14 @@ $fsSeed = $config->personaSeed;
 if ($protocol === 'ssh') {
     $keyPath = getenv('FUNNYPOT_SSH_HOSTKEY') ?: __DIR__ . '/storage/ssh_host_ed25519';
     (new SshServer(HostKey::load($keyPath), $log, identitySeed: $fsSeed, secret: $fsSecret))->run($bind);
+    exit(0);
+}
+
+// VNC is a visual RFB 3.8 framebuffer honeypot: renders deception themes (FBI, Win95, TempleOS),
+// injects clipboard, beeps, sets troll cursor, and logs clicks/keys.
+if ($protocol === 'vnc') {
+    $vncConfig = VncConfig::fromEnv();
+    (new VncServer($vncConfig, $log))->run($bind);
     exit(0);
 }
 

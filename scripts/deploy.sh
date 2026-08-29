@@ -64,7 +64,7 @@ SSH_OPTS=(-i "$KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o Connec
 # Known HTTP + alt-HTTP + app/panel ports (nginx) plus the TCP protocol-honeypot ports (mail/cache/
 # shell + databases + SCADA — see demo/entrypoint.sh). Keep in sync with demo/entrypoint.sh +
 # demo/Dockerfile and open the matching inbound rules in the EC2 security group (the SG gates reachability).
-PORTS="21 23 25 79 80 81 88 110 143 443 502 591 873 2082 2083 2086 2087 2095 2096 2181 2222 3000 3128 3306 3310 4433 4443 5000 5432 5601 5900 6379 7001 7070 7080 8000 8001 8008 8009 8080 8081 8082 8083 8088 8090 8161 8180 8443 8500 8834 8843 8880 8888 8983 9000 9080 9090 9200 9443 10000 10443 11211 27017 44818"
+PORTS="21 23 25 79 80 81 88 110 143 443 502 591 873 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 4243 4433 4443 5000 5432 5555 5601 5900 5984 6379 7001 7070 7080 7474 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
 
 echo "==> [1/4] build image locally ($PLATFORM)"
 docker build --platform "$PLATFORM" -f "$REPO_ROOT/demo/Dockerfile" -t funnypot "$REPO_ROOT"
@@ -110,6 +110,10 @@ for p in $PORTS; do PFLAGS="$PFLAGS -p $p:$p"; done
 # Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
 # FUNNYPOT_SSH_PORT set to the moved sshd port above.
 if [ "${FUNNYPOT_SSH_ON_22:-0}" = "1" ]; then PFLAGS="$PFLAGS -p 22:2222"; fi
+# Extra VNC scan ports all forward to the ONE container VNC listener on 5900 (a single process
+# serves them — no per-port listener). DNAT rewrites the dest to 5900, so alt-port hits log as
+# 5900. Open these in the security group too, or they are unreachable. Empty to disable.
+for vp in ${FUNNYPOT_VNC_ALT_PORTS:-5901 5902 5800}; do PFLAGS="$PFLAGS -p $vp:5900"; done
 # LLM sidecar: network + run commands (single line, ';'-separated to keep the remote quoting simple).
 # All three vars are empty when LLM_ON=0, so the funnypot run below is byte-identical to before. The
 # memory cap means the kernel OOM-kills the SIDECAR, never the honeypot, if the model overruns.
@@ -143,6 +147,12 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
     sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS \
         -e FUNNYPOT_EPOCH=$(date +%s) \
         -e FUNNYPOT_STYLE=${FUNNYPOT_STYLE:-realistic} \
+        -e FUNNYPOT_VNC_STYLE='${FUNNYPOT_VNC_STYLE:-}' \
+        -e FUNNYPOT_VNC_IMAGE='${FUNNYPOT_VNC_IMAGE:-}' \
+        -e FUNNYPOT_VNC_CLIPBOARD='${FUNNYPOT_VNC_CLIPBOARD:-}' \
+        -e FUNNYPOT_VNC_STROBE_RESIZE='${FUNNYPOT_VNC_STROBE_RESIZE:-}' \
+        -e FUNNYPOT_VNC_TINY_WIDTH='${FUNNYPOT_VNC_TINY_WIDTH:-480}' \
+        -e FUNNYPOT_VNC_TINY_HEIGHT='${FUNNYPOT_VNC_TINY_HEIGHT:-480}' \
         -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
         -e FUNNYPOT_ADMIN_PASSWORD='$ADMIN_PASSWORD' \
         -e FUNNYPOT_MODE='${FUNNYPOT_MODE:-}' \
