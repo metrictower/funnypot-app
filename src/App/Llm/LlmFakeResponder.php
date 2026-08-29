@@ -6,6 +6,8 @@ namespace Funnypot\App\Llm;
 
 use Funnypot\Core\Support\Chrome\PageSlots;
 use Funnypot\Core\Support\VisualPersona;
+use Funnypot\App\Render\Panel\FakePersistence;
+use Funnypot\App\Storage\FakePersistenceStore;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\Core\Detection;
@@ -35,6 +37,7 @@ final class LlmFakeResponder
         private int $maxConcurrent = 4,
         private int $personaSeed = 0,
         private string $htmlArtifactVersion = '',
+        private ?FakePersistenceStore $persistence = null,
     ) {
     }
 
@@ -80,10 +83,17 @@ final class LlmFakeResponder
         // byte-identical panel cache below, since caching would freeze the live value (the tell it avoids).
         $isLive = $profile->renderer !== null && $profile->renderer->isLivePath($context->path);
 
+        // A persistence-eligible panel view echoes THIS visitor's own submitted note/message/edit
+        // (escaped). Like a live view it must never touch the byte-identical cache — a cached per-ip
+        // echo would freeze the value and, worse, serve one visitor's text to another.
+        $isPersistable = $this->persistence !== null && $profile->renderer !== null
+            && FakePersistence::isPersistablePath($context->path);
+        $noCache = $isLive || $isPersistable;
+
         // 1. Cache hit — the common case, served byte-identical, no model call, no gate query. The
         //    stored Content-Type is authoritative (a path's kind is fixed), so serve it, not a guess.
-        //    Skipped for live paths (they must re-render).
-        if (!$isLive) {
+        //    Skipped for live/persistable paths (they must re-render).
+        if (!$noCache) {
             $hit = $this->cache->get($key, $version);
             if ($hit !== null) {
                 return $this->build($hit['status'], $hit['content_type'], $hit['body']);
@@ -104,15 +114,23 @@ final class LlmFakeResponder
         //    200 (you are "in" the panel), byte-identical per deploy, cached like any other fake. The plain
         //    velocity/bulk-scan gate below still governs every NON-panel path (anti-DoS + anti-enumeration).
         if ($isPanel && $profile->renderer !== null) {
+            // On a write endpoint, capture the submitted fields first so this same render already
+            // reflects them; the facade also carries the visitor's stored items to the section for echo.
+            $fake = null;
+            if ($this->persistence !== null) {
+                $fake = new FakePersistence($this->persistence, $clientIp, $this->personaSeed);
+                $fake->capture($context);
+            }
             $body = $profile->renderer->render(
                 PageSlots::fromArray([]),
                 VisualPersona::fromSeed($this->personaSeed),
-                $context
+                $context,
+                $fake
             );
             if (!$this->sanitizer->pageBodyOk($body, true)) {
                 return null;                                  // defensive: our own chrome should always pass
             }
-            if (!$isLive) {                                   // a live view re-renders every request; never cache it
+            if (!$noCache) {                                  // a live/persistable view re-renders every request; never cache it
                 $this->cache->put($key, 200, $profile->contentType, $body, $version);
             }
 

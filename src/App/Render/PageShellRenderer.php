@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Funnypot\App\Render;
 
+use Funnypot\App\Render\Panel\FakePersistence;
 use Funnypot\Core\RequestContext;
 use Funnypot\Core\Support\Chrome\Esc;
 use Funnypot\Core\Support\Chrome\GenericSkin;
@@ -38,12 +39,14 @@ final class PageShellRenderer
         return (bool) preg_match('#/bank/crypto/staking/rewards(/|$)#', $path);
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, RequestContext $ctx): string
+    public function render(PageSlots $slots, VisualPersona $persona, RequestContext $ctx, ?FakePersistence $persistence = null): string
     {
         try {
             $escapedPath = Esc::text(substr($ctx->path, 0, 200));
             $slots = $slots->resolveMarkers($persona);
-            return $this->skins->select($ctx->path)->render($slots, $persona, $escapedPath, $ctx->path);
+            // The extra $persistence arg reaches only the AdminLteSkin panel dispatch (its sections echo a
+            // visitor's stored bait); every other skin declares four params and ignores it.
+            return $this->skins->select($ctx->path)->render($slots, $persona, $escapedPath, $ctx->path, $persistence);
         } catch (Throwable $e) {
             // Defensive floor: an empty-slot render of the default skin is always safe.
             return (new GenericSkin())->render(PageSlots::fromArray([]), $persona, '', $ctx->path);

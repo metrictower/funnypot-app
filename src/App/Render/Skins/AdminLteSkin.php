@@ -7,6 +7,7 @@ use Funnypot\App\Render\Fake\ServerProfile;
 use Funnypot\Core\Support\Chrome\PageSlots;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\Support\Chrome\PathSegments;
+use Funnypot\App\Render\Panel\FakePersistence;
 use Funnypot\App\Render\Panel\PanelRegistry;
 use Funnypot\Core\Support\VisualPersona;
 
@@ -143,7 +144,7 @@ final class AdminLteSkin extends AbstractSkin
         return 'adminlte';
     }
 
-    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = ''): string
+    public function render(PageSlots $slots, VisualPersona $persona, string $escapedPath, string $path = '', ?FakePersistence $persistence = null): string
     {
         $seed = $persona->seed();
         $sp = ServerProfile::fromSeed($seed);
@@ -181,7 +182,9 @@ final class AdminLteSkin extends AbstractSkin
         }
 
         // Dispatch the module to its PanelSection; unknown module -> Dashboard (never a 404 in-panel).
-        $html .= $this->registry->sectionFor($module)->render($route, $persona, $mountBase);
+        // Sections that echo a visitor's stored bait read the optional $persistence facade; the rest
+        // declare three params and ignore the extra arg.
+        $html .= $this->registry->sectionFor($module)->render($route, $persona, $mountBase, $persistence);
 
         $html .= '</section></div>'; // alte-content-wrapper
         $html .= '</div>'; // alte-wrapper

@@ -7,6 +7,9 @@ namespace Funnypot\Tests\App\Panel;
 use Funnypot\App\Render\Fake\Appliances;
 use Funnypot\App\Render\Fake\Building;
 use Funnypot\App\Render\Panel\AppliancesSection;
+use Funnypot\App\Render\Panel\FakePersistence;
+use Funnypot\App\Storage\FakePersistenceStore;
+use Funnypot\Core\RequestContext;
 use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
@@ -193,12 +196,36 @@ final class AppliancesSectionTest extends TestCase
 
     public function test_signage_message_and_pa_broadcast_are_canned_and_do_not_reflect(): void
     {
+        // With no persistence facade bound, the message is still canned and never reflected.
         $s = new AppliancesSection();
         $signHtml = $s->render($this->route('signage', 'all', 'message'), VisualPersona::fromSeed(6), '/panel');
         self::assertStringContainsString('Message pushed', $signHtml);
         self::assertStringContainsString('screens', $signHtml);
         $paHtml = $s->render($this->route('pa', 'broadcast'), VisualPersona::fromSeed(6), '/panel');
         self::assertStringContainsString('Page queued', $paHtml);
+    }
+
+    public function test_signage_message_echoes_the_visitors_own_push_escaped_and_per_ip(): void
+    {
+        if (!extension_loaded('pdo_sqlite')) {
+            self::markTestSkipped('ext-pdo_sqlite not loaded');
+        }
+        $store = new FakePersistenceStore(':memory:');
+        $path = '/panel/appliances/signage/all/message';
+        $author = new FakePersistence($store, '9.9.9.9', 6);
+        $author->capture(new RequestContext('POST', $path, '', [], 'message=' . rawurlencode('"><script>alert(1)</script>')));
+
+        $s = new AppliancesSection();
+        $html = $s->render($this->route('signage', 'all', 'message'), VisualPersona::fromSeed(6), '/panel', $author);
+        self::assertStringContainsString('Message on air', $html);
+        self::assertStringContainsString('&lt;script&gt;', $html, 'the marker is present but escaped');
+        self::assertStringNotContainsString('<script>alert(1)', $html, 'never executable — no stored XSS');
+
+        // A different ip sees only the canned confirmation, never this visitor's text.
+        $other = new FakePersistence($store, '2.2.2.2', 6);
+        $html2 = $s->render($this->route('signage', 'all', 'message'), VisualPersona::fromSeed(6), '/panel', $other);
+        self::assertStringNotContainsString('Message on air', $html2);
+        self::assertStringNotContainsString('&lt;script&gt;', $html2);
     }
 
     public function test_vending_payment_shows_masked_test_card_only(): void

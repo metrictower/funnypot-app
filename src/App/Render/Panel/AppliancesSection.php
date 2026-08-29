@@ -48,7 +48,7 @@ final class AppliancesSection extends AbstractPanelSection
     /** PA / paging. */
     private const PA_CTL = ['vol', 'broadcast'];
 
-    public function render(array $route, VisualPersona $persona, string $navBase): string
+    public function render(array $route, VisualPersona $persona, string $navBase, ?FakePersistence $persistence = null): string
     {
         $appl = Appliances::fromSeed($persona->seed());
         switch ($route['section']) {
@@ -63,7 +63,7 @@ final class AppliancesSection extends AbstractPanelSection
             case 'elevators':
                 return $this->elevators($appl, $route, $persona, $navBase);
             case 'signage':
-                return $this->signage($appl, $route, $persona, $navBase);
+                return $this->signage($appl, $route, $persona, $navBase, $persistence);
             case 'pa':
                 return $this->pa($appl, $route, $persona, $navBase);
             default:
@@ -795,7 +795,7 @@ final class AppliancesSection extends AbstractPanelSection
 
     // --- signage ------------------------------------------------------------
 
-    private function signage(Appliances $appl, array $route, VisualPersona $persona, string $navBase): string
+    private function signage(Appliances $appl, array $route, VisualPersona $persona, string $navBase, ?FakePersistence $persistence = null): string
     {
         $id = $route['entity'];
         if ($id === '') {
@@ -803,7 +803,7 @@ final class AppliancesSection extends AbstractPanelSection
         }
         $subtab = $route['subtab'];
         if (in_array($subtab, self::SIGN_CTL, true)) {
-            return $this->signageControlLeaf($appl, $id, $subtab, $route['action'], $navBase);
+            return $this->signageControlLeaf($appl, $id, $subtab, $route['action'], $navBase, $persistence);
         }
         return $this->signageDetail($appl, $id, $navBase);
     }
@@ -861,7 +861,9 @@ final class AppliancesSection extends AbstractPanelSection
             . $this->emergencyMessageCard($appl, $id, $navBase);
     }
 
-    /** The emergency-message push box — a POST form whose confirmation is canned and never echoes the text (E6). */
+    /** The emergency-message push box — a POST form. Its "message pushed" leaf echoes the visitor's own
+     *  last submission back (escaped, per ip, TTL'd) so a stored-vuln probe looks like it landed (E6:
+     *  escaped, never executable). */
     private function emergencyMessageCard(Appliances $appl, string $scope, string $navBase): string
     {
         $action = $this->esc($navBase . '/appliances/signage/' . $scope . '/message');
@@ -870,24 +872,32 @@ final class AppliancesSection extends AbstractPanelSection
             . '<textarea name="message" rows="3" style="width:100%;max-width:520px;padding:8px;border:1px solid #c9ccd1;border-radius:4px" placeholder="Message to push to all screens…"></textarea>'
             . '<div style="margin-top:8px"><button class="alte-btn" type="submit" style="padding:6px 14px;border:1px solid #3b7ea1;background:#3b7ea1;color:#fff;border-radius:4px;cursor:pointer">Push to screens</button></div>'
             . '</form>'
-            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Displayed on all powered screens until cleared. The message is not stored on this panel.</p>';
+            . '<p class="fp-muted" style="font-size:.85em;color:#6c757d;margin-top:8px">Displayed on all powered screens until cleared.</p>';
         return $this->card('Push content', $form, 'signage broadcast');
     }
 
-    private function signageControlLeaf(Appliances $appl, string $id, string $verb, string $arg, string $navBase): string
+    private function signageControlLeaf(Appliances $appl, string $id, string $verb, string $arg, string $navBase, ?FakePersistence $persistence = null): string
     {
         $crumbs = [['Corevance', $navBase], ['Appliances & AV', $navBase . '/appliances'],
                    ['Digital signage', $navBase . '/appliances/signage'], ['Command', '']];
         if ($verb === 'message') {
-            // Canned confirmation; the posted message is never reflected (spec E6).
             $count = $appl->signageCount();
-            return $this->breadcrumbHtml($crumbs) . $this->controlResultCard('Message pushed', [
+            $rows = [
                 ['Action', 'Broadcast message to signage'],
                 ['Scope', $id === 'all' ? 'All screens' : 'Screen ' . $id],
                 ['Result', 'Displayed on ' . $count . ' screen' . ($count === 1 ? '' : 's')],
-                ['Note', 'Content stays until cleared; not stored on this panel'],
-                ['Job', $appl->commandId('signmsg|' . $id)],
-            ]);
+            ];
+            // Fake persistence: echo the visitor's OWN last pushed message (escaped by the kv table) so a
+            // write-then-repoll looks stored. Bounded + per ip, never executable (spec E6 escape rule).
+            $pushed = $persistence !== null ? $persistence->items(FakePersistence::signageMessageKey($id)) : [];
+            if (isset($pushed[0]['message'])) {
+                $rows[] = ['Message on air', $pushed[0]['message']];
+                $rows[] = ['Status', 'Live on all powered screens until cleared'];
+            } else {
+                $rows[] = ['Note', 'Content stays until cleared'];
+            }
+            $rows[] = ['Job', $appl->commandId('signmsg|' . $id)];
+            return $this->breadcrumbHtml($crumbs) . $this->controlResultCard('Message pushed', $rows);
         }
         $s = $appl->signage($id);
         if ($verb === 'power') {
