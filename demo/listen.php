@@ -39,6 +39,14 @@ use Funnypot\Protocol\Snmp\SnmpConfig;
 use Funnypot\Protocol\Snmp\SnmpServer;
 use Funnypot\Protocol\Ldap\LdapConfig;
 use Funnypot\Protocol\Ldap\LdapServer;
+use Funnypot\Protocol\S7comm\S7commConfig;
+use Funnypot\Protocol\S7comm\S7commServer;
+use Funnypot\Protocol\Adb\AdbConfig;
+use Funnypot\Protocol\Adb\AdbServer;
+use Funnypot\Protocol\Bacnet\BacnetConfig;
+use Funnypot\Protocol\Bacnet\BacnetServer;
+use Funnypot\Protocol\Rtsp\RtspConfig;
+use Funnypot\Protocol\Rtsp\RtspServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -153,6 +161,34 @@ if ($protocol === 'snmp') {
 // no directory data.
 if ($protocol === 'ldap') {
     (new LdapServer(LdapConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// S7comm: Siemens S7 PLC honeypot (ISO-on-TCP 102) — COTP/S7 handshake, captures PLC memory-read
+// and SZL enumeration; returns a plausible S7-1200/300 identity, exposes no real process data.
+if ($protocol === 's7comm') {
+    (new S7commServer(S7commConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// ADB: Android Debug Bridge honeypot (5555) — presents an auth-free device, captures the shell/exec
+// commands + pushed payloads botnets deliver; executes nothing.
+if ($protocol === 'adb') {
+    (new AdbServer(AdbConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// BACnet: building-automation honeypot (UDP 47808) — answers Who-Is/ReadProperty with a persona
+// device, captures device/point enumeration; anti-amplification; serves no real building data.
+if ($protocol === 'bacnet') {
+    (new BacnetServer(BacnetConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// RTSP: camera/DVR honeypot (554) — captures the requested stream path (camera-model fingerprint) +
+// Basic/Digest credentials; returns a plausible SDP but streams no real media.
+if ($protocol === 'rtsp') {
+    (new RtspServer(RtspConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

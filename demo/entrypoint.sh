@@ -109,6 +109,10 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn mqtt        0.0.0.0:1883
     spawn snmp        0.0.0.0:161
     spawn ldap        0.0.0.0:389
+    spawn s7comm      0.0.0.0:102
+    spawn adb         0.0.0.0:5555
+    spawn bacnet      0.0.0.0:47808
+    spawn rtsp        0.0.0.0:554
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181
