@@ -84,8 +84,9 @@ final class CredentialStoreTest extends TestCase
 
         $log2 = end($logged);
         $this->assertSame('login', $log2['event']);
-        // Must be REJECTED!
-        $this->assertStringContainsString('REJECTED conflicting password', $log2['path']);
+        // A different password on a cracked AOR is CAPTURED, never rejected — a honeypot lures by
+        // staying easy to authenticate, so every guess is answered 200 and logged as intel.
+        $this->assertStringContainsString('additional credential captured', $log2['path']);
 
         // 4. Third attempt: softphone logs back in using the original "firstpass"
         $reg3 = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: latch-c4\r\nCSeq: 4 REGISTER\r\n"
@@ -100,8 +101,8 @@ final class CredentialStoreTest extends TestCase
     /**
      * Regression: a softphone re-REGISTERs with the SAME password but a fresh nonce every time (the
      * digest response is nonce-dependent). The latch must recognise it as the same credential and
-     * verify — not spuriously reject it as a "conflicting" guess. A genuinely different password on a
-     * fresh nonce must still conflict.
+     * verify — not re-log it as a fresh guess. A genuinely different password on a fresh nonce is
+     * captured as intel, never rejected.
      */
     public function test_reregister_same_password_new_nonce_is_verified(): void
     {
@@ -143,9 +144,9 @@ final class CredentialStoreTest extends TestCase
         $server->dispatchMessage($reg('root', $n2), '10.0.0.9', 5060, 'udp');
         $this->assertStringContainsString('latched credentials verified', end($logged)['path']);
 
-        // 3. A genuinely different password on a fresh nonce still conflicts.
+        // 3. A genuinely different password on a fresh nonce is captured, not rejected.
         $n3 = $freshNonce();
         $server->dispatchMessage($reg('hunter2', $n3), '10.0.0.9', 5060, 'udp');
-        $this->assertStringContainsString('REJECTED conflicting password', end($logged)['path']);
+        $this->assertStringContainsString('additional credential captured', end($logged)['path']);
     }
 }

@@ -589,10 +589,12 @@ final class SipServer
         // Verify nonce was issued by us (proves two-way round-trip!)
         $validRoundTrip = isset($this->activeNonces[$nonce]) || $transport === 'tcp';
 
-        // Check if password matches a weak/default password
-        // Smart Credential Latching:
-        // If an IP has already latched a working password for this extension, enforce that password strictly!
-        // Conflicting password attempts are rejected with 403 Forbidden so svcrack sees only 1 valid password.
+        // Credential capture for an already-known AOR.
+        // Once any credential has been latched for (IP, extension) we ACCEPT every subsequent
+        // REGISTER — a honeypot lures by being trivially easy to authenticate. Rejecting a second
+        // password would turn bots away after one crack AND bounce a real softphone: an uncrackable
+        // password can only be stored as a nonce-bound hash, so on the next refresh (fresh nonce)
+        // the SAME password no longer matches. We answer 200 either way, still capturing the intel.
         if ($this->config->latchPasswords && $this->credStore->hasLatched($peerIp, $user)) {
             // Same credential if the latched plaintext re-verifies against THIS request's nonce/nc
             // (a real softphone re-REGISTERs with the same password but a fresh nonce/nc, so a raw
@@ -602,30 +604,22 @@ final class SipServer
             $sameCredential = $latched !== null
                 && (SipMessage::verifyDigest($auth, $latched, $req->method) || hash_equals($latched, $responseHash));
 
-            if ($sameCredential) {
-                // Re-authentication using the latched password succeeds!
-                $res = $req->buildRegisteredOk($toTag, $contact, 3600, $this->config->userAgent);
-                $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
-
-                $this->logEvent([
-                    'proto' => 'sip',
-                    'method' => 'SIP',
-                    'event' => 'login',
-                    'ip' => $peerIp,
-                    'port' => $peerPort,
-                    'path' => "SIP REGISTER ext:{$user} (latched credentials verified)",
-                    'matched' => 1,
-                    'served' => 1,
-                    'reportable' => $validRoundTrip,
-                ]);
-
-                return;
-            }
-
-            // Conflicting password attempted on an already cracked extension!
-            // Reject with 403 Forbidden
-            $res = $req->buildForbidden($toTag, $this->config->userAgent);
+            // Accept every REGISTER on a known AOR — same credential or a fresh guess.
+            $res = $req->buildRegisteredOk($toTag, $contact, 3600, $this->config->userAgent);
             $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+
+            if ($sameCredential) {
+                $path = "SIP REGISTER ext:{$user} (latched credentials verified)";
+            } else {
+                // A different guess on an already-cracked AOR: capture it as intel. Re-latch the
+                // recovered plaintext when we can name it, so a caller's steady-state password
+                // re-verifies cleanly on later refreshes instead of re-logging every time.
+                $recovered = $this->recoverPlaintext($auth, $req->method);
+                if ($recovered !== null) {
+                    $this->credStore->latch($peerIp, $user, $recovered);
+                }
+                $path = "SIP REGISTER ext:{$user} additional credential captured (hash: {$responseHash})";
+            }
 
             $this->logEvent([
                 'proto' => 'sip',
@@ -633,7 +627,7 @@ final class SipServer
                 'event' => 'login',
                 'ip' => $peerIp,
                 'port' => $peerPort,
-                'path' => "SIP REGISTER ext:{$user} REJECTED conflicting password attempt (hash: {$responseHash})",
+                'path' => $path,
                 'matched' => 1,
                 'served' => 1,
                 'reportable' => $validRoundTrip,
@@ -726,6 +720,26 @@ final class SipServer
         // Return 403 Forbidden
         $res = $req->buildForbidden($toTag, $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+    }
+
+    /**
+     * Recover the cleartext password behind a digest response when it is one we can name
+     * (username-as-password or a seeded default). Returns null for an unknowable password —
+     * a digest hash is one-way, so an arbitrary password cannot be reconstructed.
+     */
+    private function recoverPlaintext(array $auth, string $method): ?string
+    {
+        $user = $auth['username'] ?? '';
+        if ($user !== '' && SipMessage::verifyDigest($auth, $user, $method)) {
+            return $user;
+        }
+        foreach ($this->config->defaultPasswords as $cand) {
+            if (SipMessage::verifyDigest($auth, $cand, $method)) {
+                return $cand;
+            }
+        }
+
+        return null;
     }
 
     /**
