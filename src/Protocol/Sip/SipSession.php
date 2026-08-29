@@ -60,6 +60,17 @@ final class SipSession
     public string $recordedInbound = '';
     public string $recordingUrl = '';
 
+    // Attacker attribution captured at call setup: the raw User-Agent and our tool guess.
+    public string $userAgent = '';
+    public string $tool = '';
+
+    // DTMF capture (RFC 4733 telephone-event). $dtmfPt is the payload type the caller offered in
+    // its SDP (default 101); $dtmfDigits accumulates each pressed key. A single key-press spans many
+    // RTP packets sharing one timestamp — $lastDtmfTs dedups them so each digit is recorded once.
+    public ?int $dtmfPt = null;
+    public string $dtmfDigits = '';
+    public int $lastDtmfTs = -1;
+
     public function __construct(string $callId, string $peerIp, int $peerPort, string $transport = 'udp')
     {
         $this->callId = $callId;

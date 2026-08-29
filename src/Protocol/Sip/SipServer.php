@@ -36,6 +36,26 @@ final class SipServer
     /** @var array<string, string> Nonce store: nonce => issued timestamp */
     private array $activeNonces = [];
 
+    /**
+     * Per-source-IP token bucket throttling UDP responses (F4). A spoofed request forges its source
+     * as a victim, so every UDP reply we emit lands on that victim — capping replies per apparent
+     * source bounds how hard the honeypot can be turned into a reflector. TCP is return-routable, so
+     * only UDP is metered.
+     * @var array<string, array{tokens: float, last: float}>
+     */
+    private array $udpResponseBuckets = [];
+    private const UDP_RESP_BURST = 20.0;   // bucket capacity
+    private const UDP_RESP_RATE = 10.0;    // tokens refilled per second
+    private const UDP_BUCKET_MAX_IPS = 4096; // cap tracked IPs so the map can't grow unbounded
+
+    /** The request currently being dispatched, so logEvent can attach attacker attribution. */
+    private ?SipMessage $currentReq = null;
+    private string $currentTransport = 'udp';
+    private int $currentPeerPort = 0;
+
+    /** DTMF event code (0-15) => key label, per RFC 4733 §3.2. */
+    private const DTMF_EVENTS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#', 'A', 'B', 'C', 'D'];
+
     private RtpStreamer $rtpStreamer;
     private ToneGenerator $toneGen;
     private PersonaSoundboard $soundboard;
@@ -52,7 +72,7 @@ final class SipServer
         ?CredentialStore $credStore = null
     ) {
         $this->logger = $logger;
-        $this->rtpStreamer = $rtpStreamer ?? new RtpStreamer();
+        $this->rtpStreamer = $rtpStreamer ?? new RtpStreamer($this->config->rtpPort);
         $this->toneGen = new ToneGenerator(
             $this->config->ringFrequency1,
             $this->config->ringFrequency2,
@@ -268,6 +288,12 @@ final class SipServer
             return; // Ignore inbound responses for now
         }
 
+        // Make the request (and its transport) available to logEvent so every event carries
+        // attacker attribution and transport tells without threading them through every handler.
+        $this->currentReq = $req;
+        $this->currentTransport = $transport;
+        $this->currentPeerPort = $peerPort;
+
         switch ($req->method) {
             case 'OPTIONS':
                 $this->handleOptions($req, $peerIp, $peerPort, $transport, $tcpSock);
@@ -293,8 +319,15 @@ final class SipServer
                 $this->handleCancel($req, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 
+            case 'INFO':
+                // Capture any out-of-band DTMF (application/dtmf-relay or application/dtmf), then ack.
+                $this->captureInfoDtmf($req, $peerIp, $peerPort);
+                $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+                $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+                break;
+
             default:
-                // Return 200 OK for other discovery methods (INFO, NOTIFY)
+                // Return 200 OK for other discovery methods (NOTIFY, etc.)
                 $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
@@ -352,6 +385,14 @@ final class SipServer
                 if ($s->peerIp === $pkt['peerIp'] && $s->isStreaming()) {
                     // Caller is still on the line — mark activity so the call doesn't idle out.
                     $s->lastInboundTime = microtime(true);
+
+                    // Out-of-band DTMF (RFC 4733 telephone-event): a keypad press, not audio.
+                    // Decode and log it; do not fold it into the recorded audio channel.
+                    if ($s->dtmfPt !== null && ($pkt['pt'] ?? -1) === $s->dtmfPt) {
+                        $this->captureRtpDtmf($s, $payload, (int) ($pkt['timestamp'] ?? 0));
+                        break;
+                    }
+
                     // Record the caller's audio (the intel) as the recording's left channel.
                     if ($this->config->recordCalls) {
                         $s->recordedInbound .= $payload;
@@ -602,6 +643,10 @@ final class SipServer
         $s->fromTag = $req->getFrom() ?? '';
         $s->dialedNumber = $dialedNumber;
         $s->persona = $persona;
+        $s->userAgent = $this->requestUserAgent($req);
+        $s->tool = $this->classifyTool($req);
+        // Remember which payload type the caller mapped to DTMF so RTP telephone-event packets decode.
+        $s->dtmfPt = $req->sdpTelephoneEventPt;
 
         // Anti-Reflection Invariant (B1): remoteRtpIp is strictly locked to $peerIp
         $s->remoteRtpIp = $peerIp;
@@ -778,9 +823,53 @@ final class SipServer
         if ($transport === 'tcp' && $tcpSock && is_resource($tcpSock)) {
             @fwrite($tcpSock, $raw);
         } elseif ($this->udpSocket && is_resource($this->udpSocket)) {
+            // F4: a spoofed request aims our UDP reply at a forged victim. Meter replies per apparent
+            // source so no single source can pull an unbounded stream of reflected packets.
+            if (!$this->udpResponseAllowed($peerIp)) {
+                return;
+            }
             $dest = "{$peerIp}:{$peerPort}";
             @stream_socket_sendto($this->udpSocket, $raw, 0, $dest);
         }
+    }
+
+    /**
+     * Token-bucket admission for a UDP reply to $ip (F4 anti-reflection throttle). Returns false when
+     * the apparent source has drained its bucket, so the reply is dropped rather than reflected.
+     */
+    private function udpResponseAllowed(string $ip): bool
+    {
+        $now = microtime(true);
+
+        if (!isset($this->udpResponseBuckets[$ip])) {
+            // Bound the map: when full, drop the least-recently-refilled entry before adding one.
+            if (count($this->udpResponseBuckets) >= self::UDP_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->udpResponseBuckets as $k => $b) {
+                    if ($b['last'] < $oldestAt) {
+                        $oldestAt = $b['last'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->udpResponseBuckets[$oldestKey]);
+                }
+            }
+            $this->udpResponseBuckets[$ip] = ['tokens' => self::UDP_RESP_BURST, 'last' => $now];
+        }
+
+        $bucket = &$this->udpResponseBuckets[$ip];
+        $elapsed = max(0.0, $now - $bucket['last']);
+        $bucket['tokens'] = min(self::UDP_RESP_BURST, $bucket['tokens'] + $elapsed * self::UDP_RESP_RATE);
+        $bucket['last'] = $now;
+
+        if ($bucket['tokens'] < 1.0) {
+            return false;
+        }
+        $bucket['tokens'] -= 1.0;
+
+        return true;
     }
 
     private function sessionKey(string $callId, string $peerIp, int $peerPort): string
@@ -832,18 +921,28 @@ final class SipServer
 
         unset($this->sessions[$sessionKey]);
 
-        $this->logEvent([
+        $endEvent = [
             'proto' => 'sip',
             'method' => 'SIP',
             'event' => 'call_end',
             'ip' => $s->peerIp,
             'port' => $s->peerPort,
-            'path' => "SIP call ended: {$s->dialedNumber} ({$duration}s, {$pkts} pkts, persona: {$s->persona})",
+            'path' => "SIP call ended: {$s->dialedNumber} ({$duration}s, {$pkts} pkts, persona: {$s->persona})"
+                . ($s->dtmfDigits !== '' ? ", dtmf: {$s->dtmfDigits}" : ''),
             'matched' => 1,
             'served' => 1,
             'recording' => $recUrl,
             'reportable' => true,
-        ]);
+            // Attribution captured at INVITE — the ending event may fire from the idle loop with no
+            // current request, so carry it from the session rather than from logEvent enrichment.
+            'ua' => $s->userAgent,
+            'tool' => $s->tool,
+            'tells' => $s->transport === 'tcp' ? 'tcp(return-routable)' : 'udp(spoofable)',
+        ];
+        if ($s->dtmfDigits !== '') {
+            $endEvent['dtmf'] = $s->dtmfDigits;
+        }
+        $this->logEvent($endEvent);
     }
 
     /**
@@ -947,8 +1046,183 @@ final class SipServer
         return $ip === '0.0.0.0' ? '127.0.0.1' : $ip;
     }
 
+    /**
+     * The caller's User-Agent, trimmed and length-capped. This is inbound attacker data recorded as
+     * threat intel; it is never echoed back to a client.
+     */
+    private function requestUserAgent(SipMessage $req): string
+    {
+        $ua = trim($req->getHeader('user-agent') ?? $req->getHeader('server') ?? '');
+
+        return $ua === '' ? '' : substr($ua, 0, 128);
+    }
+
+    /**
+     * Best-effort attribution of the SIP tool behind a request from its User-Agent. Purely for the
+     * intel log — these needles match the ATTACKER's advertised client, never anything we emit.
+     */
+    private function classifyTool(SipMessage $req): string
+    {
+        $ua = strtolower($this->requestUserAgent($req));
+        if ($ua === '') {
+            return 'unknown'; // Many scanners send no User-Agent at all.
+        }
+
+        $map = [
+            'friendly-scanner' => 'sipvicious',
+            'friendly scanner' => 'sipvicious',
+            'sipvicious'       => 'sipvicious',
+            'sundayddr'        => 'sundayddr-wardialer',
+            'sipcli'           => 'sipcli',
+            'sip-scan'         => 'sip-scan',
+            'sipscan'          => 'sip-scan',
+            'pplsip'           => 'pplsip-scanner',
+            'vaxsipuseragent'  => 'vaxsip-masscaller',
+            'sipsak'           => 'sipsak',
+            'iwar'             => 'iwar-wardialer',
+            'warvox'           => 'warvox',
+            'sipp'             => 'sipp',
+            'zoiper'           => 'zoiper-softphone',
+            'x-lite'           => 'softphone',
+            'eyebeam'          => 'softphone',
+            'microsip'         => 'softphone',
+            'linphone'         => 'softphone',
+            'pjsua'            => 'pjsip',
+            'pjsip'            => 'pjsip',
+            'asterisk'         => 'asterisk-relay',
+            'freeswitch'       => 'freeswitch-relay',
+            'kamailio'         => 'kamailio-relay',
+            'opensips'         => 'opensips-relay',
+        ];
+        foreach ($map as $needle => $tool) {
+            if (strpos($ua, $needle) !== false) {
+                return $tool;
+            }
+        }
+
+        return 'other';
+    }
+
+    /**
+     * Transport-layer tells that separate an automated flooder from a real softphone: spoofability
+     * of the transport, whether the Via carries the RFC 3261 branch cookie / rport, a missing
+     * Contact, and a source port pinned to 5060 (tools bind it; softphones use an ephemeral port).
+     * @return list<string>
+     */
+    private function transportTells(SipMessage $req, string $transport, int $peerPort): array
+    {
+        $tells = [];
+        $tells[] = $transport === 'tcp' ? 'tcp(return-routable)' : 'udp(spoofable)';
+
+        $via = $req->getVia() ?? '';
+        if ($via === '') {
+            $tells[] = 'no-via';
+        } elseif (stripos($via, 'z9hG4bK') === false) {
+            $tells[] = 'pre-rfc3261-branch';
+        }
+        if (stripos($via, ';rport') === false) {
+            $tells[] = 'no-rport';
+        }
+        if (trim($req->getHeader('contact') ?? '') === '') {
+            $tells[] = 'no-contact';
+        }
+        if ($peerPort === 5060) {
+            $tells[] = 'src-port-5060';
+        }
+
+        return $tells;
+    }
+
+    /**
+     * Decode one inbound RTP telephone-event packet (RFC 4733) and record the key-press. A single
+     * key spans many packets sharing one RTP timestamp, so timestamp-dedup logs each digit once.
+     */
+    private function captureRtpDtmf(SipSession $s, string $payload, int $timestamp): void
+    {
+        if (strlen($payload) < 1 || $timestamp === $s->lastDtmfTs) {
+            return;
+        }
+        $eventCode = ord($payload[0]);
+        if (!isset(self::DTMF_EVENTS[$eventCode])) {
+            return;
+        }
+        $s->lastDtmfTs = $timestamp;
+        $digit = self::DTMF_EVENTS[$eventCode];
+        $s->dtmfDigits .= $digit;
+
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'dtmf',
+            'ip' => $s->peerIp,
+            'port' => $s->peerPort,
+            'path' => "SIP DTMF '{$digit}' on call {$s->dialedNumber} (rfc4733 rtp-event)",
+            'matched' => 1,
+            'served' => 1,
+            'reportable' => true,
+            'ua' => $s->userAgent,
+            'tool' => $s->tool,
+            'tells' => $s->transport === 'tcp' ? 'tcp(return-routable)' : 'udp(spoofable)',
+        ]);
+    }
+
+    /**
+     * Capture DTMF signalled out of band via SIP INFO — both application/dtmf-relay ("Signal=5")
+     * and application/dtmf (a bare digit). The digit is appended to the matching session, if any.
+     */
+    private function captureInfoDtmf(SipMessage $req, string $peerIp, int $peerPort): void
+    {
+        $ctype = strtolower($req->getHeader('content-type') ?? '');
+        if (strpos($ctype, 'dtmf') === false) {
+            return;
+        }
+
+        $body = $req->body;
+        $digit = '';
+        if (preg_match('/Signal\s*=\s*([0-9A-Da-d*#])/', $body, $m)) {
+            $digit = strtoupper($m[1]);
+        } elseif (preg_match('/^\s*([0-9A-Da-d*#])\s*$/', $body, $m)) {
+            $digit = strtoupper($m[1]);
+        }
+        if ($digit === '') {
+            return;
+        }
+
+        $match = $this->findSessionByCallId($req->getCallId() ?? '', $peerIp);
+        if ($match) {
+            [, $s] = $match;
+            $s->dtmfDigits .= $digit;
+        }
+
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'dtmf',
+            'ip' => $peerIp,
+            'port' => $peerPort,
+            'path' => "SIP DTMF '{$digit}' via INFO ({$ctype})",
+            'matched' => 1,
+            'served' => 1,
+            'reportable' => true,
+        ]);
+    }
+
     private function logEvent(array $event): void
     {
+        // Enrich every per-message event with attacker attribution + transport tells, unless the
+        // caller already set them (session-derived events like call_end / dtmf carry their own).
+        if ($this->currentReq !== null) {
+            if (!array_key_exists('ua', $event)) {
+                $event['ua'] = $this->requestUserAgent($this->currentReq);
+            }
+            if (!array_key_exists('tool', $event)) {
+                $event['tool'] = $this->classifyTool($this->currentReq);
+            }
+            if (!array_key_exists('tells', $event)) {
+                $event['tells'] = implode(',', $this->transportTells($this->currentReq, $this->currentTransport, $this->currentPeerPort));
+            }
+        }
+
         if ($this->logger) {
             ($this->logger)($event);
         }

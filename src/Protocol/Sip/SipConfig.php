@@ -15,7 +15,9 @@ final class SipConfig
         public string $userAgent = 'Asterisk PBX 20.5.0',
         public string $realm = 'asterisk',
         public string $audioMode = 'auto', // 'auto' cycles a discovered persona per caller IP; or force one by folder name, or 'fax'/'ring'
-        public string $authMode = 'permissive', // 'permissive' (accepts any password), 'weak', 'open', 'strict'
+        // Default 'weak': accept only weak/default passwords, like a real misconfigured PBX. Accepting
+        // *every* password ('permissive') is itself a tell — no genuine PBX does that.
+        public string $authMode = 'weak', // 'weak' (username/default passwords), 'permissive' (any), 'open', 'strict'
         /** @var list<string> */
         public array $defaultPasswords = ['100', '101', '102', '1234', '123456', 'admin', 'password', 'secret', 'pass', 'guest'],
         public bool $recordCalls = true,
@@ -24,6 +26,9 @@ final class SipConfig
         public int $maxCallDuration = 300,
         /** End a streaming call after this many seconds with no inbound from the caller (hangup detection). */
         public int $callIdleTimeout = 30,
+        // Fixed local RTP media port, published through Docker so inbound caller audio + DTMF reach
+        // us. Default 10000 matches the Asterisk PBX persona (its RTP range opens at 10000).
+        public int $rtpPort = 10000,
         public float $ringFrequency1 = 440.0,
         public float $ringFrequency2 = 480.0,
         public float $ringCadenceOn = 2.0,
@@ -53,12 +58,13 @@ final class SipConfig
         $userAgent = getenv('FUNNYPOT_SIP_USER_AGENT') ?: 'Asterisk PBX 20.5.0';
         $realm = getenv('FUNNYPOT_SIP_REALM') ?: 'asterisk';
         $audioMode = strtolower(getenv('FUNNYPOT_SIP_AUDIO_MODE') ?: 'auto');
-        $authMode = strtolower(getenv('FUNNYPOT_SIP_AUTH_MODE') ?: 'permissive');
+        $authMode = strtolower(getenv('FUNNYPOT_SIP_AUTH_MODE') ?: 'weak');
         $recordCalls = getenv('FUNNYPOT_SIP_RECORD') !== '0';
         $maxCalls = (int) (getenv('FUNNYPOT_SIP_MAX_CALLS') ?: '10');
         $perIp = (int) (getenv('FUNNYPOT_SIP_PER_IP_CALLS') ?: '5');
         $maxDuration = (int) (getenv('FUNNYPOT_SIP_MAX_DURATION') ?: '300');
         $idleTimeout = (int) (getenv('FUNNYPOT_SIP_IDLE_TIMEOUT') ?: '30');
+        $rtpPort = (int) (getenv('FUNNYPOT_SIP_RTP_PORT') ?: '10000');
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
         $recordingsDir = getenv('FUNNYPOT_SIP_RECORDINGS_DIR') ?: '';
         $recMaxBytes = (int) (getenv('FUNNYPOT_SIP_REC_MAX_BYTES') ?: '268435456');
@@ -77,6 +83,7 @@ final class SipConfig
             perIpCalls: max(1, $perIp),
             maxCallDuration: max(10, $maxDuration),
             callIdleTimeout: max(5, $idleTimeout),
+            rtpPort: ($rtpPort > 0 && $rtpPort < 65536) ? $rtpPort : 10000,
             audioDir: $audioDir,
             recordingsDir: $recordingsDir,
             recordingsMaxBytes: max(0, $recMaxBytes),

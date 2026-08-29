@@ -13,8 +13,12 @@ final class RtpStreamer
     /** @var resource|null UDP socket for sending RTP media */
     private $udpSocket = null;
 
-    public function __construct()
+    /** Fixed local media port to bind, so it can be published through Docker NAT (0 = ephemeral). */
+    private int $preferredPort;
+
+    public function __construct(int $preferredPort = 0)
     {
+        $this->preferredPort = $preferredPort;
         $this->initSocket();
     }
 
@@ -27,6 +31,19 @@ final class RtpStreamer
 
     private function initSocket(): void
     {
+        // A fixed media port can be published through Docker NAT so inbound RTP (caller audio, and
+        // out-of-band DTMF) actually reaches us. If it is already bound, fall back to an ephemeral
+        // port rather than failing — a live call is worth more than the port number.
+        if ($this->preferredPort > 0) {
+            $sock = @stream_socket_server("udp://0.0.0.0:{$this->preferredPort}", $errno, $errstr, STREAM_SERVER_BIND);
+            if ($sock) {
+                stream_set_blocking($sock, false);
+                $this->udpSocket = $sock;
+
+                return;
+            }
+        }
+
         $sock = @stream_socket_server('udp://0.0.0.0:0', $errno, $errstr, STREAM_SERVER_BIND);
         if ($sock) {
             stream_set_blocking($sock, false);
@@ -143,13 +160,19 @@ final class RtpStreamer
             $peerPort = 0;
         }
 
-        // RTP header is at least 12 bytes
+        // RTP header is at least 12 bytes. Byte 1 low 7 bits = payload type; bytes 4-7 = timestamp.
+        // Both are needed to spot and dedup out-of-band DTMF (telephone-event) packets.
+        $pt = ord($data[1]) & 0x7f;
+        $tsParts = unpack('N', substr($data, 4, 4));
+        $timestamp = $tsParts ? $tsParts[1] : 0;
         $payload = substr($data, 12);
 
         return [
             'peerIp' => $peerIp,
             'peerPort' => $peerPort,
             'payload' => $payload,
+            'pt' => $pt,
+            'timestamp' => $timestamp,
         ];
     }
 }

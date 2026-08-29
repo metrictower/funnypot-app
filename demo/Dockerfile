@@ -51,6 +51,7 @@ EXPOSE 443 2083 2087 2096 4433 4443 8443 8834 8843 9443 10443
 # TCP protocol honeypots: mail/cache/shell (redis/ftp/smtp/telnet/memcached/ssh/pop3/imap/finger),
 # remote/sync (vnc/rsync/clamav/zookeeper), databases (mysql/postgres/mongodb), SCADA (modbus/enip).
 # 5800/5901/5902 are extra VNC scan ports the deploy forwards to the single 5900 listener.
-EXPOSE 21 23 25 79 110 143 502 873 2181 2222 3306 3310 5060 5060/udp 5432 5800 5900 5901 5902 6379 11211 27017 44818
+# 5060 = SIP signaling (TCP+UDP); 10000/udp = SIP RTP media (caller audio + DTMF).
+EXPOSE 21 23 25 79 110 143 502 873 2181 2222 3306 3310 5060 5060/udp 5432 5800 5900 5901 5902 6379 10000/udp 11211 27017 44818
 
 CMD ["/entrypoint.sh"]

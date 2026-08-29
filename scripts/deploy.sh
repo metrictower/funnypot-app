@@ -107,6 +107,8 @@ echo "==> [4/4] (re)start container (logs persisted to ~/funnypot-data on the ho
 PFLAGS=""
 for p in $PORTS; do PFLAGS="$PFLAGS -p $p:$p"; done
 PFLAGS="$PFLAGS -p 5060:5060/udp"
+# SIP media (RTP) is UDP on the fixed port; publish it so inbound caller audio + DTMF reach the box.
+PFLAGS="$PFLAGS -p ${FUNNYPOT_SIP_RTP_PORT:-10000}:${FUNNYPOT_SIP_RTP_PORT:-10000}/udp"
 # Serve the SSH honeypot on the real port 22 (host 22 -> container's ssh listener on 2222).
 # Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
 # FUNNYPOT_SSH_PORT set to the moved sshd port above.
@@ -151,11 +153,11 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
         -e FUNNYPOT_VNC_STYLE='${FUNNYPOT_VNC_STYLE:-}' \
         -e FUNNYPOT_VNC_IMAGE='${FUNNYPOT_VNC_IMAGE:-}' \
         -e FUNNYPOT_VNC_CLIPBOARD='${FUNNYPOT_VNC_CLIPBOARD:-}' \
-        -e FUNNYPOT_VNC_STROBE_RESIZE='${FUNNYPOT_VNC_STROBE_RESIZE:-}' \
-        -e FUNNYPOT_VNC_TINY_WIDTH='${FUNNYPOT_VNC_TINY_WIDTH:-480}' \
-        -e FUNNYPOT_VNC_TINY_HEIGHT='${FUNNYPOT_VNC_TINY_HEIGHT:-480}' \
+        -e FUNNYPOT_VNC_IDLE_TIMEOUT='${FUNNYPOT_VNC_IDLE_TIMEOUT:-}' \
         -e FUNNYPOT_SIP_STYLE='${FUNNYPOT_SIP_STYLE:-}' \
         -e FUNNYPOT_SIP_AUDIO_MODE='${FUNNYPOT_SIP_AUDIO_MODE:-auto}' \
+        -e FUNNYPOT_SIP_AUTH_MODE='${FUNNYPOT_SIP_AUTH_MODE:-weak}' \
+        -e FUNNYPOT_SIP_RTP_PORT='${FUNNYPOT_SIP_RTP_PORT:-10000}' \
         -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
         -e FUNNYPOT_ADMIN_PASSWORD='$ADMIN_PASSWORD' \
         -e FUNNYPOT_MODE='${FUNNYPOT_MODE:-}' \

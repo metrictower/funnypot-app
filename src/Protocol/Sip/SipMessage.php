@@ -27,6 +27,8 @@ final class SipMessage
     public ?int $sdpAudioPort = null;
     /** @var list<int> */
     public array $sdpCodecs = [];
+    // Payload type the caller mapped to telephone-event (RFC 4733 out-of-band DTMF), if offered.
+    public ?int $sdpTelephoneEventPt = null;
 
     // Compact header alias mapping (RFC 3261 §7.3.3)
     private const COMPACT_HEADERS = [
@@ -223,6 +225,8 @@ final class SipMessage
                 if ($codecs) {
                     $this->sdpCodecs = array_map('intval', $codecs);
                 }
+            } elseif (preg_match('/^a=rtpmap:(\d+)\s+telephone-event\b/i', $line, $m)) {
+                $this->sdpTelephoneEventPt = (int) $m[1];
             }
         }
     }

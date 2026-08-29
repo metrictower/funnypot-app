@@ -140,6 +140,7 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 | **LLM fake pages** (long-tail fallback) | On a template / CRS / nuclei miss, a probe-gated model fills a small JSON slot-set that a trusted PHP shell renders into a full styled page — WordPress, phpMyAdmin, Grafana, AdminLTE or a generic admin look — with seeded, coherent fake people and records. It only ever *upgrades* a plain 404; the HTTP status and content-type stay app-chosen, and every value is escaped by construction. |
 | **Pure-PHP SSH-2.0 server** | Real curve25519-sha256 key exchange, ed25519 host key, aes256-ctr and hmac-sha2-256 transport. No libssh, no OpenSSH. Accept-all auth drops the attacker into a fake shell with decoy files. |
 | **TCP protocol emulators** (18) | ssh, telnet, redis, ftp, smtp, memcached, pop3, imap, finger, vnc, rsync, clamav, zookeeper, mysql, postgres, mongodb, modbus, ethernet-ip. Every command logged, nothing run. |
+| **SIP / VoIP PBX honeypot** | An Asterisk-persona SIP service on 5060 (UDP + TCP) with RTP media on 10000/udp. Accepts weak/default SIP credentials (captured), answers calls with cycling voice personas (Lenny and friends), records both ends of each call as stereo audio, and captures DTMF keypresses (RFC 4733 and SIP INFO). Logs the caller's User-Agent, an attributed tool guess (SIPVicious, sipcli, …) and transport tells. Hardened against RTP reflection/amplification and per-IP response flooding; never bridges or places a call. |
 | **Docker Engine API decoy** (opt-in) | A believable unauthenticated `dockerd` on 2375/2376 — `/_ping`, `/version`, `/info`, `/containers/json`, `/images/json` plus `/containers/create` + `/containers/{id}/start` (versioned `/v1.NN/…` paths too). Crypto-miner botnets scan 2375 to deploy XMRig; the decoy returns simulated create/start success and **captures the image + command they tried to run**, spawning nothing. Deterministic per deploy seed. Enable with `FUNNYPOT_DOCKER_API=1`. |
 | **Emulation catalog** | Auto-registering list of every capability; a sparse JSON file, or the dashboard, toggles each on or off. |
 | **Anti-fingerprint** | One coherent product persona per attacker (deterministic, spoof-proof seed) instead of an impossible "vulnerable to everything" host. Per-host self-signed certs, consistent `X-Powered-By`, a tamper-evident honeytoken cookie. |
@@ -203,18 +204,25 @@ it falls back to minimal, so the extra detail can never break the guarantee.
 
 `FUNNYPOT_VNC_STYLE` overrides the global style for the VNC honeypot alone (deployments always set the
 global — the Docker image defaults it to `realistic` — so a per-service override must win to mean
-anything). Under `taunt`, the VNC desktop shows a realistic fake ETH staking wallet desktop with an arrow
-cursor, and the clipboard is hijacked on connect. The first click springs a two-phase trap: a fake
-`Reverse VNC connection?` Windows dialog appears (`FUNNYPOT_VNC_POPUP_DELAY`, default 2s), then the
-storm starts — skull cursor, accordion resize that accordions between a tiny desktop and a fake
-8192-wide six-monitor layout (`ExtendedDesktopSize`, falling back to legacy `DesktopSize`), flashing
-trollface/skull animation, and beeps — and the connection is dropped after `FUNNYPOT_VNC_TAUNT_DURATION`
-(default 4s), so a reconnecting client walks straight back into it. While the dialog is up it dodges
-the pointer so it can never be clicked (`FUNNYPOT_VNC_DODGE_POPUP`), and just before the drop the
-server sprays a burst of invalid RFB — a bogus version banner, a rectangle with an unknown encoding,
-a length-lying clipboard message, unknown message types — to confuse the attacker's viewer
-(`FUNNYPOT_VNC_MALFORMED_EXIT`). Frame buffering is capped so a client that stops reading during the
-storm can never exhaust the listener's memory.
+anything). Under `taunt`, the VNC desktop shows a realistic fake ETH staking wallet desktop (with the
+taskbar clock repainted to the live date/time) and an arrow cursor, and the clipboard is hijacked on
+connect. Nothing else fires until the attacker interacts — a bot that only connects and screenshots is
+left alone, and an idle client is held for `FUNNYPOT_VNC_IDLE_TIMEOUT` (default 900s) so a lurker
+watching to see if the box is in use stays engaged. The first click or keypress springs a two-phase
+trap: a fake `Reverse VNC connection?` Windows dialog appears (`FUNNYPOT_VNC_POPUP_DELAY`, default 2s)
+and dodges the pointer so it can never be clicked (`FUNNYPOT_VNC_DODGE_POPUP`); then a scripted
+slideshow plays — `ah-ah-ah` (0.5s) → a generic gray `Reversing VNC connection` panel (1s) →
+`evil-troll` (1s) → a generic gray `A new VNC application has been installed` panel (1.5s),
+the window resizing to each frame — followed by a burst of invalid RFB (a bogus version banner, a
+rectangle with an unknown encoding, a length-lying clipboard message, unknown message types) to
+confuse the viewer (`FUNNYPOT_VNC_MALFORMED_EXIT`), and a disconnect. A reconnecting client walks
+straight back into it. Frame buffering is capped so a client that stops reading can never exhaust the
+listener's memory.
+
+Every VNC hit is logged as a recon trail — `version`, `auth_select`, `encodings` (the ordered encoding
+list fingerprints the client tool), `screen_viewed` (the first framebuffer request), `unknown_msg`
+(extension probes) and any `client_clipboard` — so a bot that "does nothing" still shows what it
+inspected.
 
 ## The emulation catalog
 
