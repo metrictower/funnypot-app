@@ -56,17 +56,22 @@ final class HomeControllerTest extends TestCase
         self::assertStringContainsString('display:none', $html);
     }
 
-    public function test_credential_post_is_captured(): void
+    public function test_credential_post_is_captured_then_funnels_to_the_admin_panel(): void
     {
         $spy = new HomeSpy();
         $_POST = ['username' => 'root', 'password' => 'hunter2'];
-        $this->render(fn () => $this->controller($spy)->login('203.0.113.9'));
+        $html = $this->render(fn () => $this->controller($spy)->login('203.0.113.9'));
         $_POST = [];
 
+        // The credentials are still captured (the intel is the point).
         self::assertCount(1, $spy->appended);
         self::assertSame('login', $spy->appended[0]['event']);
         self::assertStringContainsString('user=root', (string) $spy->appended[0]['body']);
         self::assertStringContainsString('pass=hunter2', (string) $spy->appended[0]['body']);
+
+        // Then funnelled into the no-auth admin-panel decoy — not re-rendered with an inline error.
+        self::assertStringContainsString('/admin/access-login', $html);
+        self::assertStringNotContainsString('Invalid username or password', $html);
     }
 }
 

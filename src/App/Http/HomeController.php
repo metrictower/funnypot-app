@@ -19,10 +19,14 @@ use Geo;
  *   1. a leaked URL in an HTML comment  -> /admin/root/html
  *   2. an invisible off-screen link     -> /admin/root/link
  *   3. a hidden auto-submittable form    -> /admin/root/post
- * A credential POST on the visible form is captured (record-only), like the corporate login.
+ * A credential POST on the visible form is captured (record-only), then the caller is funnelled into
+ * the no-auth admin-panel decoy — the login "succeeds" and drops them somewhere to keep engaging.
  */
 final class HomeController
 {
+    /** Where a submitted login lands: the no-auth admin-panel decoy (served by the honeypot). */
+    private const ADMIN_PANEL_PATH = '/admin/access-login';
+
     public function __construct(
         private HitStore $store,
         private Geo $geo,
@@ -38,14 +42,20 @@ final class HomeController
         echo $this->page('Sign in', $this->loginForm(''));
     }
 
-    /** POST /: capture the credential attempt (record-only) and re-render with a generic error. */
+    /** POST /: capture the credential attempt (record-only), then funnel the caller into the no-auth
+     *  admin-panel decoy — a real app drops a signed-in user on its dashboard, so a 302 there reads as
+     *  a successful login. The target is a fixed internal path (app-chosen, never an open redirect); a
+     *  meta-refresh body backs the header for clients that parse HTML but don't follow a 302. */
     public function login(string $clientIp): void
     {
-        header('Content-Type: text/html; charset=utf-8');
         $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
         $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
         $this->log($clientIp, 'POST', '/', 'login', 'high', 'home-login', 'user=' . $user . ' pass=' . $pass);
-        echo $this->page('Sign in', $this->loginForm('<p class=err>Invalid username or password.</p>'));
+
+        header('Content-Type: text/html; charset=utf-8');
+        header('Location: ' . self::ADMIN_PANEL_PATH, true, 302);
+        echo '<!doctype html><meta http-equiv="refresh" content="0;url=' . self::ADMIN_PANEL_PATH . '">'
+            . '<title>Redirecting&hellip;</title>';
     }
 
     // --- views ---
