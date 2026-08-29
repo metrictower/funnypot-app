@@ -6,6 +6,7 @@ namespace Funnypot\App\Http;
 
 use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Docker\DockerApiRouter;
 use Funnypot\Core\RequestContext;
 
 /**
@@ -25,6 +26,7 @@ final class Router
         private ?AiApiRouter $aiApi = null,
         private ?ConsoleRouter $console = null,
         private ?DownloadRouter $download = null,
+        private ?DockerApiRouter $docker = null,
     ) {
     }
 
@@ -66,6 +68,14 @@ final class Router
         // the feature is on; otherwise these paths fall through to the honeypot like any probe.
         if ($method === 'GET' && $this->download !== null && $this->download->matches($path)) {
             $this->download->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Fake Docker Engine API (exposed-daemon decoy). Ahead of the honeypot catch-all so a Docker
+        // client's probes get a coherent daemon; unmatched paths fall through unchanged. Owns both GET
+        // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
+        if ($this->docker !== null && $this->docker->matches($path)) {
+            $this->docker->handle($ctx, $clientIp);
 
             return;
         }
@@ -149,6 +159,14 @@ final class Router
         // the feature is on; otherwise these paths fall through to the honeypot like any probe.
         if ($method === 'GET' && $this->download !== null && $this->download->matches($path)) {
             $this->download->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Fake Docker Engine API (exposed-daemon decoy). Ahead of the honeypot catch-all so a Docker
+        // client's probes get a coherent daemon; unmatched paths fall through unchanged. Owns both GET
+        // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
+        if ($this->docker !== null && $this->docker->matches($path)) {
+            $this->docker->handle($ctx, $clientIp);
 
             return;
         }

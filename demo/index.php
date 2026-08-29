@@ -22,6 +22,8 @@ use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Docker\DockerApiResponder;
+use Funnypot\App\Docker\DockerApiRouter;
 use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
@@ -101,8 +103,11 @@ if ($config->captureRaw) {
 
 // Coherent chrome: one consistent X-Powered-By on every response (nginx owns Server), so header
 // recon can't catch a version mismatch between the fake bodies and the server banner. Skipped on the
-// fake AI-API surface — a real inference server sends no X-Powered-By (the AI handler also strips it).
-if (!AiApiRouter::isAiSurface($context->path)) {
+// fake AI-API surface (core serves it as a real inference server would, keyless GET recon included)
+// and on the Docker surface only when that decoy is armed — a real Docker daemon sends no
+// X-Powered-By (both handlers also strip it defensively).
+$dockerSurface = $config->dockerApiEnabled && DockerApiRouter::isDockerSurface($context->path);
+if (!AiApiRouter::isAiSurface($context->path) && !$dockerSurface) {
     header('X-Powered-By: ' . $config->poweredBy);
 }
 
@@ -248,4 +253,12 @@ if ($config->endlessDownload) {
     );
 }
 
-(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download))->dispatch($context, $clientIp, $tokenVerdict);
+// Fake Docker Engine API decoy (opt-in, FUNNYPOT_DOCKER_API). A pure deterministic JSON responder —
+// no sidecar, no dependencies — that presents a believable unauthenticated daemon on the published
+// 2375/2376 ports and captures a miner bot's POST /containers/create image+command, running nothing.
+$docker = null;
+if ($config->dockerApiEnabled) {
+    $docker = new DockerApiRouter(new DockerApiResponder($store, $config->personaSeed, $abuse));
+}
+
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker))->dispatch($context, $clientIp, $tokenVerdict);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App;
 
+use Funnypot\App\Docker\DockerDaemon;
 use Funnypot\App\Llm\LlmPromptBuilder;
 use Funnypot\Core\Support\Chrome\GenericSkin;
 use Funnypot\App\Render\PageShellRenderer;
@@ -255,6 +256,25 @@ final class FingerprintSafetyTest extends TestCase
         }
 
         self::assertClean($blob, "fake-filesystem output for role {$role}");
+    }
+
+    /**
+     * The fake Docker daemon emits runtime-generated JSON (version/info/containers/images + a created
+     * container id) the compiled-artifact CI gate never sees. Scan the whole surface against the same
+     * app denylist across a spread of seeds, so no seed-derived value can leak a detector signature.
+     *
+     * @dataProvider hostFactsSeeds
+     */
+    public function test_docker_daemon_output_carries_no_denylisted_signature(int $seed): void
+    {
+        $d = DockerDaemon::fromSeed($seed);
+        $blob = json_encode($d->version())
+            . json_encode($d->info(1_700_000_000))
+            . json_encode($d->containers())
+            . json_encode($d->images())
+            . $d->createdId('xmrig/xmrig', '-o pool.example:4444 -u wallet');
+
+        self::assertClean((string) $blob, "Docker daemon output for seed {$seed}");
     }
 
     /** @return array<string,array{0:int}> label => identity seed (a spread of host identities) */

@@ -62,6 +62,8 @@ final class AppConfig
         public bool $llmEnabled,
         /** Fake AI inference API — the chat-completion endpoints (opt-in; also needs the sidecar). */
         public bool $aiApiEnabled,
+        /** Fake Docker Engine API decoy on 2375/2376 (opt-in). Pure JSON responder, no sidecar. */
+        public bool $dockerApiEnabled,
         /** Require an auth credential on the fake chat API (off = serve keyless, like an open LLM box). */
         public bool $aiStrictAuth,
         /** Require a catalogued model on the fake chat API (off = echo any model name, for engagement). */
@@ -191,6 +193,7 @@ final class AppConfig
             threatIntelDedupHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_DEDUP_HOURS', '24')),
             llmEnabled: in_array(strtolower((string) getenv('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
             aiApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
+            dockerApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true),
             aiStrictAuth: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_AUTH')), ['1', 'on', 'true', 'yes'], true),
             aiStrictModel: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_MODEL')), ['1', 'on', 'true', 'yes'], true),
             aiTemp: (float) $str('FUNNYPOT_AI_TEMP', '0.8'),
