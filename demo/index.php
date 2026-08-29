@@ -46,6 +46,7 @@ use Funnypot\App\Render\PageShellRenderer;
 use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
 use Funnypot\App\Render\SkinSet;
+use Funnypot\App\Storage\FakePersistenceStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteHitStore;
@@ -160,6 +161,10 @@ if ($config->llmEnabled) {
     // page baked with the old "now" instead of serving dates that contradict the fresh HTTP Date header.
     $artifactVersion = ArtifactVersion::current(dirname(__DIR__) . '/resources/llm', dirname(__DIR__) . '/src/App/Render', $config->llmPromptVersion)
         . '-e' . FrozenClock::epoch();
+    // Fake persistence for the deep panel: a note/message/edit POSTed to a write endpoint is echoed
+    // back (escaped) on a later read of the same view, per ip + persona seed, so a stored-vuln probe
+    // looks like it landed. Its own SQLite file, bounded + TTL'd, lazy-opened, fail-open.
+    $fakePersistence = new FakePersistenceStore(dirname($config->dbPath) . '/stored-bait.sqlite');
     $llmFakes = new LlmFakeResponder(
         new ProbeGate(
             new ProbeClassifier(),
@@ -184,6 +189,7 @@ if ($config->llmEnabled) {
         $config->llmMaxConcurrent,
         $config->personaSeed,
         $artifactVersion,
+        $fakePersistence,
     );
 }
 

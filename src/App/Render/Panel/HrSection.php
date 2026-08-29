@@ -35,14 +35,14 @@ final class HrSection extends AbstractPanelSection
     /** Payroll control verbs in the subtab slot — everything else there is a run sub-tab. */
     private const PAYROLL_CONTROLS = ['approve', 'run'];
 
-    public function render(array $route, VisualPersona $persona, string $navBase): string
+    public function render(array $route, VisualPersona $persona, string $navBase, ?FakePersistence $persistence = null): string
     {
         $hr = Hr::fromSeed($persona->seed(), $persona->domain());
         $payroll = Payroll::fromSeed($persona->seed(), $persona->domain());
         $section = $route['section'];
 
         if ($section === 'employees') {
-            return $this->employees($hr, $navBase, $route, $persona->seed());
+            return $this->employees($hr, $navBase, $route, $persona->seed(), $persistence);
         }
         if ($section === 'org') {
             return $this->orgChart($hr, $navBase);
@@ -123,7 +123,7 @@ final class HrSection extends AbstractPanelSection
 
     // --- employee directory + profile ---
 
-    private function employees(Hr $hr, string $navBase, array $route, int $seed): string
+    private function employees(Hr $hr, string $navBase, array $route, int $seed, ?FakePersistence $persistence = null): string
     {
         $entity = $route['entity'];
 
@@ -131,7 +131,7 @@ final class HrSection extends AbstractPanelSection
         if (strpos($entity, 'emp-') === 0) {
             $subtab = $route['subtab'];
             if (in_array($subtab, self::PROFILE_CONTROLS, true)) {
-                return $this->profileControl($hr, $navBase, $entity, $subtab, $route['action'], $seed);
+                return $this->profileControl($hr, $navBase, $entity, $subtab, $route['action'], $seed, $persistence);
             }
             return $this->profile($hr, $navBase, $entity, $subtab === '' ? 'personal' : $subtab);
         }
@@ -311,7 +311,7 @@ final class HrSection extends AbstractPanelSection
 
     // --- profile control leaves (inert) ---
 
-    private function profileControl(Hr $hr, string $navBase, string $empId, string $verb, string $action, int $seed): string
+    private function profileControl(Hr $hr, string $navBase, string $empId, string $verb, string $action, int $seed, ?FakePersistence $persistence = null): string
     {
         $person = $hr->person($empId);
         $base = $navBase . '/hr/employees/' . $person['id'];
@@ -332,18 +332,37 @@ final class HrSection extends AbstractPanelSection
             return $this->breadcrumbHtml($crumbs) . $card;
         }
 
-        // Edit: an inert form that POSTs to /edit/saved; the "saved" landing shows a green flash over the
-        // UNCHANGED profile (nothing persisted; the ref is stable per path, i.e. "your last change").
+        // Edit: an inert form that POSTs to /edit/saved. The fake persistence layer echoes the visitor's
+        // OWN last submission (escaped) back on the "saved" landing and pre-fills the form on a re-visit,
+        // so a write-then-repoll looks genuinely stored — bounded + per ip, never executable (spec E6).
+        $lastEdit = $persistence !== null ? ($persistence->items(FakePersistence::hrEditKey($empId))[0] ?? []) : [];
+
         if ($action === 'saved') {
             $ref = $this->cmdRef($seed, $person['id'] . '|edit', 'HRC');
             $flash = '<div class="fp-flash" style="background:#e8f4ec;border:1px solid #b7dcc4;border-left:4px solid #2e8b57;'
                 . 'border-radius:4px;padding:10px 14px;margin:12px 0;color:#256b45">'
                 . 'Profile changes saved · ref ' . $this->esc($ref) . '</div>';
-            return $this->breadcrumbHtml($crumbs) . $flash . $this->card($person['name'] . ' — personal', $this->kvTableHtml($hr->personal($person['id']), ' class="alte-kv"'), 'unchanged');
+            if ($lastEdit !== []) {
+                // Reflect the submitted values as the profile's current title/location (raw text into
+                // kvTableHtml, which escapes once — no double-escape, no executable markup).
+                $rows = [];
+                if (isset($lastEdit['title'])) {
+                    $rows[] = ['Title', $lastEdit['title']];
+                }
+                if (isset($lastEdit['location'])) {
+                    $rows[] = ['Location', $lastEdit['location']];
+                }
+                $card = $this->card($person['name'] . ' — profile', $this->kvTableHtml($rows, ' class="alte-kv"'), 'updated');
+            } else {
+                $card = $this->card($person['name'] . ' — personal', $this->kvTableHtml($hr->personal($person['id']), ' class="alte-kv"'), 'unchanged');
+            }
+            return $this->breadcrumbHtml($crumbs) . $flash . $card;
         }
+        $titleVal = $lastEdit['title'] ?? $person['title'];
+        $locationVal = $lastEdit['location'] ?? $person['location'];
         $form = '<form class="fp-edit-form" method="post" action="' . $this->esc($base . '/edit/saved') . '" style="margin:12px 0">'
-            . '<label style="display:block;margin:6px 0">Title <input name="title" value="' . $this->esc($person['title']) . '" style="width:100%;max-width:320px;padding:6px 10px;box-sizing:border-box"></label>'
-            . '<label style="display:block;margin:6px 0">Location <input name="location" value="' . $this->esc($person['location']) . '" style="width:100%;max-width:320px;padding:6px 10px;box-sizing:border-box"></label>'
+            . '<label style="display:block;margin:6px 0">Title <input name="title" value="' . $this->esc($titleVal) . '" style="width:100%;max-width:320px;padding:6px 10px;box-sizing:border-box"></label>'
+            . '<label style="display:block;margin:6px 0">Location <input name="location" value="' . $this->esc($locationVal) . '" style="width:100%;max-width:320px;padding:6px 10px;box-sizing:border-box"></label>'
             . '<button class="alte-btn" type="submit" style="margin-top:8px;padding:7px 14px;border:0;border-radius:4px;background:#3b7ea1;color:#fff;font-weight:600;cursor:pointer">Save changes</button>'
             . '</form>';
         return $this->breadcrumbHtml($crumbs) . $this->card('Edit ' . $person['name'], $form, 'changes are recorded on submit');

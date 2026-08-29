@@ -187,17 +187,24 @@ downloadable `wallet.json` keystore whose key material is nonsense; and an ETH *
 unstake always fails and whose rewards feed shows live "Nh ago" ages.
 
 **Invariants.** Everything is **100% inert** — no real SMS/transfer/broadcast/exec, no external call on the
-request path, nothing persists; the scary money/control verbs never return "done", they land on a guarded
-soft-deny or a complete-then-reverse. Every page is a **pure function of the deploy seed + URL** (a reload
-is byte-identical), **escape-by-construction**, and **fingerprint-safe**. Panels are **exempt from the
-per-IP velocity/bulk-scan gate** so a human can explore freely without self-pinning to 404s (renders are
-cheap + cached). The one exception to "cached/frozen" is the staking rewards feed, which renders a live
-relative age and is deliberately cache-exempt. Data is seeded + coherent (one persona/company per deploy),
+request path; the scary money/control verbs never return "done", they land on a guarded soft-deny or a
+complete-then-reverse. A **fake persistence layer** makes the panel look stateful for a stored-vuln probe:
+a note/message/edit POSTed to a write endpoint (an HR profile edit, a signage broadcast) is echoed back on
+a later read of the same view — but only **HTML-escaped** (never executable, **no stored XSS**), **keyed per
+visitor** (ip + persona seed), **bounded** (per-value length + per-view count + a global cap) and **TTL'd**
+so it evaporates; a PIN/access-code field is never captured or reflected. Every page is otherwise a **pure
+function of the deploy seed + URL** (a reload is byte-identical), **escape-by-construction**, and
+**fingerprint-safe**. Panels are **exempt from the per-IP velocity/bulk-scan gate** so a human can explore
+freely without self-pinning to 404s (renders are cheap + cached). The exceptions to "cached/frozen" are the
+staking rewards feed (a live relative age) and a persistence-eligible view (which reflects that visitor's
+own recent submission) — both deliberately cache-exempt so an echo is never frozen or served to another ip. Data is seeded + coherent (one persona/company per deploy),
 arithmetic reconciles (cash-on-hand = Σ balances, ledgers, payroll), and cross-module facts agree — kept
 honest by an ongoing realism-hardening pass so the fakery holds up under an attacker's scrutiny.
 
 Architecture: `PanelRoute` (a positional path parser) + `PanelRegistry` (one class per module) + the
-`AdminLteSkin` chrome + ~26 seeded `Fake\*` generators, all under `src/App/Render/`.
+`AdminLteSkin` chrome + ~26 seeded `Fake\*` generators, all under `src/App/Render/`. The fake-persistence
+layer is `FakePersistence` (request-scoped facade: write-endpoint mapping + view keys) over
+`FakePersistenceStore` (a bounded, TTL'd SQLite store, keyed per ip + persona seed).
 
 ---
 
@@ -259,8 +266,10 @@ funnypot is built so it can only ever mislead an attacker, never help one.
   logged, never fetched.
 - **Reflect, never harm.** No decompression bombs (decoy archives are small + bounded, a few KB to ~1 MB), no retaliation, no
   outbound requests. Every response is size-capped.
-- **Never reflects attacker input**, never deserializes a request body. Every synthesized header is
-  CRLF and NUL safe.
+- **Reflect only escaped, never execute.** Attacker input is not reflected, except the deep panel's
+  fake-persistence layer, which echoes a submitted note/message/edit back **HTML-escaped** (bounded,
+  per-visitor, TTL'd — never executable, no stored XSS). No request body is ever `unserialize()`d, and
+  every synthesized header is CRLF and NUL safe.
 - **Coherent personas.** One believable host per attacker, deterministically seeded, not an impossible
   "vulnerable to everything" fingerprint a real analyst would spot.
 - **The LLM only upgrades a 404.** The optional page-realism model can only turn a plain 404 into a richer

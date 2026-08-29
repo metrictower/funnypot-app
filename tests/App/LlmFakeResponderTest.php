@@ -18,9 +18,11 @@ use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
 use Funnypot\Core\Support\Chrome\PhpMyAdminSkin;
 use Funnypot\Core\Support\Chrome\WordpressSkin;
+use Funnypot\App\Storage\FakePersistenceStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\Core\RequestContext;
+use Funnypot\Core\Support\PathNormalizer;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -98,6 +100,56 @@ final class LlmFakeResponderTest extends TestCase
         );
 
         return [$responder, $store];
+    }
+
+    /** Like makeWithRenderer(), but wired with a fake persistence store (FP-0158).
+     *  @return array{0:LlmFakeResponder,1:LlmFakeCache} */
+    private function makeWithPersistence(): array
+    {
+        $store = new SqliteHitStore($this->dbPath('hits'));
+        $cache = new LlmFakeCache($this->dbPath('cache'));
+        $skins = new SkinSet(
+            [new WordpressSkin(), new PhpMyAdminSkin(), new GrafanaSkin(), new AdminLteSkin()],
+            new GenericSkin()
+        );
+        $responder = new LlmFakeResponder(
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $store),
+            $cache,
+            new LlmClient('http://sidecar/completion', 1500, 320, null, static fn (): ?string => null),
+            new LlmOutputSanitizer(),
+            $store,
+            new LlmResponseProfiles('nginx', 'root ::= "<"', 'root ::= "{"', new PageShellRenderer($skins), 'root ::= "{"'),
+            'v1',
+            4,
+            7,
+            'a1',
+            new FakePersistenceStore($this->dbPath('bait')),
+        );
+
+        return [$responder, $cache];
+    }
+
+    public function test_stored_bait_is_echoed_on_reread_escaped_and_isolated_per_ip(): void
+    {
+        [$r, $cache] = $this->makeWithPersistence();
+        $path = '/admin/appliances/signage/all/message';
+
+        // 1. The author POSTs a stored-XSS-shaped payload to the write endpoint.
+        $r->respond(new RequestContext('POST', $path, '', [], 'message=' . rawurlencode('"><script>alert(1)</script>')), '9.9.9.9');
+
+        // 2. Re-poll (GET) — the submission comes back, present but HTML-escaped, never executable.
+        $read = $r->respond(new RequestContext('GET', $path), '9.9.9.9');
+        self::assertNotNull($read);
+        self::assertStringContainsString('&lt;script&gt;', $read->body, 'the marker is present but escaped');
+        self::assertStringNotContainsString('<script>alert(1)', $read->body, 'never executable — no stored XSS');
+
+        // 3. A different ip re-polling the same view does not see the author's text.
+        $other = $r->respond(new RequestContext('GET', $path), '2.2.2.2');
+        self::assertNotNull($other);
+        self::assertStringNotContainsString('&lt;script&gt;', $other->body);
+
+        // 4. A per-visitor view must never be written to the byte-identical panel cache.
+        self::assertNull($cache->get(PathNormalizer::key('GET', $path), 'a1'), 'a persistable view must not be cached');
     }
 
     public function test_panel_path_bypasses_lexical_shed_and_serves_200(): void

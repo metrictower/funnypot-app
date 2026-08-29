@@ -6,8 +6,11 @@ namespace Funnypot\Tests\App\Panel;
 
 use Funnypot\App\Render\Fake\Hr;
 use Funnypot\App\Render\Fake\Payroll;
+use Funnypot\App\Render\Panel\FakePersistence;
 use Funnypot\App\Render\Panel\HrSection;
 use Funnypot\App\Render\PanelRoute;
+use Funnypot\App\Storage\FakePersistenceStore;
+use Funnypot\Core\RequestContext;
 use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
@@ -21,6 +24,45 @@ final class HrSectionTest extends TestCase
     {
         $route = PanelRoute::parse($path);
         return (new HrSection())->render($route, VisualPersona::fromSeed($seed), '/admin');
+    }
+
+    /** Render a path with a persistence facade bound (as the responder does on a panel path). */
+    private function renderWith(string $path, FakePersistence $fp, int $seed = 7): string
+    {
+        return (new HrSection())->render(PanelRoute::parse($path), VisualPersona::fromSeed($seed), '/admin', $fp);
+    }
+
+    // --- fake persistence (FP-0158): the edit echo is escaped and per-ip ---
+
+    public function test_edit_saved_echoes_the_visitors_own_submission_escaped_and_per_ip(): void
+    {
+        if (!extension_loaded('pdo_sqlite')) {
+            self::markTestSkipped('ext-pdo_sqlite not loaded');
+        }
+        $store = new FakePersistenceStore(':memory:');
+        $path = '/admin/hr/employees/emp-1001/edit/saved';
+        $author = new FakePersistence($store, '9.9.9.9', 7);
+        $author->capture(new RequestContext('POST', $path, '', [], 'title=' . rawurlencode('"><script>alert(1)</script>') . '&location=Vault'));
+
+        $html = $this->renderWith($path, $author);
+        self::assertStringContainsString('Profile changes saved', $html);
+        self::assertStringContainsString('Vault', $html, 'the submitted value is echoed back');
+        self::assertStringContainsString('&lt;script&gt;', $html, 'the marker is present but escaped');
+        self::assertStringNotContainsString('<script>alert(1)', $html, 'never executable — no stored XSS');
+
+        // A different ip must not see it (byte-identical-per-visitor would be both wrong and a tell).
+        $other = new FakePersistence($store, '2.2.2.2', 7);
+        $html2 = $this->renderWith($path, $other);
+        self::assertStringNotContainsString('Vault', $html2);
+        self::assertStringNotContainsString('&lt;script&gt;', $html2);
+    }
+
+    public function test_edit_saved_without_a_submission_is_the_unchanged_canned_landing(): void
+    {
+        // No facade (or no stored item) -> the original inert behaviour, nothing reflected.
+        $html = $this->render('/admin/hr/employees/emp-1001/edit/saved');
+        self::assertStringContainsString('Profile changes saved', $html);
+        self::assertStringContainsString('unchanged', $html);
     }
 
     // --- routing / depth ---
