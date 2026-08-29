@@ -88,6 +88,39 @@ final class PanelRoute
         return $out;
     }
 
+    /**
+     * True when the FIRST path segment is itself a mount token — the honeypot's own admin panel is
+     * mounted at the path root (/admin, /dashboard/…, /console.php). Case-sensitive, matching how the
+     * panel skin claims a path, so a path that passes here is one the skin will actually render.
+     *
+     * Deliberately tighter than "a mount appears anywhere": a mount buried deeper (/wp-admin/admin.php)
+     * belongs to a product-family emulator the engine owns and must NOT be pulled into the panel. The
+     * honeypot uses this to give the panel precedence over the engine's nuclei-reflection corpus for
+     * its own root-mounted paths without shadowing those product emulators.
+     */
+    public static function mountedAtRoot(string $path): bool
+    {
+        // A query string / fragment is display-only and never routes (mirrors parse()).
+        $path = substr($path, 0, strcspn($path, "?#"));
+        $segs = PathSegments::of($path);
+        if ($segs === []) {
+            return false;
+        }
+        $first = $segs[0];
+        foreach (self::MOUNTS as $token) {
+            if ($first === $token) {
+                return true;
+            }
+            // A same-named file with an extension still mounts (admin.php, console.aspx). 'administrator'
+            // (Joomla) is a directory only — exact match above, no dot-extension form.
+            if ($token !== 'administrator' && strncmp($first, $token . '.', strlen($token) + 1) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** A segment is a mount if its part before any file extension is a mount token (case-insensitive),
      *  matching how matches() admits both `admin` and `admin.php`. */
     private static function isMount(string $seg): bool

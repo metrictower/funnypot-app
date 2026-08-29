@@ -165,6 +165,12 @@ model call**, so it is always available (never blocked on the sidecar) and byte-
 dev-style **debug-mode banner** ("bound to `0.0.0.0`, auth off") rides every page to explain — in-narrative
 — why an admin panel is publicly reachable at all, so the exposure reads as a misconfiguration, not a trap.
 
+At its **root-mounted** paths (`/admin`, `/dashboard`, `/manage`, `/console`, `/cp`, `/panel`, `/administrator`,
+and every sub-path) the panel takes precedence over the engine's nuclei-reflection corpus — which also matches
+those bare mount segments and would otherwise shadow the panel's own landing page and log the hit as `nuclei`.
+A genuine attack payload aimed at a panel path (SQLi/XSS/RCE) still wins and is served, labelled and reported as
+an attack.
+
 **What's in it.** A "control-everything" building + business dashboard, roughly 26 modules behind a grouped
 sidebar: HR (org chart, directory, payroll), Finance (AP/invoices), **Bank & Treasury**, HVAC, CCTV,
 lighting/blinds, access control, fire & life-safety, environment sensors, energy/metering, IT assets

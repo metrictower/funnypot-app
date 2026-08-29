@@ -44,6 +44,7 @@ td.path{word-break:break-all;max-width:340px}
 .src-llm{background:rgba(60,200,160,.14);color:#3cc8a0;border:1px solid rgba(60,200,160,.4)}
 .src-ai{background:rgba(60,200,160,.14);color:#3cc8a0;border:1px solid rgba(60,200,160,.4)}
 .src-decoy{background:rgba(168,152,122,.12);color:var(--muted);border:1px solid var(--line)}
+.src-panel{background:rgba(240,180,0,.14);color:var(--amber);border:1px solid rgba(240,180,0,.4)}
 .src-vnc{background:rgba(255,80,200,.16);color:#ff50c8;border:1px solid rgba(255,80,200,.45)}
 .src-sip{background:rgba(160,80,255,.16);color:#b070ff;border:1px solid rgba(160,80,255,.45)}
 .ids{color:var(--muted);font-size:12px}

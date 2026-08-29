@@ -16,6 +16,7 @@ use Funnypot\Core\Honeypot;
 use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
+use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\RequestContext;
 use Geo;
 
@@ -176,6 +177,29 @@ final class HoneypotController
         ));
 
         $detection = $funnypot->detect($context);
+
+        // The honeypot's own admin panel (/admin, /dashboard, … mounted at the path root, and every
+        // sub-path) is a deep-engagement lure and must be served by the panel emulator and logged as
+        // 'panel'. The engine's nuclei-reflection corpus also matches these bare mount segments and would
+        // otherwise serve + label them 'nuclei', shadowing the panel's own landing page. Give the panel
+        // precedence for its root-mounted paths — it renders deterministically (no model call,
+        // gate-exempt) and logs its own 'panel' hit. Yield to the engine when it flagged a genuine attack
+        // aimed at a panel path (the 'attack' corpus: SQLi/XSS/RCE) so those are still served, labelled
+        // and reported; only a plain product-detection reflection loses to the panel. Root-anchored on
+        // purpose: a mount that appears deeper (/wp-admin/admin.php) belongs to a product emulator the
+        // engine owns, not to us.
+        if ($this->llmFakes !== null
+            && PanelRoute::mountedAtRoot($context->path)
+            && !in_array('attack', $detection->tags(), true)) {
+            $panel = $this->llmFakes->respond($context, $clientIp);   // writes its own 'panel' hit
+            if ($panel !== null) {
+                $this->serveDelay();
+                ResponseEmitter::emit($panel);
+
+                return;
+            }
+        }
+
         $response = $funnypot->respond($context);
 
         // When a fake was served, log what it actually satisfied; else the detect() signal.
