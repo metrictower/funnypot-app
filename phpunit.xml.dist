@@ -8,5 +8,12 @@
         <testsuite name="funnypot">
             <directory>tests</directory>
         </testsuite>
+        <!-- Everything except the seeded-panel render tests, which dominate wall time (each render
+             rebuilds the full seeded Org roster + section corpus). Quick pre-deploy checks run this
+             with: php vendor/bin/phpunit (space) (dash)(dash)testsuite fast -->
+        <testsuite name="fast">
+            <directory>tests</directory>
+            <exclude>tests/App/Panel</exclude>
+        </testsuite>
     </testsuites>
 </phpunit>
