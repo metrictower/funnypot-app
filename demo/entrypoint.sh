@@ -113,6 +113,7 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn adb         0.0.0.0:5555
     spawn bacnet      0.0.0.0:47808
     spawn rtsp        0.0.0.0:554
+    spawn stun        0.0.0.0:3478
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181

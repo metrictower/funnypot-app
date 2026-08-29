@@ -121,6 +121,11 @@ PFLAGS="$PFLAGS -p ${FUNNYPOT_SIP_RTP_PORT:-10000}:${FUNNYPOT_SIP_RTP_PORT:-1000
 PFLAGS="$PFLAGS -p 161:161/udp"
 # BACnet/IP is UDP on 47808.
 PFLAGS="$PFLAGS -p 47808:47808/udp"
+# STUN is UDP on 3478 (NAT-discovery decoy rounding out the VoIP footprint).
+PFLAGS="$PFLAGS -p 3478:3478/udp"
+# Extra SIP discovery ports: publish common alt SIP ports to the single 5060 listener (wide-net
+# decoy; plain SIP, not TLS). Mirrors the VNC alt-ports forwarding.
+for sp in ${FUNNYPOT_SIP_ALT_PORTS:-5061 5080}; do PFLAGS="$PFLAGS -p $sp:5060 -p $sp:5060/udp"; done
 # Serve the SSH honeypot on the real port 22 (host 22 -> container's ssh listener on 2222).
 # Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
 # FUNNYPOT_SSH_PORT set to the moved sshd port above.

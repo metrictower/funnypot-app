@@ -47,6 +47,8 @@ use Funnypot\Protocol\Bacnet\BacnetConfig;
 use Funnypot\Protocol\Bacnet\BacnetServer;
 use Funnypot\Protocol\Rtsp\RtspConfig;
 use Funnypot\Protocol\Rtsp\RtspServer;
+use Funnypot\Protocol\Stun\StunConfig;
+use Funnypot\Protocol\Stun\StunServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -189,6 +191,13 @@ if ($protocol === 'bacnet') {
 // Basic/Digest credentials; returns a plausible SDP but streams no real media.
 if ($protocol === 'rtsp') {
     (new RtspServer(RtspConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// STUN (UDP): NAT-discovery responder that rounds out the VoIP footprint next to SIP. Answers a
+// Binding Request with the client's mapped address, logs the probe; anti-amplification, no TURN relay.
+if ($protocol === 'stun') {
+    (new StunServer(StunConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 
