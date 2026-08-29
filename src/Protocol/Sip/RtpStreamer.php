@@ -7,8 +7,11 @@ namespace Funnypot\Protocol\Sip;
 /**
  * RTP packet builder and UDP media transmitter (RFC 3550 & RFC 3551).
  * Strictly locks destination IP to the signaling peer IP (Anti-Reflection Invariant B1).
+ *
+ * Not final: the run-loop fault-isolation tests inject a subclass that throws from a transport method
+ * to prove a media fault degrades (logged + session evicted) instead of killing the listener.
  */
-final class RtpStreamer
+class RtpStreamer
 {
     /** @var resource|null UDP socket for sending RTP media */
     private $udpSocket = null;

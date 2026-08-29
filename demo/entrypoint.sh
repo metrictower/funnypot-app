@@ -78,28 +78,41 @@ php /app/demo/vulns-sync.php || true
 # the crypto handshake and drops attackers into the same fake shell as telnet. All log connections
 # + every command into the same store the dashboard reads. Disable with FUNNYPOT_PROTOCOLS=0.
 if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
-    php /app/demo/listen.php redis      0.0.0.0:6379  &
-    php /app/demo/listen.php ftp        0.0.0.0:21    &
-    php /app/demo/listen.php smtp       0.0.0.0:25    &
-    php /app/demo/listen.php telnet     0.0.0.0:23    &
-    php /app/demo/listen.php memcached  0.0.0.0:11211 &
-    php /app/demo/listen.php ssh        0.0.0.0:2222  &
+    # Respawn a listener if it ever exits. `--restart unless-stopped` only reacts to the CONTAINER
+    # dying; a single background listener that hit a fatal would otherwise leave its port silently
+    # dead until a manual `docker restart`. The in-process select loops already isolate per-message
+    # faults (degrade, never crash); this is the belt-and-braces layer. A 2s backoff keeps a
+    # crash-on-boot from hot-looping. Each backgrounded subshell snapshots its own proto/bind.
+    spawn() {
+        _proto="$1"; _bind="$2"
+        ( while true; do
+            php /app/demo/listen.php "$_proto" "$_bind"
+            echo "funnypot: listener '$_proto' exited (rc=$?), respawning in 2s" >&2
+            sleep 2
+          done ) &
+    }
+    spawn redis       0.0.0.0:6379
+    spawn ftp         0.0.0.0:21
+    spawn smtp        0.0.0.0:25
+    spawn telnet      0.0.0.0:23
+    spawn memcached   0.0.0.0:11211
+    spawn ssh         0.0.0.0:2222
     # mail + misc line services
-    php /app/demo/listen.php pop3       0.0.0.0:110   &
-    php /app/demo/listen.php imap       0.0.0.0:143   &
-    php /app/demo/listen.php finger     0.0.0.0:79    &
-    php /app/demo/listen.php vnc        0.0.0.0:5900  &
-    php /app/demo/listen.php sip        0.0.0.0:5060  &
-    php /app/demo/listen.php rsync      0.0.0.0:873   &
-    php /app/demo/listen.php clamav     0.0.0.0:3310  &
-    php /app/demo/listen.php zookeeper  0.0.0.0:2181  &
+    spawn pop3        0.0.0.0:110
+    spawn imap        0.0.0.0:143
+    spawn finger      0.0.0.0:79
+    spawn vnc         0.0.0.0:5900
+    spawn sip         0.0.0.0:5060
+    spawn rsync       0.0.0.0:873
+    spawn clamav      0.0.0.0:3310
+    spawn zookeeper   0.0.0.0:2181
     # databases
-    php /app/demo/listen.php mysql      0.0.0.0:3306  &
-    php /app/demo/listen.php postgresql 0.0.0.0:5432  &
-    php /app/demo/listen.php mongodb    0.0.0.0:27017 &
+    spawn mysql       0.0.0.0:3306
+    spawn postgresql  0.0.0.0:5432
+    spawn mongodb     0.0.0.0:27017
     # industrial control (SCADA)
-    php /app/demo/listen.php modbus     0.0.0.0:502   &
-    php /app/demo/listen.php ethernet-ip 0.0.0.0:44818 &
+    spawn modbus      0.0.0.0:502
+    spawn ethernet-ip 0.0.0.0:44818
 fi
 
 # Periodic retention: prune the hit store by age + on-disk size. No-op unless FUNNYPOT_RETAIN_DAYS

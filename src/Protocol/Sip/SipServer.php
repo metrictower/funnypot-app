@@ -157,47 +157,90 @@ final class SipServer
      */
     public function runOnce(): void
     {
-        $read = [];
-        if ($this->udpSocket && is_resource($this->udpSocket)) {
-            $read[] = $this->udpSocket;
-        }
-        if ($this->tcpSocket && is_resource($this->tcpSocket)) {
-            $read[] = $this->tcpSocket;
-        }
-        $rtpSock = $this->rtpStreamer->getSocket();
-        if ($rtpSock && is_resource($rtpSock)) {
-            $read[] = $rtpSock;
-        }
-        foreach ($this->tcpClients as $client) {
-            if (is_resource($client)) {
-                $read[] = $client;
+        // Fault isolation: this listener runs unsupervised, so a fault while handling one message,
+        // RTP tick or cleanup must degrade (log + skip) — never escape the loop and kill the process.
+        // Each phase is guarded independently so a bad message can't stop RTP for live calls, etc.
+        try {
+            $read = [];
+            if ($this->udpSocket && is_resource($this->udpSocket)) {
+                $read[] = $this->udpSocket;
             }
-        }
-
-        $write = null;
-        $except = null;
-
-        // 5ms timeout to maintain accurate 20ms RTP packet timing without CPU spin
-        $numChanged = @stream_select($read, $write, $except, 0, 5000);
-        if ($numChanged && $numChanged > 0) {
-            foreach ($read as $sock) {
-                if ($sock === $this->udpSocket) {
-                    $this->handleInboundUdp();
-                } elseif ($sock === $rtpSock) {
-                    $this->handleInboundRtp();
-                } elseif ($sock === $this->tcpSocket) {
-                    $this->handleTcpAccept();
-                } else {
-                    $this->handleInboundTcp($sock);
+            if ($this->tcpSocket && is_resource($this->tcpSocket)) {
+                $read[] = $this->tcpSocket;
+            }
+            $rtpSock = $this->rtpStreamer->getSocket();
+            if ($rtpSock && is_resource($rtpSock)) {
+                $read[] = $rtpSock;
+            }
+            foreach ($this->tcpClients as $client) {
+                if (is_resource($client)) {
+                    $read[] = $client;
                 }
             }
+
+            $write = null;
+            $except = null;
+
+            // 5ms timeout to maintain accurate 20ms RTP packet timing without CPU spin
+            $numChanged = @stream_select($read, $write, $except, 0, 5000);
+            if ($numChanged && $numChanged > 0) {
+                foreach ($read as $sock) {
+                    try {
+                        if ($sock === $this->udpSocket) {
+                            $this->handleInboundUdp();
+                        } elseif ($sock === $rtpSock) {
+                            $this->handleInboundRtp();
+                        } elseif ($sock === $this->tcpSocket) {
+                            $this->handleTcpAccept();
+                        } else {
+                            $this->handleInboundTcp($sock);
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logFault('inbound', $e);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logFault('select', $e);
         }
 
         // Drive RTP media streaming timers
-        $this->tickRtpStreams();
+        try {
+            $this->tickRtpStreams();
+        } catch (\Throwable $e) {
+            $this->logFault('rtp-tick', $e);
+        }
 
         // Evict expired calls and nonces
-        $this->cleanupExpiredSessions();
+        try {
+            $this->cleanupExpiredSessions();
+        } catch (\Throwable $e) {
+            $this->logFault('cleanup', $e);
+        }
+    }
+
+    /**
+     * Records an internal fault to the event stream (so it surfaces on the dashboard) without ever
+     * letting it escape the run loop — the honeypot must degrade, never crash. If logging itself
+     * throws, swallow it: keeping the listener alive matters more than that one log line.
+     */
+    private function logFault(string $where, \Throwable $e): void
+    {
+        try {
+            $this->logEvent([
+                'proto' => 'sip',
+                'method' => 'SIP',
+                'event' => 'error',
+                'ip' => '',
+                'port' => 0,
+                'path' => "SIP internal fault [{$where}]: " . $e->getMessage(),
+                'matched' => 0,
+                'served' => 0,
+                'reportable' => false,
+            ]);
+        } catch (\Throwable $ignored) {
+            // logging is broken; the loop surviving is what matters
+        }
     }
 
     /**
@@ -791,40 +834,46 @@ final class SipServer
         $now = microtime(true);
 
         foreach ($this->sessions as $key => $s) {
-            if (!$s->isStreaming()) {
-                continue;
-            }
-
-            // Enforce max call duration safety cutoff. End the session through the normal path so
-            // the recording is written AND logged with its dashboard URL — an inline write here
-            // would leave the WAV orphaned on disk, invisible in the feed.
-            if ($s->getDuration() > $this->config->maxCallDuration) {
-                $this->endSession($s, $key);
-                continue;
-            }
-
-            if ($s->lastRtpSendTime <= 0.0) {
-                $s->lastRtpSendTime = $now;
-            }
-
-            // Virtual clock pacing: transmit 160-byte (20ms) slices at exactly 50 pps with zero timing drift
-            $burst = 0;
-            while (($now - $s->lastRtpSendTime) >= 0.020 && $burst < 3) {
-                $slice = $this->soundboard->getNextSlice($s);
-                $this->rtpStreamer->sendPacket($s, $slice);
-
-                // Record conversation audio
-                if ($this->config->recordCalls) {
-                    $s->recordedUlaw .= $slice;
+            try {
+                if (!$s->isStreaming()) {
+                    continue;
                 }
 
-                $s->lastRtpSendTime += 0.020;
-                $burst++;
-            }
+                // Enforce max call duration safety cutoff. End the session through the normal path so
+                // the recording is written AND logged with its dashboard URL — an inline write here
+                // would leave the WAV orphaned on disk, invisible in the feed.
+                if ($s->getDuration() > $this->config->maxCallDuration) {
+                    $this->endSession($s, $key);
+                    continue;
+                }
 
-            // Prevent clock drift / lag behind after system pause
-            if (($now - $s->lastRtpSendTime) > 0.060) {
-                $s->lastRtpSendTime = $now;
+                if ($s->lastRtpSendTime <= 0.0) {
+                    $s->lastRtpSendTime = $now;
+                }
+
+                // Virtual clock pacing: transmit 160-byte (20ms) slices at exactly 50 pps with zero timing drift
+                $burst = 0;
+                while (($now - $s->lastRtpSendTime) >= 0.020 && $burst < 3) {
+                    $slice = $this->soundboard->getNextSlice($s);
+                    $this->rtpStreamer->sendPacket($s, $slice);
+
+                    // Record conversation audio
+                    if ($this->config->recordCalls) {
+                        $s->recordedUlaw .= $slice;
+                    }
+
+                    $s->lastRtpSendTime += 0.020;
+                    $burst++;
+                }
+
+                // Prevent clock drift / lag behind after system pause
+                if (($now - $s->lastRtpSendTime) > 0.060) {
+                    $s->lastRtpSendTime = $now;
+                }
+            } catch (\Throwable $e) {
+                // A poisoned session must be evicted, not retried every tick (a tight error loop).
+                $this->logFault('rtp-session', $e);
+                unset($this->sessions[$key]);
             }
         }
     }
@@ -1024,7 +1073,13 @@ final class SipServer
             $baseline = $s->lastInboundTime > 0.0 ? $s->lastInboundTime : $s->startTime;
             $idle = $now - $baseline;
             if ($s->getDuration() > $this->config->maxCallDuration || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)) {
-                $this->endSession($s, $key);
+                try {
+                    $this->endSession($s, $key);
+                } catch (\Throwable $e) {
+                    // Evict even if ending failed, so a poisoned session can't be retried forever.
+                    $this->logFault('endSession', $e);
+                    unset($this->sessions[$key]);
+                }
             }
         }
 
