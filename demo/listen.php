@@ -27,6 +27,10 @@ use Funnypot\Protocol\Vnc\VncConfig;
 use Funnypot\Protocol\Vnc\VncServer;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipServer;
+use Funnypot\Protocol\Rdp\RdpConfig;
+use Funnypot\Protocol\Rdp\RdpServer;
+use Funnypot\Protocol\Smb\SmbConfig;
+use Funnypot\Protocol\Smb\SmbServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -99,6 +103,20 @@ if ($protocol === 'vnc') {
 if ($protocol === 'sip') {
     $sipConfig = SipConfig::fromEnv();
     (new SipServer($sipConfig, $log))->listen($bind);
+    exit(0);
+}
+
+// RDP: X.224/MCS handshake honeypot — logs the mstshash cookie, requested security protocols and any
+// credentials, selects a plausible protocol, never grants a session.
+if ($protocol === 'rdp') {
+    (new RdpServer(RdpConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// SMB2: NTLMSSP negotiate/session-setup honeypot — logs the negotiated dialect and captured NTLM
+// credentials, answers plausibly, shares nothing.
+if ($protocol === 'smb') {
+    (new SmbServer(SmbConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

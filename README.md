@@ -21,9 +21,11 @@ and writes back the reply that the scanner's own matcher is looking for. The sca
 believable, completely wrong vulnerability report, and you log every move it made.
 
 This repo is the **standalone honeypot app**: a Docker image that stands the whole thing up on your own
-box. It runs the HTTP deception engine across the common web ports and adds 18 TCP service honeypots
-(a real pure-PHP SSH server, a telnet fake shell, redis, ftp, smtp, mysql, postgres, mongodb, modbus and
-more). It ships with a live dashboard and an admin panel to switch each fake on or off.
+box. It runs the HTTP deception engine across the common web ports and adds 21 network-service honeypots
+(a real pure-PHP SSH server, an Asterisk-persona **VoIP PBX** that answers scam calls with recorded
+voices, a telnet fake shell, redis, ftp, smtp, mysql, postgres, mongodb, modbus and more). Every
+listener is fault-isolated and auto-respawned, so one bad packet can't take a service down. It ships
+with a live dashboard and an admin panel to switch each fake on or off.
 
 The HTTP engine itself is a separate Composer package, [`metrictower/funnypot-core`](https://github.com/metrictower/funnypot-core).
 Use that if you want to drop the inversion engine into your own Laravel or PSR-15 app instead of running
@@ -54,7 +56,7 @@ CVEs, attack classes and services this box pretends to be.
 
 The [`demo/`](demo/) directory is a complete front controller: a welcome homepage and live dashboard at
 `/`, with every other request run through the engine and logged. The image runs nginx and php-fpm across
-the web ports and launches all 18 TCP listeners.
+the web ports and launches all 21 service listeners (each auto-respawned if it ever exits).
 
 ```bash
 # compose
@@ -139,14 +141,15 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 | **Product and route decoys** (26) | Believable `.git/config`, `.env`, `xmlrpc`, `wp-config`, `phpinfo`, `.htpasswd`, `server-status`, `package.json`, SSH keys, SQL dumps, phpMyAdmin, Tomcat manager and more. Data-bearing decoys are filled by shared seeded generators, so people and records are coherent per deployment, not repeated `jdoe`/`example.com` rows. |
 | **LLM fake pages** (long-tail fallback) | On a template / CRS / nuclei miss, a probe-gated model fills a small JSON slot-set that a trusted PHP shell renders into a full styled page — WordPress, phpMyAdmin, Grafana, AdminLTE or a generic admin look — with seeded, coherent fake people and records. It only ever *upgrades* a plain 404; the HTTP status and content-type stay app-chosen, and every value is escaped by construction. |
 | **Pure-PHP SSH-2.0 server** | Real curve25519-sha256 key exchange, ed25519 host key, aes256-ctr and hmac-sha2-256 transport. No libssh, no OpenSSH. Accept-all auth drops the attacker into a fake shell with decoy files. |
-| **TCP protocol emulators** (18) | ssh, telnet, redis, ftp, smtp, memcached, pop3, imap, finger, vnc, rsync, clamav, zookeeper, mysql, postgres, mongodb, modbus, ethernet-ip. Every command logged, nothing run. |
-| **SIP / VoIP PBX honeypot** | An Asterisk-persona SIP service on 5060 (UDP + TCP) with RTP media on 10000/udp. Accepts weak/default SIP credentials (captured), answers calls with cycling voice personas (Lenny and friends), records both ends of each call as stereo audio, and captures DTMF keypresses (RFC 4733 and SIP INFO). Logs the caller's User-Agent, an attributed tool guess (SIPVicious, sipcli, …) and transport tells. Hardened against RTP reflection/amplification and per-IP response flooding; never bridges or places a call. |
+| **TCP protocol emulators** (20) | ssh, telnet, redis, ftp, smtp, memcached, pop3, imap, finger, vnc, rsync, clamav, zookeeper, mysql, postgres, mongodb, modbus, ethernet-ip, **rdp**, **smb**. Every command logged, nothing run. |
+| **RDP + SMB credential traps** | Pure-PHP **RDP** (3389, X.224/MCS) logs the `mstshash` username a brute-forcer sprays + the requested security protocols; **SMB2** (445, NTLMSSP) captures crackable net-NTLMv2 hashes (user/domain/workstation) and SMB1 EternalBlue-style probes. Both answer plausibly, grant no session, share no file, execute nothing. |
+| **SIP / VoIP PBX honeypot** | A high-interaction Asterisk-persona SIP service on 5060 (UDP + TCP) with RTP media on 10000/udp. Accepts weak/default SIP credentials (latched so a spray tool sees exactly one working password), then answers calls with a per-caller cycle of **real recorded voice personas** (Lenny, El Chango, 1913 "Cohen on the Telephone", …) that tarpit the caller — recording both ends as stereo audio with faint line-hiss so it never reads as dead silence. Captures **DTMF** (RFC 4733 + SIP INFO) and **SIP MESSAGE** smishing/spam bodies. Attributes each caller (User-Agent, tool guess — SIPVicious/sipcli/…, transport tells) and reports VoIP fraud to AbuseIPDB (category 8). Byte-faithful to Asterisk (Server-only headers, `501` to unknown methods, `received=/rport=`) to survive scanner fingerprinting. Hardened against RTP reflection/amplification + per-IP flooding, fault-isolated so a bad message never crashes the listener; never bridges, dials, relays, or executes anything. |
 | **Docker Engine API decoy** (opt-in) | A believable unauthenticated `dockerd` on 2375/2376 — `/_ping`, `/version`, `/info`, `/containers/json`, `/images/json` plus `/containers/create` + `/containers/{id}/start` (versioned `/v1.NN/…` paths too). Crypto-miner botnets scan 2375 to deploy XMRig; the decoy returns simulated create/start success and **captures the image + command they tried to run**, spawning nothing. Deterministic per deploy seed. Enable with `FUNNYPOT_DOCKER_API=1`. |
 | **Emulation catalog** | Auto-registering list of every capability; a sparse JSON file, or the dashboard, toggles each on or off. |
 | **Anti-fingerprint** | One coherent product persona per attacker (deterministic, spoof-proof seed) instead of an impossible "vulnerable to everything" host. Per-host self-signed certs, consistent `X-Powered-By`, a tamper-evident honeytoken cookie. |
 
 The attack, decoy and nuclei-corpus capabilities all come from the [`funnypot-core`](https://github.com/metrictower/funnypot-core)
-engine. The SSH server, the TCP protocol emulators and the dashboard live in this repo.
+engine. The SSH server, the VoIP PBX, the TCP protocol emulators and the dashboard live in this repo.
 
 ---
 

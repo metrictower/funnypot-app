@@ -103,6 +103,8 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn finger      0.0.0.0:79
     spawn vnc         0.0.0.0:5900
     spawn sip         0.0.0.0:5060
+    spawn rdp         0.0.0.0:3389
+    spawn smb         0.0.0.0:445
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181
