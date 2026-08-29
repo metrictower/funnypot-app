@@ -47,6 +47,29 @@ final class FakeFilesystemGenerationTest extends TestCase
         self::assertSame(array_values(array_unique($names)), $names);
     }
 
+    public function test_generated_ownership_is_coherent_with_location(): void
+    {
+        $fs = $this->fs();
+        // root's home is root-owned — a uid-1000 file under /root is a generator tell.
+        foreach ($fs->list('/root') as $n) {
+            self::assertSame(0, $n->uid, "/root/{$n->name} should be root-owned");
+            self::assertSame(0, $n->gid, "/root/{$n->name} gid should be root");
+        }
+        // A user's home is owned by that user (its pinned uid), never by root.
+        $homes = $fs->list('/home');
+        self::assertNotEmpty($homes);
+        $home = $homes[0];
+        $homeUid = $home->uid;
+        self::assertGreaterThanOrEqual(1000, $homeUid);
+        foreach ($fs->list('/home/' . $home->name) as $n) {
+            self::assertSame($homeUid, $n->uid, "/home/{$home->name}/{$n->name} should belong to the home owner");
+        }
+        // /var/www content is the web user (www-data=33 on debian, apache=48 on rhel) — never root/admin.
+        foreach ($fs->list('/var/www/html') as $n) {
+            self::assertContains($n->uid, [33, 48], "/var/www/html/{$n->name} should be the web user");
+        }
+    }
+
     public function test_invalid_path_throws(): void
     {
         $this->expectException(PathNotFound::class);

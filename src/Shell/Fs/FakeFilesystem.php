@@ -30,7 +30,6 @@ class FakeFilesystem
     private const MTIME_IDX = 11;
     protected const SIZE_IDX = 12;
     private const UID_ROLL_IDX = 20;
-    private const CONTENT_BASE = 5000000;    // content block counter namespace (stays < 2^32)
 
     private const TWO_YEARS = 63072000;      // seconds; mtimes fall within the last ~2y, never future
     private const BASE_DIR_PERCENT = 35;     // ~35% of children are dirs at depth 0, decaying by depth
@@ -42,9 +41,11 @@ class FakeFilesystem
 
     /**
      * Directories whose children come ONLY from pins, never from the procedural generator.
-     * Keep this list short: it is for paths where the real-world contents are a closed set.
+     * Keep this list short: it is for paths where the real-world contents are a closed set —
+     * a user roster (/home) or a curated key/credential store (.ssh/.aws), where a stray
+     * procedural file (ld.so.cache in /home, a base64 blob in .ssh) is exactly the tell.
      */
-    private const PINNED_EXCLUSIVE_DIRS = ['/home'];
+    private const PINNED_EXCLUSIVE_DIRS = ['/home', '/root/.ssh', '/root/.aws'];
 
     /** @var array<string,Node[]> buildChildren cache, keyed by canonical dir path */
     private array $childCache = [];
@@ -348,14 +349,7 @@ class FakeFilesystem
     {
         $canon = $parentDir === '/' ? '/' . $name : $parentDir . '/' . $name;
         $s = $this->nodeSeed($canon);
-        // uids stay coherent with the pinned /etc/passwd (root, www-data under /var/www, else the admin user).
-        if (Draw::chance($s, self::UID_ROLL_IDX, 3, 4)) {
-            $uid = 0;
-        } elseif (strncmp($canon, '/var/www', 8) === 0) {
-            $uid = $this->distroFam === 'rhel' ? 48 : 33; // apache vs www-data — matches the pinned passwd
-        } else {
-            $uid = 1000;
-        }
+        $uid = $this->ownerUid($canon, $s);
         $mtime = FrozenClock::epoch() - Draw::intBelow($s, self::MTIME_IDX, self::TWO_YEARS);
         if ($isDir) {
             return new Node($name, 'dir', $uid, $uid, 4096, 0o755, $mtime, null);
@@ -365,22 +359,41 @@ class FakeFilesystem
         return new Node($name, 'file', $uid, $uid, $size, 0o644, $mtime, null);
     }
 
-    /** Avalanching, padding-free content: md5 blocks diffuse fully; base64 the whole blob once, then cut. */
+    /**
+     * Plausible owner for a generated node, by location — a careful attacker reads a uid-1000 file
+     * under /root, or a root-owned file inside a user's home, as a generator tell. Root owns its own
+     * home and the system tree; a user home's contents belong to that user (its pinned uid); /var/www
+     * is the web user. Elsewhere most files are root with an occasional admin-owned one.
+     */
+    private function ownerUid(string $canon, string $s): int
+    {
+        if ($canon === '/root' || strncmp($canon, '/root/', 6) === 0) {
+            return 0;
+        }
+        if (strncmp($canon, '/home/', 6) === 0) {
+            $segs = PathCanon::segments($canon);
+            $home = '/home/' . ($segs[1] ?? '');
+            if (isset($this->pinnedNodes[$home])) {
+                return $this->pinnedNodes[$home]->uid;
+            }
+            return 1000;
+        }
+        if (strncmp($canon, '/var/www', 8) === 0) {
+            return $this->distroFam === 'rhel' ? 48 : 33; // apache vs www-data — matches the pinned passwd
+        }
+        // System tree: mostly root, with the odd admin-owned artifact.
+        return Draw::chance($s, self::UID_ROLL_IDX, 3, 4) ? 0 : 1000;
+    }
+
+    /**
+     * File body, exactly $size bytes. Content is dispatched by extension (a generated `.env`/`.conf`/
+     * `.json`/`.log` reads as that kind of file, not base64 noise — which inside a `config.json` is the
+     * tell); unknown/binary extensions fall through to the avalanching base64 the generator has always
+     * used. ProcContent guarantees the byte length so `ls -l` and `cat | wc -c` still agree.
+     */
     private function procContent(string $canon, int $size): string
     {
-        if ($size <= 0) {
-            return '';
-        }
-        $seed = $this->nodeSeed($canon);
-        $rawNeeded = intdiv($size, 4) * 3 + 3; // enough raw bytes that base64 length >= size
-        $raw = '';
-        $b = 0;
-        while (strlen($raw) < $rawNeeded) {
-            $raw .= md5($seed . pack('N', self::CONTENT_BASE + $b), true); // 16 raw bytes, full avalanche
-            $b++;
-        }
-
-        return substr(base64_encode($raw), 0, $size); // padding only at the very end, cut away by substr
+        return ProcContent::generate($this->nodeSeed($canon), PathCanon::basename($canon), $size);
     }
 
     protected function nodeSeed(string $canon): string

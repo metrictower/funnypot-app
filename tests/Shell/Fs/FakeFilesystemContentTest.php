@@ -58,17 +58,24 @@ final class FakeFilesystemContentTest extends TestCase
     {
         $fs = $this->fs();
         $files = $this->findFiles($fs, ['/usr/lib', '/var/log', '/srv/app', '/opt', '/usr/share', '/home', '/var/cache', '/root']);
+        // Target a base64-noise file (unknown/binary extension) — extension-aware bodies (.env/.conf/
+        // .json/.log) legitimately contain '=' / ':' and are not what this base64 regression guards.
         $path = null;
+        $bytes = '';
         foreach ($files as $p => $n) {
-            if ($n->size >= 200) {
-                $path = $p; // a procedural file (none of these dirs are the pinned /etc)
+            if ($n->size < 200) {
+                continue;
+            }
+            $c = $fs->read($p);
+            if (preg_match('#^[A-Za-z0-9+/]+$#', $c) === 1) { // pure base64, no padding -> the noise path
+                $path = $p;
+                $bytes = $c;
                 break;
             }
         }
         if ($path === null) {
-            self::markTestSkipped('no procedural file >= 200 bytes for this seed');
+            self::markTestSkipped('no base64-noise file >= 200 bytes for this seed');
         }
-        $bytes = $fs->read($path);
         // B3 regression: the old base64(fnv1a64-block) put '=' every 12th char and near-identical blocks.
         self::assertStringNotContainsString('=', $bytes, 'no base64 padding inside generated content');
         // 12-char windows must not be near-identical (avalanche): most windows are distinct.

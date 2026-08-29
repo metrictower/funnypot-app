@@ -105,15 +105,15 @@ return array (
           'equals' => '',
         ),
         'send' => 'Node        User        Action     Idle    Login Time
-web01       root        login      00:12   Aug 18 09:14
-web01       admin       idle       02:04   Aug 18 08:02
+%%HOST%%root        login      00:12   Aug 18 09:14
+%%HOST%%admin       idle       02:04   Aug 18 08:02
 ',
       ),
     ),
     'default' => 
     array (
       'send' => 'Node        User        Action     Idle    Login Time
-web01       ?           no such user
+%%HOST%%?           no such user
 ',
     ),
   ),
@@ -783,6 +783,39 @@ db0:keys=3,expires=0,avg_ttl=0',
     array (
       'send' => '@ERROR: protocol startup error (bad session)
 ',
+    ),
+  ),
+  'sip' => 
+  array (
+    'listen' => 
+    array (
+      0 => 5060,
+    ),
+    'severity' => 'medium',
+    'tags' => 
+    array (
+      0 => 'protocol',
+      1 => 'sip',
+      2 => 'voip',
+      3 => 'pbx',
+      4 => 'asterisk',
+    ),
+    'banner' => '',
+    'framing' => 'raw',
+    'rules' => 
+    array (
+      0 => 
+      array (
+        'match' => 
+        array (
+          'regex' => '^(OPTIONS|REGISTER|INVITE|ACK|BYE|CANCEL)',
+        ),
+        'send' => '',
+      ),
+    ),
+    'default' => 
+    array (
+      'send' => '',
     ),
   ),
   'smtp' => 

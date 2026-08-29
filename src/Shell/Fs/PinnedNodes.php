@@ -30,6 +30,30 @@ final class PinnedNodes
     private const IDX_FILE_MTIME = 100;
     private const IDX_HOME_MTIME = 400;
     private const IDX_STAFF_COUNT = 700;
+    private const IDX_ROOT_MTIME = 800;      // 800+ one per pinned /root file
+    private const IDX_HISTORY_LEN = 900;
+    private const IDX_HISTORY_LINE = 901;    // 901 + i, one per history line
+    private const IDX_AWS_REGION = 990;
+
+    private const TOKEN_B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    private const TOKEN_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+    // Plausible root shell history — inert, generic operator commands (no fingerprint markers). One
+    // host's history is a seeded subset in a seeded order, so it varies per install but reads real.
+    private const HISTORY_CMDS = [
+        'ls -la', 'cd /var/www', 'cd /etc/nginx', 'df -h', 'free -m', 'top', 'htop', 'uptime',
+        'systemctl restart nginx', 'systemctl status nginx', 'systemctl restart mariadb',
+        'journalctl -xe', 'tail -f /var/log/syslog', 'tail -n 100 /var/log/nginx/error.log',
+        'apt update', 'apt upgrade -y', 'apt install -y htop', 'docker ps', 'docker compose up -d',
+        'docker logs app', 'git pull', 'git status', 'vim /etc/nginx/sites-enabled/default',
+        'nginx -t', 'crontab -l', 'ps aux | grep nginx', 'netstat -tlnp', 'ss -tlnp',
+        'chown -R www-data:www-data /var/www', 'chmod 640 /etc/ssl/private/server.key',
+        'mysql -u root -p', 'redis-cli ping', 'certbot renew --dry-run', 'ufw status',
+        'du -sh /var/log/*', 'find /var/www -name "*.php" -mtime -1', 'scp backup.tar.gz backup@10.0.0.9:/srv/',
+        'export EDITOR=vim', 'history -c', 'sudo -i', 'exit',
+    ];
+
+    private const AWS_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-2'];
 
     private const ADMIN_NAMES = [
         'jmartin', 'akhan', 'dsilva', 'rprice', 'lchen', 'mwilson', 'sokafor', 'tbauer', 'nsingh', 'grossi',
@@ -89,7 +113,179 @@ final class PinnedNodes
             $uid++;
         }
 
+        // Root's home: the standard skel dotfiles, a seeded shell history, an inert .ssh key store, and
+        // a couple of high-ROI inert loot files (.env + cloud creds) — the bait the old FakeShell curated
+        // and the procedural generator dropped. All root-owned; .ssh/.aws are pinned-exclusive dirs so
+        // the generator can't sprinkle base64 noise into a key store.
+        self::addRootHome($nodes, $content, $seed, $admin, $id->hostname(), $now);
+
         return ['nodes' => $nodes, 'content' => $content, 'fam' => $fam];
+    }
+
+    // Standard root skel — byte-for-byte the Debian defaults, identical on every box, so NOT a
+    // fingerprint. Real operators leave these untouched; their presence is what a bare /root lacks.
+    private const SKEL_BASHRC = "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n"
+        . "export PS1='\\h:\\w\\\$ '\numask 022\n\n"
+        . "# You may uncomment the following lines if you want `ls' to be colorized:\n"
+        . "# export LS_OPTIONS='--color=auto'\n# eval \"`dircolors`\"\n# alias ls='ls \$LS_OPTIONS'\n"
+        . "# alias ll='ls \$LS_OPTIONS -l'\n# alias l='ls \$LS_OPTIONS -lA'\n#\n"
+        . "# Some more alias to avoid making mistakes:\n# alias rm='rm -i'\n# alias cp='cp -i'\n# alias mv='mv -i'\n";
+    private const SKEL_PROFILE = "# ~/.profile: executed by Bourne-compatible login shells.\n\n"
+        . "if [ \"\$BASH\" ]; then\n  if [ -f ~/.bashrc ]; then\n    . ~/.bashrc\n  fi\nfi\n\n"
+        . "mesg n 2> /dev/null || true\n";
+    private const SKEL_LOGOUT = "# ~/.bash_logout: executed by bash(1) when login shell exits.\n\n"
+        . "# when leaving the console clear the screen to increase privacy\n\n"
+        . "if [ \"\$SHLVL\" = 1 ]; then\n    [ -x /usr/bin/clear_console ] && /usr/bin/clear_console -q\nfi\n";
+
+    /**
+     * Pin root's home: skel dotfiles, .bash_history, .ssh key store, and inert .env / cloud-cred loot.
+     *
+     * @param array<string,Node>   $nodes   accumulator (by ref)
+     * @param array<string,string> $content accumulator (by ref)
+     */
+    private static function addRootHome(array &$nodes, array &$content, string $seed, string $admin, string $hostname, int $now): void
+    {
+        $put = static function (string $path, string $bytes, int $mode) use (&$nodes, &$content, $seed, $now): void {
+            $mtime = $now - Draw::intBelow($seed, self::IDX_ROOT_MTIME + count($content), 20000000);
+            $nodes[$path] = new Node(PathCanon::basename($path), 'file', 0, 0, strlen($bytes), $mode, $mtime, null);
+            $content[$path] = $bytes;
+        };
+        $dir = static function (string $path, int $mode) use (&$nodes, $now): void {
+            $nodes[$path] = new Node(PathCanon::basename($path), 'dir', 0, 0, 4096, $mode, $now - 15000000, null);
+        };
+
+        // Skel dotfiles (identical everywhere) + a seeded, plausible operator history.
+        $put('/root/.bashrc', self::SKEL_BASHRC, 0o644);
+        $put('/root/.profile', self::SKEL_PROFILE, 0o644);
+        $put('/root/.bash_logout', self::SKEL_LOGOUT, 0o644);
+        $put('/root/.bash_history', self::bashHistory($seed), 0o600);
+
+        // .ssh — inert fake keys. The key material is seeded noise in the correct SSH wire shape; a
+        // private key is a real-looking OpenSSH PEM block that decodes to nothing usable.
+        $dir('/root/.ssh', 0o700);
+        $rsaPub = self::rsaPubKey($seed, 'idrsa') . ' root@' . $hostname;
+        $edPub = self::ed25519PubKey($seed, 'admin') . ' ' . $admin . '@workstation';
+        $put('/root/.ssh/id_rsa', self::opensshPrivateKey($seed, 'idrsa'), 0o600);
+        $put('/root/.ssh/id_rsa.pub', $rsaPub . "\n", 0o644);
+        $put('/root/.ssh/authorized_keys', $rsaPub . "\n" . $edPub . "\n", 0o600);
+        $put('/root/.ssh/known_hosts', self::knownHosts($seed), 0o644);
+
+        // High-ROI loot — inert per-host secrets an attacker reflexively grabs. The AWS pair is shared
+        // between .env and ~/.aws/credentials so a cross-referencing attacker finds agreement.
+        $awsKeyId = 'AKIA' . self::run($seed, 'awskid', 16, self::TOKEN_UPPER);
+        $awsSecret = self::run($seed, 'awssec', 40, self::TOKEN_B62 . '+/');
+        $put('/root/.env', self::envLoot($seed, $awsKeyId, $awsSecret), 0o600);
+
+        $dir('/root/.aws', 0o700);
+        $region = (string) Draw::pick($seed, self::IDX_AWS_REGION, self::AWS_REGIONS);
+        $put('/root/.aws/credentials', "[default]\naws_access_key_id = {$awsKeyId}\naws_secret_access_key = {$awsSecret}\n", 0o600);
+        $put('/root/.aws/config', "[default]\nregion = {$region}\noutput = json\n", 0o644);
+    }
+
+    /** A seeded subset of the history pool, in a seeded order — inert, generic, believable. */
+    private static function bashHistory(string $seed): string
+    {
+        $n = 18 + Draw::intBelow($seed, self::IDX_HISTORY_LEN, 30);
+        $out = '';
+        for ($i = 0; $i < $n; $i++) {
+            $out .= (string) Draw::pick($seed, self::IDX_HISTORY_LINE + $i * 7, self::HISTORY_CMDS) . "\n";
+        }
+
+        return $out;
+    }
+
+    private static function envLoot(string $seed, string $awsKeyId, string $awsSecret): string
+    {
+        return "APP_ENV=production\nAPP_DEBUG=false\n"
+            . 'DB_HOST=10.0.0.' . (10 + Draw::intBelow($seed, 991, 240)) . "\nDB_PORT=3306\nDB_DATABASE=app_production\nDB_USERNAME=app\n"
+            . 'DB_PASSWORD=' . self::run($seed, 'dbpw', 24, self::TOKEN_B62) . "\n"
+            . 'REDIS_PASSWORD=' . self::run($seed, 'redispw', 20, self::TOKEN_B62) . "\n"
+            . 'JWT_SECRET=' . self::run($seed, 'jwt', 48, self::TOKEN_B62) . "\n"
+            . "AWS_ACCESS_KEY_ID={$awsKeyId}\nAWS_SECRET_ACCESS_KEY={$awsSecret}\n"
+            . 'STRIPE_SECRET_KEY=sk_live_' . self::run($seed, 'stripe', 24, self::TOKEN_B62) . "\n";
+    }
+
+    /** A run of $len chars from $alphabet, avalanching per byte, keyed by (seed, tag). */
+    private static function run(string $seed, string $tag, int $len, string $alphabet): string
+    {
+        $m = strlen($alphabet);
+        $out = '';
+        $block = 0;
+        while (strlen($out) < $len) {
+            $bytes = md5($seed . "\0run\0" . $tag . "\0" . $block, true);
+            for ($i = 0; $i < 16 && strlen($out) < $len; $i++) {
+                $out .= $alphabet[ord($bytes[$i]) % $m];
+            }
+            $block++;
+        }
+
+        return $out;
+    }
+
+    private static function rawBytes(string $seed, string $tag, int $n): string
+    {
+        $out = '';
+        $block = 0;
+        while (strlen($out) < $n) {
+            $out .= md5($seed . "\0raw\0" . $tag . "\0" . $block, true);
+            $block++;
+        }
+
+        return substr($out, 0, $n);
+    }
+
+    private static function sshField(string $s): string
+    {
+        return pack('N', strlen($s)) . $s;
+    }
+
+    /** SSH mpint: big-endian, minimal, a leading 0x00 when the high bit is set. */
+    private static function sshMpint(string $raw): string
+    {
+        $raw = ltrim($raw, "\x00");
+        if ($raw === '') {
+            $raw = "\x00";
+        }
+        if (ord($raw[0]) & 0x80) {
+            $raw = "\x00" . $raw;
+        }
+
+        return pack('N', strlen($raw)) . $raw;
+    }
+
+    /** `ssh-ed25519 <base64>` with a correctly-shaped, inert 32-byte public value. */
+    private static function ed25519PubKey(string $seed, string $tag): string
+    {
+        $wire = self::sshField('ssh-ed25519') . self::sshField(self::rawBytes($seed, 'ed:' . $tag, 32));
+
+        return 'ssh-ed25519 ' . base64_encode($wire);
+    }
+
+    /** `ssh-rsa <base64>` with e=65537 and an inert 2048-bit-shaped modulus. */
+    private static function rsaPubKey(string $seed, string $tag): string
+    {
+        $mod = self::rawBytes($seed, 'rsa:' . $tag, 256);
+        $mod[0] = chr(ord($mod[0]) | 0x80); // top bit set -> a full 2048-bit modulus, not a short one
+        $wire = self::sshField('ssh-rsa') . self::sshMpint("\x01\x00\x01") . self::sshMpint($mod);
+
+        return 'ssh-rsa ' . base64_encode($wire);
+    }
+
+    /** An OpenSSH-format private-key PEM block — inert base64 body, 70-column wrapped. */
+    private static function opensshPrivateKey(string $seed, string $tag): string
+    {
+        $body = base64_encode(self::rawBytes($seed, 'priv:' . $tag, 384));
+
+        return "-----BEGIN OPENSSH PRIVATE KEY-----\n" . chunk_split($body, 70, "\n")
+            . "-----END OPENSSH PRIVATE KEY-----\n";
+    }
+
+    /** A few inert known_hosts lines (an internal box + a couple of forges), seeded per host. */
+    private static function knownHosts(string $seed): string
+    {
+        return '10.0.0.' . (5 + Draw::intBelow($seed, 995, 40)) . ' ' . self::ed25519PubKey($seed, 'kh1') . "\n"
+            . 'github.com ' . self::rsaPubKey($seed, 'kh2') . "\n"
+            . 'gitlab.internal ' . self::ed25519PubKey($seed, 'kh3') . "\n";
     }
 
     /**

@@ -58,12 +58,31 @@ final class ProtocolEmulator
             return "\xff\xfb\x01\xff\xfb\x03\r\n" . $id->distroPretty() . "\r\n" . $id->hostname() . ' login: ';
         }
 
-        return $this->renderer->render((string) ($this->protocol['banner'] ?? ''), [], $s->seed);
+        return $this->injectHost($this->renderer->render((string) ($this->protocol['banner'] ?? ''), [], $s->seed));
     }
 
     private function hostId(): \Funnypot\Shell\Host\HostIdentity
     {
         return $this->hostId ??= \Funnypot\Shell\Host\HostIdentity::fromSeed($this->identitySeed ?? 0);
+    }
+
+    /**
+     * Render-time host injection: `%%HOST%%` in any served body becomes this box's seeded hostname,
+     * left-justified into a fixed field so a columnar reply (finger) stays aligned. This is how a
+     * data-protocol reply names the SAME host the telnet/ssh prompt, uname and /etc/hostname do — a
+     * hardcoded hostname across protocols is a cross-protocol incoherence an attacker can pivot on.
+     */
+    private function injectHost(string $s): string
+    {
+        if (strpos($s, '%%HOST%%') === false) {
+            return $s;
+        }
+        // Left-justify into a field at least 12 wide, but always keep >= 2 trailing spaces so a long
+        // hostname never merges into the next column. Every row shares the host, so rows stay aligned.
+        $host = $this->hostId()->hostname();
+        $field = str_pad($host, max(12, strlen($host) + 2));
+
+        return str_replace('%%HOST%%', $field, $s);
     }
 
     /**
@@ -375,14 +394,14 @@ final class ProtocolEmulator
     private function renderSend($send, array $caps, int $seed)
     {
         if (!is_array($send)) {
-            return $this->renderer->render((string) $send, $caps, $seed);
+            return $this->injectHost($this->renderer->render((string) $send, $caps, $seed));
         }
         $out = [];
         foreach ($send as $k => $v) {
             if (is_string($v)) {
-                $out[$k] = $this->renderer->render($v, $caps, $seed);
+                $out[$k] = $this->injectHost($this->renderer->render($v, $caps, $seed));
             } elseif (is_array($v)) {
-                $out[$k] = array_map(fn ($x) => $this->renderer->render((string) $x, $caps, $seed), $v);
+                $out[$k] = array_map(fn ($x) => $this->injectHost($this->renderer->render((string) $x, $caps, $seed)), $v);
             } else {
                 $out[$k] = $v;
             }
