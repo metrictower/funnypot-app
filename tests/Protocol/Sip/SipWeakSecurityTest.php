@@ -173,8 +173,9 @@ final class SipWeakSecurityTest extends TestCase
         $invite = SipMessage::parse("INVITE sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nCSeq: 1 INVITE\r\n\r\n");
         $server->dispatchMessage($invite, '10.0.0.9', 5060, 'udp');
 
-        // 2. ACK to start streaming
-        $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nCSeq: 1 ACK\r\n\r\n");
+        // 2. ACK (echoing our To-tag, so it passes return-routability) to start streaming
+        $toTag = $server->dialogToTag($callId, '10.0.0.9');
+        $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nTo: <sip:101@target>;tag={$toTag}\r\nCSeq: 1 ACK\r\n\r\n");
         $server->dispatchMessage($ack, '10.0.0.9', 5060, 'udp');
 
         // 3. Wait 25ms and simulate RTP audio transmission ticks

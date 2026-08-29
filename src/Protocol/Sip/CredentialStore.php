@@ -13,6 +13,9 @@ namespace Funnypot\Protocol\Sip;
  */
 final class CredentialStore
 {
+    /** Cap on distinct tracked keys/IPs; oldest are evicted so a spoofed-source flood can't grow memory unbounded. */
+    private const MAX_TRACKED = 5000;
+
     /** @var array<string, string> In-memory cache: "ip:user" => responseHash */
     private array $memoryCache = [];
 
@@ -49,14 +52,18 @@ final class CredentialStore
     {
         $count = $this->getCallCountForIp($ip) + 1;
         $this->callCounts[$ip] = $count;
+        if (count($this->callCounts) > self::MAX_TRACKED) {
+            array_shift($this->callCounts); // evict oldest-seen IP
+        }
 
         $key = "fp_sip_calls_{$ip}";
         if (function_exists('apcu_store')) {
             @apcu_store($key, $count, $this->ttl);
         }
 
-        $this->savePersisted();
-
+        // No disk write here: this runs on EVERY INVITE (pre-handshake), and a full-file rewrite per
+        // spoofed packet is a self-DoS. Call counts stay in memory/APCu — they only pick the persona,
+        // so losing them on restart is harmless. Credentials still persist on latch().
         return $count;
     }
 
@@ -98,6 +105,9 @@ final class CredentialStore
     {
         $key = $this->key($ip, $user);
         $this->memoryCache[$key] = $responseHash;
+        if (count($this->memoryCache) > self::MAX_TRACKED) {
+            array_shift($this->memoryCache); // evict oldest latched credential
+        }
 
         if (function_exists('apcu_store')) {
             @apcu_store($key, $responseHash, $this->ttl);

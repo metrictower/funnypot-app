@@ -22,6 +22,14 @@ final class SipServer
     /** @var array<int, string> TCP client socket resource id => inbuf */
     private array $tcpBuffers = [];
 
+    /** @var array<int, float> TCP client socket resource id => last activity time (idle-close). */
+    private array $tcpLastActivity = [];
+
+    /** Ceilings that stop a TCP flood / slowloris from exhausting fds or memory. */
+    private const MAX_TCP_CLIENTS = 128;
+    private const MAX_TCP_BUFFER = 16384;
+    private const TCP_IDLE_TIMEOUT = 30.0;
+
     /** @var array<string, SipSession> Active sessions keyed by callId + peerAddr */
     private array $sessions = [];
 
@@ -198,10 +206,16 @@ final class SipServer
     {
         $client = @stream_socket_accept($this->tcpSocket, 0, $peerAddr);
         if ($client) {
+            if (count($this->tcpClients) >= self::MAX_TCP_CLIENTS) {
+                @fclose($client); // at capacity — refuse (fd-exhaustion guard)
+
+                return;
+            }
             stream_set_blocking($client, false);
             $id = (int) $client;
             $this->tcpClients[$id] = $client;
             $this->tcpBuffers[$id] = '';
+            $this->tcpLastActivity[$id] = microtime(true);
         }
     }
 
@@ -214,12 +228,23 @@ final class SipServer
         $chunk = @fread($sock, 8192);
         if ($chunk === false || $chunk === '') {
             @fclose($sock);
-            unset($this->tcpClients[$id], $this->tcpBuffers[$id]);
+            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
 
             return;
         }
 
+        $this->tcpLastActivity[$id] = microtime(true);
         $this->tcpBuffers[$id] .= $chunk;
+
+        // Slowloris guard: a client dribbling data with no complete SIP message is dropped rather
+        // than buffered without bound.
+        if (strlen($this->tcpBuffers[$id]) > self::MAX_TCP_BUFFER) {
+            @fclose($sock);
+            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
+
+            return;
+        }
+
         $buf = $this->tcpBuffers[$id];
 
         // Attempt to parse complete SIP message
@@ -618,6 +643,14 @@ final class SipServer
 
         if ($match) {
             [, $s] = $match;
+
+            // Return-routability: only start streaming if the ACK echoes the To-tag we issued in
+            // the 200 OK. A spoofed-INVITE reflector never sees that tag (the 200 OK went to the
+            // spoofed victim), so this blocks RTP being blasted at a spoofed address.
+            if (!preg_match('/;tag=([^\s;>]+)/i', $req->getTo() ?? '', $m) || !hash_equals($s->toTag, $m[1])) {
+                return;
+            }
+
             $s->state = SipSession::STATE_STREAMING;
             $s->lastRtpSendTime = microtime(true);
             $s->lastInboundTime = microtime(true); // baseline for hangup/idle detection
@@ -780,7 +813,8 @@ final class SipServer
         // decompresses + expands to a playable WAV on request. Prune the dir so it can't fill disk.
         $recUrl = '';
         if ($this->config->recordCalls && strlen($s->recordedUlaw) > 0) {
-            $recId = preg_replace('/[^a-zA-Z0-9_-]/', '_', $s->callId);
+            // Cap the sanitized id length so an over-long attacker Call-ID can't exceed NAME_MAX.
+            $recId = substr((string) preg_replace('/[^a-zA-Z0-9_-]/', '_', $s->callId), 0, 64);
             $filePath = $this->config->recordingsDir . '/' . $recId . '.ulaw.gz';
             @mkdir(dirname($filePath), 0777, true);
             if (@file_put_contents($filePath, (string) gzencode($s->recordedUlaw, 6)) !== false) {
@@ -849,6 +883,17 @@ final class SipServer
         }
     }
 
+    /**
+     * The server-issued To-tag for an active dialog. A legitimate caller's ACK must echo it (that
+     * check is what stops spoofed-INVITE RTP reflection); exposed so tests can build a valid ACK.
+     */
+    public function dialogToTag(string $callId, string $peerIp): ?string
+    {
+        $match = $this->findSessionByCallId($callId, $peerIp);
+
+        return $match ? $match[1]->toTag : null;
+    }
+
     private function cleanupExpiredSessions(): void
     {
         $now = microtime(true);
@@ -860,6 +905,16 @@ final class SipServer
             $idle = $now - $baseline;
             if ($s->getDuration() > $this->config->maxCallDuration || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)) {
                 $this->endSession($s, $key);
+            }
+        }
+
+        // Idle-close half-open / slowloris TCP clients that never completed a message.
+        foreach ($this->tcpLastActivity as $id => $ts) {
+            if ($now - $ts > self::TCP_IDLE_TIMEOUT) {
+                if (isset($this->tcpClients[$id])) {
+                    @fclose($this->tcpClients[$id]);
+                }
+                unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
             }
         }
 

@@ -120,12 +120,59 @@ final class SipServerSecurityTest extends TestCase
         $server->dispatchMessage($reg2, '1.2.3.4', 5060, 'udp');
         $this->assertTrue(end($logged)['reportable'], 'Second-leg authenticated REGISTER with issued nonce must be reportable');
 
-        // 5. INVITE followed by ACK -> ACK event must be reportable
+        // 5. INVITE followed by a valid ACK (echoing our To-tag) -> ACK event must be reportable
         $inv = SipMessage::parse("INVITE sip:101@target SIP/2.0\r\nCall-ID: call-ack\r\nCSeq: 1 INVITE\r\n\r\n");
         $server->dispatchMessage($inv, '1.2.3.4', 5060, 'udp');
 
-        $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: call-ack\r\nCSeq: 1 ACK\r\n\r\n");
+        $toTag = $server->dialogToTag('call-ack', '1.2.3.4');
+        $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: call-ack\r\nTo: <sip:101@target>;tag={$toTag}\r\nCSeq: 1 ACK\r\n\r\n");
         $server->dispatchMessage($ack, '1.2.3.4', 5060, 'udp');
         $this->assertTrue(end($logged)['reportable'], 'ACK confirming two-way call setup must be reportable');
+    }
+
+    public function test_no_rtp_reflection_without_return_routable_ack(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(recordCalls: true), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        // A spoofed INVITE (attacker sets source = victim). It must NOT stream RTP: streaming waits
+        // for an ACK that echoes our To-tag, which a spoofer never sees.
+        $inv = SipMessage::parse(
+            "INVITE sip:101@target SIP/2.0\r\nCall-ID: reflect-1\r\nCSeq: 1 INVITE\r\n"
+            . "Content-Type: application/sdp\r\nContent-Length: 40\r\n\r\n"
+            . "v=0\r\nm=audio 53 RTP/AVP 0\r\n"
+        );
+        $server->dispatchMessage($inv, '198.51.100.9', 5060, 'udp');
+        $server->tickRtpStreams();
+        $this->assertSame('', $this->recordedUlawFor($server, 'reflect-1', '198.51.100.9'), 'no RTP before a valid ACK');
+
+        // A forged ACK with the wrong tag is also rejected.
+        $badAck = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: reflect-1\r\nTo: <sip:101@target>;tag=wrong\r\nCSeq: 1 ACK\r\n\r\n");
+        $server->dispatchMessage($badAck, '198.51.100.9', 5060, 'udp');
+        $server->tickRtpStreams();
+        $this->assertSame('', $this->recordedUlawFor($server, 'reflect-1', '198.51.100.9'), 'forged-tag ACK must not start streaming');
+
+        // The real caller's ACK (correct tag) does start streaming.
+        $tag = $server->dialogToTag('reflect-1', '198.51.100.9');
+        $goodAck = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: reflect-1\r\nTo: <sip:101@target>;tag={$tag}\r\nCSeq: 1 ACK\r\n\r\n");
+        $server->dispatchMessage($goodAck, '198.51.100.9', 5060, 'udp');
+        usleep(25000);
+        $server->tickRtpStreams();
+        $this->assertNotSame('', $this->recordedUlawFor($server, 'reflect-1', '198.51.100.9'), 'valid ACK starts streaming');
+    }
+
+    private function recordedUlawFor(SipServer $server, string $callId, string $ip): string
+    {
+        $ref = new \ReflectionProperty($server, 'sessions');
+        $ref->setAccessible(true);
+        foreach ($ref->getValue($server) as $s) {
+            if ($s->callId === $callId && $s->peerIp === $ip) {
+                return $s->recordedUlaw;
+            }
+        }
+
+        return '';
     }
 }

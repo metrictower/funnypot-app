@@ -79,7 +79,10 @@ final class SipSession
 
     public function isStreaming(): bool
     {
-        return ($this->state === self::STATE_CONNECTED || $this->state === self::STATE_STREAMING) && $this->remoteRtpPort > 0;
+        // Only STREAMING (reached via a validated ACK) streams RTP. STATE_CONNECTED (set on INVITE,
+        // before any ACK) must NOT stream — otherwise a single spoofed INVITE would blast RTP at a
+        // spoofed victim, turning the honeypot into a reflection/amplification weapon.
+        return $this->state === self::STATE_STREAMING && $this->remoteRtpPort > 0;
     }
 
     public function getDuration(): float
