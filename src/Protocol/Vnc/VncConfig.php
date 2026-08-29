@@ -8,9 +8,9 @@ namespace Funnypot\Protocol\Vnc;
  * Configuration for the VNC honeypot service.
  * Supports:
  * - Realistic desktop background image (eth.png — a fake ETH staking wallet)
- * - Taunt mode: switches on click to non-stop accordion strobe resize (tiny <-> massive multi-monitor),
- *   flashing RED Giant Trollface and BLACK Skull ASCII art, audio beeps, and taunt clipboard, then
- *   drops the connection after tauntDurationSec.
+ * - Taunt mode: a click shows a fake "Reverse VNC connection?" dialog, then a scripted slideshow
+ *   (ah-ah-ah -> "Reversing VNC connection" -> evil-troll), then a burst of malformed RFB and a
+ *   disconnect. Idle (pre-interaction) connections are held open for idleTimeoutSec.
  */
 final class VncConfig
 {
@@ -28,18 +28,12 @@ final class VncConfig
         public bool $chaosResizeOnAction = true,
         public int $massiveWidth = 8192,
         public int $massiveHeight = 8192,
-        public bool $strobeResize = true,
-        public int $regularWidth = 1024,
-        public int $regularHeight = 768,
-        public int $tinyWidth = 480,
-        public int $tinyHeight = 480,
-        public float $flashInterval = 0.25,
         public string $serverName = 'Remote Server Desktop',
         public string $authMode = 'none',
-        public float $tauntDurationSec = 10.0,
         public float $tauntPopupSec = 2.0,
         public bool $dodgePopup = true,
-        public bool $malformedExit = true
+        public bool $malformedExit = true,
+        public float $idleTimeoutSec = 900.0
     ) {
     }
 
@@ -99,18 +93,9 @@ final class VncConfig
         $actionRaw = getenv('FUNNYPOT_VNC_CHAOS_RESIZE_ON_ACTION');
         $chaosResizeOnAction = ($actionRaw === false) ? true : filter_var($actionRaw, FILTER_VALIDATE_BOOLEAN);
 
-        $strobeResizeEnv = getenv('FUNNYPOT_VNC_STROBE_RESIZE');
-        $strobeResize = ($strobeResizeEnv !== false) ? filter_var($strobeResizeEnv, FILTER_VALIDATE_BOOLEAN) : $isTaunt;
-
         $massiveWidth = (int) (getenv('FUNNYPOT_VNC_MASSIVE_WIDTH') ?: '8192');
         $massiveHeight = (int) (getenv('FUNNYPOT_VNC_MASSIVE_HEIGHT') ?: '8192');
 
-        $regularWidth = (int) (getenv('FUNNYPOT_VNC_REGULAR_WIDTH') ?: '1024');
-        $regularHeight = (int) (getenv('FUNNYPOT_VNC_REGULAR_HEIGHT') ?: '768');
-        $tinyWidth = (int) (getenv('FUNNYPOT_VNC_TINY_WIDTH') ?: '480');
-        $tinyHeight = (int) (getenv('FUNNYPOT_VNC_TINY_HEIGHT') ?: '480');
-
-        $flashInterval = max(0.1, (float) (getenv('FUNNYPOT_VNC_FLASH_INTERVAL') ?: '0.25'));
         // The bundled desktop is a fake ETH staking wallet; the RFB name matches that persona.
         $serverName = getenv('FUNNYPOT_VNC_NAME') ?: ($image ? 'ETH staking SRV02' : 'Windows 95 Workstation');
         $authMode = strtolower(getenv('FUNNYPOT_VNC_AUTH') ?: 'none');
@@ -128,9 +113,9 @@ final class VncConfig
         $malformedRaw = getenv('FUNNYPOT_VNC_MALFORMED_EXIT');
         $malformedExit = ($malformedRaw === false) ? true : filter_var($malformedRaw, FILTER_VALIDATE_BOOLEAN);
 
-        // Once the storm is running it drops the connection after this many seconds. A well-behaved
-        // client then reconnects and walks into the whole trap again. 0 disables the auto-drop.
-        $tauntDurationSec = max(0.0, (float) (getenv('FUNNYPOT_VNC_TAUNT_DURATION') ?: '4'));
+        // VNC-only idle timeout: a lurking bot may sit silently for minutes to see if the box is in
+        // use, so hold the connection open far longer than the other protocols before dropping it.
+        $idleTimeoutSec = max(1.0, (float) (getenv('FUNNYPOT_VNC_IDLE_TIMEOUT') ?: '900'));
 
         return new self(
             style: $style,
@@ -146,18 +131,12 @@ final class VncConfig
             chaosResizeOnAction: $chaosResizeOnAction,
             massiveWidth: $massiveWidth,
             massiveHeight: $massiveHeight,
-            strobeResize: $strobeResize,
-            regularWidth: $regularWidth,
-            regularHeight: $regularHeight,
-            tinyWidth: $tinyWidth,
-            tinyHeight: $tinyHeight,
-            flashInterval: $flashInterval,
             serverName: $serverName,
             authMode: $authMode,
-            tauntDurationSec: $tauntDurationSec,
             tauntPopupSec: $tauntPopupSec,
             dodgePopup: $dodgePopup,
-            malformedExit: $malformedExit
+            malformedExit: $malformedExit,
+            idleTimeoutSec: $idleTimeoutSec
         );
     }
 }

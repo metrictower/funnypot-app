@@ -143,6 +143,133 @@ final class VncThemeRenderer
     }
 
     /**
+     * Loads a taunt image asset at its native size and returns [width, height, BGRA].
+     * Used by the taunt slideshow for the ah-ah-ah / evil-troll frames.
+     *
+     * @return array{0:int,1:int,2:string}
+     */
+    public function renderStormImageBgra(string $path): array
+    {
+        $loaded = @imagecreatefromstring((string) @file_get_contents($path));
+        if ($loaded === false) {
+            $im = imagecreatetruecolor(400, 300);
+            imagefilledrectangle($im, 0, 0, 399, 299, imagecolorallocate($im, 20, 0, 0));
+
+            return [400, 300, self::imageToBgra($im, 400, 300)];
+        }
+        if (!imageistruecolor($loaded)) {
+            imagepalettetotruecolor($loaded);
+        }
+        $w = imagesx($loaded);
+        $h = imagesy($loaded);
+
+        return [$w, $h, self::imageToBgra($loaded, $w, $h)];
+    }
+
+    /**
+     * The "Reversing VNC connection" taunt slide (with a loading spinner).
+     */
+    public function renderReversingTextBgra(int $w, int $h): string
+    {
+        return self::renderGrayNotice($w, $h, ['Reversing VNC', 'connection'], 'spinner');
+    }
+
+    /**
+     * The "A new VNC application has been installed" taunt slide (with a checkmark).
+     */
+    public function renderInstalledTextBgra(int $w, int $h): string
+    {
+        return self::renderGrayNotice($w, $h, ['A new VNC', 'application has', 'been installed'], 'check');
+    }
+
+    /**
+     * The opening taunt slide: a generic gray "VNC has stopped working" crash dialog with a
+     * grayscale error mark above the text. Wider than the other slides (a landscape error box).
+     */
+    public function renderVncErrorBgra(int $w, int $h): string
+    {
+        $im = imagecreatetruecolor($w, $h);
+        $bg = imagecolorallocate($im, 0xC0, 0xC0, 0xC0);
+        $ink = imagecolorallocate($im, 0x2E, 0x2E, 0x2E);
+        $ring = imagecolorallocate($im, 0x6E, 0x6E, 0x6E);
+        imagefilledrectangle($im, 0, 0, $w - 1, $h - 1, $bg);
+
+        // Error mark (circle + X), top-centre.
+        $cx = (int) round($w * 0.5);
+        $cy = (int) round($h * 0.19);
+        $scale = min($w, $h) / 180.0;
+        $r = (int) round(13 * $scale);
+        $d = (int) round(7 * $scale);
+        imagearc($im, $cx, $cy, $r * 2, $r * 2, 0, 360, $ring);
+        imagearc($im, $cx, $cy, $r * 2 + 1, $r * 2 + 1, 0, 360, $ring);
+        for ($o = -1; $o <= 1; $o++) {
+            imageline($im, $cx - $d, $cy - $d + $o, $cx + $d, $cy + $d + $o, $ink);
+            imageline($im, $cx + $d, $cy - $d + $o, $cx - $d, $cy + $d + $o, $ink);
+        }
+
+        self::drawCenteredText($im, 3, (int) round($h * 0.34), $w, 'VNC has stopped working', $ink);
+        self::drawCenteredText($im, 2, (int) round($h * 0.51), $w, 'memory written out of application', $ink);
+        self::drawCenteredText($im, 2, (int) round($h * 0.61), $w, 'bounds (fault 0xC0000005)', $ink);
+
+        return self::imageToBgra($im, $w, $h);
+    }
+
+    /**
+     * A deliberately generic notice frame: a flat neutral gray with grayscale centred text and an
+     * optional grayscale indicator ('spinner' | 'check' | 'none'). No window chrome or coloured
+     * accents — the attacker's client and OS are unknown, so it must read as the VNC viewer's own
+     * dialog rather than any particular desktop.
+     *
+     * @param list<string> $lines
+     */
+    private static function renderGrayNotice(int $w, int $h, array $lines, string $indicator): string
+    {
+        $im = imagecreatetruecolor($w, $h);
+        $bg = imagecolorallocate($im, 0xC0, 0xC0, 0xC0);
+        $ink = imagecolorallocate($im, 0x2E, 0x2E, 0x2E);
+        imagefilledrectangle($im, 0, 0, $w - 1, $h - 1, $bg);
+
+        $lineH = imagefontheight(4) + 3;
+        $y = (int) round($h * 0.37) - (int) round((count($lines) * $lineH) / 2);
+        foreach ($lines as $line) {
+            self::drawCenteredText($im, 4, $y, $w, $line, $ink);
+            $y += $lineH;
+        }
+
+        $cx = $w * 0.5;
+        $cy = $h * 0.70;
+        $scale = min($w, $h) / 200.0;
+
+        if ($indicator === 'spinner') {
+            // 12 spokes, graduated gray — a generic loading spinner.
+            $ri = 8 * $scale;
+            $ro = 18 * $scale;
+            for ($i = 0; $i < 12; $i++) {
+                $a = ($i / 12) * 2 * M_PI;
+                $shade = min(200, 70 + ($i * 12));
+                $spoke = imagecolorallocate($im, $shade, $shade, $shade);
+                imageline(
+                    $im,
+                    (int) round($cx + $ri * cos($a)),
+                    (int) round($cy + $ri * sin($a)),
+                    (int) round($cx + $ro * cos($a)),
+                    (int) round($cy + $ro * sin($a)),
+                    $spoke
+                );
+            }
+        } elseif ($indicator === 'check') {
+            // A simple grayscale checkmark, drawn a few px thick.
+            $mark = imagecolorallocate($im, 0x4A, 0x4A, 0x4A);
+            for ($o = -1; $o <= 1; $o++) {
+                imageline($im, (int) round($cx - 14 * $scale), (int) round($cy + $o), (int) round($cx - 3 * $scale), (int) round($cy + 11 * $scale + $o), $mark);
+                imageline($im, (int) round($cx - 3 * $scale), (int) round($cy + 11 * $scale + $o), (int) round($cx + 16 * $scale), (int) round($cy - 12 * $scale + $o), $mark);
+            }
+        }
+
+        return self::imageToBgra($im, $w, $h);
+    }
+
+    /**
      * Renders the initial realistic desktop image (e.g. eth.png),
      * or falls back to the retro Windows 95 desktop.
      */

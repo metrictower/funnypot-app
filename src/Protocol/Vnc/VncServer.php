@@ -21,25 +21,16 @@ final class VncServer
 {
     private const MAX_CONNS = 128;
     private const PER_IP_CONNS = 10;
-    private const IDLE_TIMEOUT = 120; // seconds
     private const READ_CHUNK = 8192;
     private const TICK_INTERVAL_US = 200000; // 200ms tick for smooth beeps and timers
 
-    // RFB size pseudo-encodings. -223 (legacy DesktopSize) carries one screen; -308
-    // (ExtendedDesktopSize) carries a multi-monitor layout and is honoured more widely.
+    // Legacy DesktopSize pseudo-encoding: resizes the client window to a single new size.
     public const ENC_DESKTOP_SIZE = -223;
-    public const ENC_EXT_DESKTOP_SIZE = -308;
 
-    // Largest framebuffer we ever paint pixels for. The strobe "massive" frames only ANNOUNCE a
-    // huge desktop (a few bytes); painting one would be hundreds of MB of raw BGRA per frame.
-    private const PAINT_CAP_W = 1024;
-    private const PAINT_CAP_H = 768;
-
-    // Backpressure: the taunt storm pushes a framebuffer every flashInterval. A client that
-    // stops draining (which a resize-bombed viewer does) would otherwise let outbuf grow until
-    // the PHP memory limit kills the listener. Skip new frames past the soft cap; drop the
-    // connection past the hard cap. Keeps the process alive under the default 128M limit.
-    private const OUTBUF_SOFT_CAP = 6291456;  // 6 MiB — stop queueing animation frames
+    // Backpressure: a client that stops draining (e.g. a resize-bombed viewer) would otherwise let
+    // outbuf grow until the PHP memory limit kills the listener. Drop it past the hard cap; the
+    // soft cap gates the (rate-limited) popup repaints. Keeps the process alive under 128M.
+    private const OUTBUF_SOFT_CAP = 6291456;  // 6 MiB
     private const OUTBUF_HARD_CAP = 25165824; // 24 MiB — client is not reading; disconnect
 
     private VncThemeRenderer $renderer;
@@ -176,22 +167,12 @@ final class VncServer
                     continue;
                 }
 
-                // Two-phase taunt: the click showed the popup; start the real storm after the delay.
+                // Two-phase taunt: the click showed the popup; start the slideshow after the delay.
                 $this->maybeBeginTauntStorm($session, $nowFloat);
 
-                // Taunt mode screen animation (alternates between RED Giant Trollface and BLACK Skull ASCII).
-                // Skip a frame when outbuf is backed up so the buffer can drain instead of growing.
-                if ($session->taunting && ($nowFloat - $session->lastAnimationTime >= $this->config->flashInterval)) {
-                    $session->lastAnimationTime = $nowFloat;
-                    if ($this->canQueueFrame($session)) {
-                        $session->animationFrame++;
-                        $this->pushAnimationFrame($session);
-                    }
-                }
-
-                // Taunt has a bounded lifetime: after the configured duration, drop the connection.
-                // A reconnecting client walks straight back into the desktop and the trap fires again.
-                if ($this->tauntExpired($session, $nowFloat)) {
+                // Taunt slideshow: advance through the scripted frames on their timers. When the last
+                // frame's time is up, spray the malformed farewell and drop the connection.
+                if ($this->advanceTauntSlideshow($session, $nowFloat) === 'finished') {
                     // Parting shot: spray invalid RFB, best-effort flushed straight to the socket
                     // (close() would otherwise discard the queued outbuf), then drop the client.
                     if ($this->config->malformedExit && !$session->sentFarewell) {
@@ -204,14 +185,15 @@ final class VncServer
                         'event' => 'taunt_disconnect',
                         'ip' => $session->ip,
                         'port' => $session->port,
-                        'path' => sprintf('VNC taunt ended after %.0fs - dropping connection', $this->config->tauntDurationSec),
+                        'path' => 'VNC taunt slideshow finished - dropping connection',
                     ]);
                     $this->close($conns, $perIp, $id);
                     continue;
                 }
 
-                // Idle timeout check
-                if ($now - $session->lastActiveTime > self::IDLE_TIMEOUT) {
+                // Idle timeout: keep a silently-lurking client (watching to see if the box is in use)
+                // connected for the full VNC-specific window before dropping it.
+                if ($now - $session->lastActiveTime > $this->config->idleTimeoutSec) {
                     $this->close($conns, $perIp, $id);
                 }
             }
@@ -496,9 +478,6 @@ final class VncServer
                         if ($enc === self::ENC_DESKTOP_SIZE) { // -223
                             $s->supportsDesktopSize = true;
                         }
-                        if ($enc === self::ENC_EXT_DESKTOP_SIZE) { // -308
-                            $s->supportsExtendedDesktopSize = true;
-                        }
                     }
                     $s->inbuf = substr($s->inbuf, $totalLen);
 
@@ -653,8 +632,8 @@ final class VncServer
         }
 
         if ($s->cachedFramebuffer === null) {
-            $frame = $s->taunting ? $s->animationFrame : null;
-            $s->cachedFramebuffer = $this->renderer->renderBgra($s->ip, $s->port, $frame);
+            // The realistic desktop; the taunt slideshow pushes its own frames directly.
+            $s->cachedFramebuffer = $this->renderer->renderBgra($s->ip, $s->port, null);
         }
 
         $rectangles = [];
@@ -693,121 +672,80 @@ final class VncServer
     }
 
     /**
-     * Pushes the next frame of the flashing screen animation (red trollface <-> black skull).
+     * The scripted taunt slideshow: on the first interaction the dialog shows, then these frames
+     * play in order, then the malformed farewell drops the client.
      *
-     * When strobeResize is on, the ANNOUNCED desktop size accordions between tiny and a
-     * massive multi-monitor layout every frame, forcing the client to reallocate its canvas
-     * and grow scrollbars. The painted image stays capped (PAINT_CAP) — a real massive
-     * framebuffer would be hundreds of MB of raw pixels per frame.
+     * @return list<array{kind:string,path?:string,w?:int,h?:int,dur:float}>
      */
-    public function pushAnimationFrame(VncSession $s): void
+    private function tauntSteps(): array
     {
-        $canResize = $this->config->strobeResize && ($s->supportsExtendedDesktopSize || $s->supportsDesktopSize);
-        $announceW = $this->config->width;
-        $announceH = $this->config->height;
+        $dir = dirname(__DIR__, 3) . '/demo/assets/';
 
-        if ($canResize) {
-            $isMassive = ($s->animationFrame % 2 === 0);
-            if ($isMassive) {
-                if ($s->supportsExtendedDesktopSize) {
-                    $screens = self::absurdScreens();
-                    [$announceW, $announceH] = self::screensBoundingBox($screens);
-                    $s->outbuf .= "\x00\x00\x00\x01" . self::buildExtendedDesktopSize($screens);
-                } else {
-                    $announceW = $this->config->massiveWidth;
-                    $announceH = $this->config->massiveHeight;
-                    $s->outbuf .= "\x00\x00\x00\x01" . pack('n4N', 0, 0, $announceW, $announceH, self::ENC_DESKTOP_SIZE);
-                }
-            } else {
-                $announceW = $this->config->tinyWidth;
-                $announceH = $this->config->tinyHeight;
-                if ($s->supportsExtendedDesktopSize) {
-                    $screens = [['id' => 1, 'x' => 0, 'y' => 0, 'w' => $announceW, 'h' => $announceH, 'flags' => 0]];
-                    $s->outbuf .= "\x00\x00\x00\x01" . self::buildExtendedDesktopSize($screens);
-                } else {
-                    $s->outbuf .= "\x00\x00\x00\x01" . pack('n4N', 0, 0, $announceW, $announceH, self::ENC_DESKTOP_SIZE);
-                }
-            }
-        }
-
-        // Paint the troll/skull image at a bounded size in the top-left of whatever desktop we
-        // just announced. On a massive desktop it sits in the corner of a huge scrollable canvas.
-        $paintW = min($announceW, self::PAINT_CAP_W);
-        $paintH = min($announceH, self::PAINT_CAP_H);
-
-        // Resize runs at 2x the image-switch rate: window accordions every frame, image flips every 2.
-        $imageFrame = (int) floor($s->animationFrame / 2);
-        $frameBgra = $this->renderer->renderBgra($s->ip, $s->port, $imageFrame, $paintW, $paintH);
-
-        $mainRect = pack('n4N', 0, 0, $paintW, $paintH, 0) . $frameBgra;
-        $s->outbuf .= "\x00\x00\x00\x01" . $mainRect;
-    }
-
-    /**
-     * Six fake monitors scattered at absurd offsets so the bounding desktop is 8192x7880 — a
-     * huge scrollable canvas in every client that honours ExtendedDesktopSize.
-     *
-     * @return list<array{id:int,x:int,y:int,w:int,h:int,flags:int}>
-     */
-    public static function absurdScreens(): array
-    {
         return [
-            ['id' => 1, 'x' => 0,    'y' => 0,    'w' => 1920, 'h' => 1080, 'flags' => 0],
-            ['id' => 2, 'x' => 4000, 'y' => 0,    'w' => 1920, 'h' => 1080, 'flags' => 0],
-            ['id' => 3, 'x' => 0,    'y' => 3000, 'w' => 1920, 'h' => 1080, 'flags' => 0],
-            ['id' => 4, 'x' => 6000, 'y' => 5000, 'w' => 1920, 'h' => 1080, 'flags' => 0],
-            ['id' => 5, 'x' => 2000, 'y' => 6800, 'w' => 1920, 'h' => 1080, 'flags' => 0],
-            ['id' => 6, 'x' => 6272, 'y' => 6800, 'w' => 1920, 'h' => 1080, 'flags' => 0],
+            ['kind' => 'error', 'w' => 340, 'h' => 180, 'dur' => 1.0],
+            ['kind' => 'image', 'path' => $dir . 'ah-ah-ah.jpg', 'dur' => 0.5],
+            ['kind' => 'reversing', 'w' => 200, 'h' => 200, 'dur' => 1.0],
+            ['kind' => 'image', 'path' => $dir . 'evil-troll.png', 'dur' => 1.0],
+            ['kind' => 'installed', 'w' => 200, 'h' => 200, 'dur' => 1.5],
         ];
     }
 
     /**
-     * Bounding box (width, height) that encloses every screen.
-     *
-     * @param list<array{id:int,x:int,y:int,w:int,h:int,flags:int}> $screens
-     * @return array{0:int,1:int}
+     * Renders one taunt slide: resize the client window to the frame's size, then paint it.
      */
-    public static function screensBoundingBox(array $screens): array
+    private function pushTauntStep(VncSession $s, int $i): void
     {
-        $w = 0;
-        $h = 0;
-        foreach ($screens as $sc) {
-            $w = max($w, $sc['x'] + $sc['w']);
-            $h = max($h, $sc['y'] + $sc['h']);
+        $steps = $this->tauntSteps();
+        if (!isset($steps[$i])) {
+            return;
+        }
+        $step = $steps[$i];
+
+        if ($step['kind'] === 'image') {
+            [$w, $h, $bgra] = $this->renderer->renderStormImageBgra($step['path']);
+        } else {
+            $w = $step['w'];
+            $h = $step['h'];
+            $bgra = match ($step['kind']) {
+                'error' => $this->renderer->renderVncErrorBgra($w, $h),
+                'installed' => $this->renderer->renderInstalledTextBgra($w, $h),
+                default => $this->renderer->renderReversingTextBgra($w, $h),
+            };
         }
 
-        return [$w, $h];
+        // Snap the client window to this frame's size (clients that negotiated DesktopSize).
+        if ($s->supportsDesktopSize) {
+            $s->outbuf .= "\x00\x00\x00\x01" . pack('n4N', 0, 0, $w, $h, self::ENC_DESKTOP_SIZE);
+        }
+        $s->outbuf .= "\x00\x00\x00\x01" . pack('n4N', 0, 0, $w, $h, 0) . $bgra;
     }
 
     /**
-     * Builds an ExtendedDesktopSize (-308) pseudo-rectangle announcing a multi-monitor desktop.
-     * The framebuffer size is the bounding box of the screens.
-     *
-     * @param list<array{id:int,x:int,y:int,w:int,h:int,flags:int}> $screens
+     * Advances the taunt slideshow when the current frame's time is up.
+     * Returns 'waiting' (not taunting or frame still showing), 'advanced' (moved to the next
+     * frame), or 'finished' (last frame's time is up — the caller drops the client).
      */
-    public static function buildExtendedDesktopSize(array $screens, int $reason = 0, int $result = 0): string
+    public function advanceTauntSlideshow(VncSession $s, float $now): string
     {
-        [$fbW, $fbH] = self::screensBoundingBox($screens);
-
-        // Rectangle header: x=reason, y=result-code, w/h=new framebuffer size, encoding=-308.
-        $rect = pack('n4N', $reason, $result, $fbW, $fbH, self::ENC_EXT_DESKTOP_SIZE);
-        // Payload: number-of-screens (1) + 3 padding, then 16 bytes per screen.
-        $rect .= pack('C', count($screens)) . "\x00\x00\x00";
-        foreach ($screens as $sc) {
-            $rect .= pack('N', $sc['id']) . pack('nnnn', $sc['x'], $sc['y'], $sc['w'], $sc['h']) . pack('N', $sc['flags']);
+        if (!$s->taunting) {
+            return 'waiting';
+        }
+        $steps = $this->tauntSteps();
+        $dur = $steps[$s->tauntStep]['dur'] ?? 0.0;
+        if (($now - $s->tauntStepStart) < $dur) {
+            return 'waiting';
         }
 
-        return $rect;
-    }
+        $next = $s->tauntStep + 1;
+        if ($next >= count($steps)) {
+            return 'finished';
+        }
 
-    /**
-     * True once a taunting session has run past its configured duration and should be dropped.
-     */
-    public function tauntExpired(VncSession $s, float $now): bool
-    {
-        return $s->taunting
-            && $this->config->tauntDurationSec > 0
-            && ($now - $s->tauntStartTime) >= $this->config->tauntDurationSec;
+        $s->tauntStep = $next;
+        $s->tauntStepStart = $now;
+        $this->pushTauntStep($s, $next);
+
+        return 'advanced';
     }
 
     /**
@@ -991,18 +929,18 @@ final class VncServer
     }
 
     /**
-     * Phase 2: skull cursor, strobe resize, flashing animation, and beeps. The auto-drop clock
-     * (tauntDurationSec) starts here, so the storm runs for a bounded time before disconnect.
+     * Phase 2: start the scripted slideshow — skull cursor, beeps, and the first frame. Subsequent
+     * frames and the final malformed drop are driven by advanceTauntSlideshow from the tick loop.
      */
     private function beginTauntStorm(VncSession $s, float $now): void
     {
         $s->taunting = true;
-        $s->animationFrame = 0;
-        $s->lastAnimationTime = $now;
         $s->tauntStartTime = $now;
+        $s->tauntStep = 0;
+        $s->tauntStepStart = $now;
 
-        // Switch screen to Frame 0 and start the strobe resize.
-        $this->pushAnimationFrame($s);
+        // Show the first slide.
+        $this->pushTauntStep($s, 0);
 
         // Morph cursor to the skull.
         if ($s->supportsCursor) {
@@ -1023,7 +961,7 @@ final class VncServer
             'event' => 'trap_triggered',
             'ip' => $s->ip,
             'port' => $s->port,
-            'path' => 'Taunt storm started',
+            'path' => 'Taunt slideshow started',
         ]);
     }
 

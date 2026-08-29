@@ -208,43 +208,68 @@ final class VncDeceptionFeaturesTest extends TestCase
         putenv('FUNNYPOT_VNC_IMAGE');
     }
 
-    public function test_extended_desktop_size_reports_six_absurd_monitors(): void
+    public function test_reversing_text_frame_renders_full_bgra(): void
     {
-        $rect = VncServer::buildExtendedDesktopSize(VncServer::absurdScreens());
-
-        // Pseudo-rectangle header: reason, result, framebuffer w/h, encoding.
-        $hdr = unpack('nreason/nresult/nw/nh/Nenc', substr($rect, 0, 12));
-        $enc = $hdr['enc'] >= 0x80000000 ? $hdr['enc'] - 0x100000000 : $hdr['enc'];
-        self::assertSame(-308, $enc, 'encoding must be ExtendedDesktopSize');
-        // Bounding box of the six scattered monitors.
-        self::assertSame(8192, $hdr['w']);
-        self::assertSame(7880, $hdr['h']);
-
-        // Payload: number-of-screens (1) + 3 padding, then 16 bytes per screen.
-        self::assertSame(6, ord($rect[12]));
-        self::assertSame(12 + 4 + (6 * 16), strlen($rect));
+        $config = new VncConfig(style: 'taunt');
+        $r = new \Funnypot\Protocol\Vnc\VncThemeRenderer($config);
+        $bgra = $r->renderReversingTextBgra(200, 200);
+        self::assertSame(200 * 200 * 4, strlen($bgra));
     }
 
-    public function test_taunt_auto_expires_after_duration(): void
+    public function test_storm_image_frame_returns_native_size(): void
     {
-        $config = new VncConfig(style: 'taunt', tauntDurationSec: 10.0);
+        $config = new VncConfig(style: 'taunt');
+        $r = new \Funnypot\Protocol\Vnc\VncThemeRenderer($config);
+        [$w, $h, $bgra] = $r->renderStormImageBgra(dirname(__DIR__, 3) . '/demo/assets/evil-troll.png');
+        self::assertSame(1080, $w);
+        self::assertSame(1080, $h);
+        self::assertSame($w * $h * 4, strlen($bgra));
+    }
+
+    public function test_taunt_slideshow_advances_through_frames_then_finishes(): void
+    {
+        $config = new VncConfig(style: 'taunt'); // steps: error 1.0s, ah-ah-ah 0.5s, reversing 1.0s, troll 1.0s, installed 1.5s
         $server = new VncServer($config, static fn () => null);
         $s = new VncSession('203.0.113.9', 5900, 1);
         $s->taunting = true;
-        $s->tauntStartTime = 100.0;
+        $s->tauntStep = 0;
+        $s->tauntStepStart = 100.0;
 
-        self::assertFalse($server->tauntExpired($s, 105.0));
-        self::assertTrue($server->tauntExpired($s, 110.5));
+        self::assertSame('waiting', $server->advanceTauntSlideshow($s, 100.5)); // frame 0 (error)
+        self::assertSame('advanced', $server->advanceTauntSlideshow($s, 101.1)); // -> frame 1 (ah-ah-ah)
+        self::assertSame(1, $s->tauntStep);
+        self::assertNotEmpty($s->outbuf, 'advancing pushes the next frame');
+
+        self::assertSame('advanced', $server->advanceTauntSlideshow($s, 101.7)); // -> frame 2 (reversing)
+        self::assertSame('advanced', $server->advanceTauntSlideshow($s, 102.8)); // -> frame 3 (evil-troll)
+        self::assertSame('advanced', $server->advanceTauntSlideshow($s, 103.9)); // -> frame 4 (installed)
+        self::assertSame(4, $s->tauntStep);
+
+        self::assertSame('waiting', $server->advanceTauntSlideshow($s, 104.6)); // frame 4 still showing
+        self::assertSame('finished', $server->advanceTauntSlideshow($s, 105.5)); // last frame done
     }
 
-    public function test_taunt_never_expires_when_not_taunting(): void
+    public function test_installed_frame_renders_full_bgra(): void
     {
-        $config = new VncConfig(style: 'taunt', tauntDurationSec: 10.0);
+        $config = new VncConfig(style: 'taunt');
+        $r = new \Funnypot\Protocol\Vnc\VncThemeRenderer($config);
+        self::assertSame(200 * 200 * 4, strlen($r->renderInstalledTextBgra(200, 200)));
+    }
+
+    public function test_vnc_error_frame_renders_full_bgra(): void
+    {
+        $config = new VncConfig(style: 'taunt');
+        $r = new \Funnypot\Protocol\Vnc\VncThemeRenderer($config);
+        self::assertSame(340 * 180 * 4, strlen($r->renderVncErrorBgra(340, 180)));
+    }
+
+    public function test_slideshow_waiting_when_not_taunting(): void
+    {
+        $config = new VncConfig(style: 'taunt');
         $server = new VncServer($config, static fn () => null);
         $s = new VncSession('203.0.113.9', 5900, 1);
-        $s->tauntStartTime = 100.0;
 
-        self::assertFalse($server->tauntExpired($s, 999.0));
+        self::assertSame('waiting', $server->advanceTauntSlideshow($s, 999.0));
     }
 
     public function test_backpressure_stops_queueing_frames_when_outbuf_backs_up(): void
@@ -262,21 +287,6 @@ final class VncDeceptionFeaturesTest extends TestCase
 
         $s->outbuf = str_repeat('x', 30 * 1024 * 1024);
         self::assertTrue($server->outbufOverflowed($s), 'must flag overflow past the hard cap');
-    }
-
-    public function test_animation_frame_output_stays_bounded(): void
-    {
-        // The massive strobe frame must never paint a massive framebuffer — it announces a huge
-        // desktop but paints a capped image. One frame must be well under the memory-limit danger zone.
-        $config = new VncConfig(style: 'taunt', strobeResize: true, massiveWidth: 8192, massiveHeight: 8192);
-        $server = new VncServer($config, static fn () => null);
-        $s = new VncSession('203.0.113.9', 5900, 1);
-        $s->supportsDesktopSize = true;
-        $s->taunting = true;
-        $s->animationFrame = 0; // even => massive announce
-
-        $server->pushAnimationFrame($s);
-        self::assertLessThan(6 * 1024 * 1024, strlen($s->outbuf));
     }
 
     public function test_cursor_near_popup_detection(): void

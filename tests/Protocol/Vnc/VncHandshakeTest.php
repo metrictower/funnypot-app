@@ -185,7 +185,7 @@ final class VncHandshakeTest extends TestCase
             $events[] = $e;
         };
 
-        // chaosResize = true, chaosResizeOnAction = true, strobeResize = false
+        // chaosResize = true, chaosResizeOnAction = true (realistic-mode chaos, not the taunt)
         $config = new VncConfig(
             style: 'realistic',
             width: 800,
@@ -193,7 +193,6 @@ final class VncHandshakeTest extends TestCase
             cursor: 'none',
             chaosResize: true,
             chaosResizeOnAction: true,
-            strobeResize: false,
             massiveWidth: 16000,
             massiveHeight: 9000
         );
@@ -258,22 +257,9 @@ final class VncHandshakeTest extends TestCase
         self::assertContains('click', $eventTypes);
     }
 
-    public function test_strobe_resize_alternates_massive_and_tiny(): void
+    public function test_taunt_slideshow_starts_with_first_slide_after_popup(): void
     {
-        // Legacy client (only DesktopSize -223): the massive frame announces the
-        // massiveWidth/Height bounding box, the tiny frame the small one. Pixels are
-        // never painted at the massive size (that would be hundreds of MB).
-        $config = new VncConfig(
-            style: 'taunt',
-            width: 800,
-            height: 600,
-            strobeResize: true,
-            massiveWidth: 8192,
-            massiveHeight: 8192,
-            tinyWidth: 128,
-            tinyHeight: 128
-        );
-
+        $config = new VncConfig(style: 'taunt', width: 800, height: 600);
         $server = new VncServer($config, static fn () => null);
         $session = new VncSession('10.0.0.1', 55555, 3);
 
@@ -286,11 +272,12 @@ final class VncHandshakeTest extends TestCase
         $server->processInbound($session);
         $session->outbuf = '';
 
-        $session->inbuf .= "\x02\x00" . pack('n', 2) . pack('NN', 0, -223); // Encodings
+        // Advertise DesktopSize (-223) + Cursor (-239)
+        $session->inbuf .= "\x02\x00" . pack('n', 2) . pack('NN', -223, -239);
         $server->processInbound($session);
         $session->outbuf = '';
 
-        // Click shows the popup first; discard it, then let the storm begin after the delay.
+        // Click shows the popup first; discard it, then start the slideshow.
         $session->inbuf .= "\x05\x01" . pack('nn', 50, 50);
         $server->processInbound($session);
         self::assertTrue($session->clicked);
@@ -299,28 +286,17 @@ final class VncHandshakeTest extends TestCase
 
         self::assertTrue($server->maybeBeginTauntStorm($session, $session->clickTime + 3.0));
         self::assertTrue($session->taunting);
-        self::assertSame(0, $session->animationFrame);
+        self::assertSame(0, $session->tauntStep);
 
-        // Frame 0 (even) is the MASSIVE announce: 8192 x 8192 via DesktopSize (-223).
-        $out0 = $session->outbuf;
-        $session->outbuf = '';
-        $rect0 = unpack('nx/ny/nw/nh/Nenc', substr($out0, 4, 12));
-        self::assertSame(8192, $rect0['w']);
-        self::assertSame(8192, $rect0['h']);
+        // Frame 0 is the "VNC has stopped working" error box (340x180): a DesktopSize (-223) resize.
+        $rect0 = unpack('nx/ny/nw/nh/Nenc', substr($session->outbuf, 4, 12));
+        $enc = $rect0['enc'] >= 0x80000000 ? $rect0['enc'] - 0x100000000 : $rect0['enc'];
+        self::assertSame(-223, $enc);
+        self::assertSame(340, $rect0['w']);
+        self::assertSame(180, $rect0['h']);
 
-        // The painted image rectangle must stay bounded — not 8192-wide.
-        $paintRectStart = 4 + 12 + ($rect0['w'] * 0); // size rect carries no pixels
-        // The main image FramebufferUpdate follows; its width fits inside the regular cap.
-        self::assertStringNotContainsString(pack('n', 8192) . pack('n', 8192) . pack('N', 0), substr($out0, 16));
-
-        // Frame 1 (odd) is the TINY announce: 128 x 128.
-        $session->animationFrame = 1;
-        $server->pushAnimationFrame($session);
-        $out1 = $session->outbuf;
-        $session->outbuf = '';
-        $rect1 = unpack('nx/ny/nw/nh/Nenc', substr($out1, 4, 12));
-        self::assertSame(128, $rect1['w']);
-        self::assertSame(128, $rect1['h']);
+        // The skull cursor (-239) is pushed once the slideshow starts.
+        self::assertStringContainsString(pack('N', -239 & 0xFFFFFFFF), $session->outbuf);
     }
 
     public function test_taunt_shows_realistic_cursor_on_connect_then_skull_on_click(): void
@@ -426,30 +402,9 @@ final class VncHandshakeTest extends TestCase
         self::assertNotEmpty($session->outbuf, 'dodging repaints the framebuffer');
     }
 
-    public function test_client_advertising_extended_desktop_size_is_detected(): void
+    public function test_taunt_slideshow_resizes_to_the_small_text_frame(): void
     {
-        $config = new VncConfig(style: 'taunt');
-        $server = new VncServer($config, static fn () => null);
-        $session = new VncSession('10.0.0.2', 55556, 4);
-
-        $session->inbuf .= "RFB 003.008\n";
-        $server->processInbound($session);
-        $session->inbuf .= "\x01";
-        $server->processInbound($session);
-        $session->inbuf .= "\x01";
-        $server->processInbound($session);
-        $session->outbuf = '';
-
-        // Client requests Raw (0) + ExtendedDesktopSize (-308)
-        $session->inbuf .= "\x02\x00" . pack('n', 2) . pack('NN', 0, -308);
-        $server->processInbound($session);
-
-        self::assertTrue($session->supportsExtendedDesktopSize);
-    }
-
-    public function test_strobe_uses_extended_desktop_size_when_client_supports_it(): void
-    {
-        $config = new VncConfig(style: 'taunt', strobeResize: true, tinyWidth: 128, tinyHeight: 128);
+        $config = new VncConfig(style: 'taunt', width: 800, height: 600);
         $server = new VncServer($config, static fn () => null);
         $session = new VncSession('10.0.0.3', 55557, 5);
 
@@ -460,21 +415,25 @@ final class VncHandshakeTest extends TestCase
         $session->inbuf .= "\x01";
         $server->processInbound($session);
         $session->outbuf = '';
-        $session->inbuf .= "\x02\x00" . pack('n', 2) . pack('NN', 0, -308);
+        $session->inbuf .= "\x02\x00" . pack('n', 1) . pack('N', -223); // DesktopSize
         $server->processInbound($session);
         $session->outbuf = '';
 
-        // Click shows the popup; discard it, then start the storm (frame 0, massive) — which
-        // must emit an ExtendedDesktopSize rect.
-        $session->inbuf .= "\x05\x01" . pack('nn', 50, 50);
-        $server->processInbound($session);
+        // Start the slideshow (frame 0 error), advance past ah-ah-ah (frame 1) to the 200x200
+        // "Reversing VNC connection" panel (frame 2).
+        $session->clicked = true;
+        $session->clickTime = 10.0;
+        self::assertTrue($server->maybeBeginTauntStorm($session, 12.1));
+        self::assertSame('advanced', $server->advanceTauntSlideshow($session, 13.2)); // -> frame 1 (ah-ah-ah)
         $session->outbuf = '';
-        $server->maybeBeginTauntStorm($session, $session->clickTime + 3.0);
+        self::assertSame('advanced', $server->advanceTauntSlideshow($session, 13.8)); // -> frame 2 (reversing)
+        self::assertSame(2, $session->tauntStep);
 
-        $rect0 = unpack('nreason/nresult/nw/nh/Nenc', substr($session->outbuf, 4, 12));
-        $enc = $rect0['enc'] >= 0x80000000 ? $rect0['enc'] - 0x100000000 : $rect0['enc'];
-        self::assertSame(-308, $enc);
-        self::assertSame(8192, $rect0['w']);
-        self::assertSame(7880, $rect0['h']);
+        // First rect of frame 2 is a DesktopSize (-223) resize to 200x200.
+        $rect = unpack('nx/ny/nw/nh/Nenc', substr($session->outbuf, 4, 12));
+        $enc = $rect['enc'] >= 0x80000000 ? $rect['enc'] - 0x100000000 : $rect['enc'];
+        self::assertSame(-223, $enc);
+        self::assertSame(200, $rect['w']);
+        self::assertSame(200, $rect['h']);
     }
 }

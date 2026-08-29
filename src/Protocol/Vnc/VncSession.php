@@ -28,7 +28,6 @@ final class VncSession
     public array $encodings = [];
     public bool $supportsCursor = false;
     public bool $supportsDesktopSize = false;
-    public bool $supportsExtendedDesktopSize = false;
 
     public bool $sentFirstUpdate = false;
     public bool $sentCursor = false;
@@ -38,11 +37,15 @@ final class VncSession
     // Recon telemetry: log the first framebuffer request once (proves the bot saw the screen).
     public bool $loggedFbRequest = false;
 
-    // Two-phase taunt: a click shows a fake "Reverse VNC connection?" dialog first; the real
-    // storm (resize/animation/beeps) only starts after tauntPopupSec.
+    // Two-phase taunt: a click shows a fake "Reverse VNC connection?" dialog first; the scripted
+    // slideshow only starts after tauntPopupSec.
     public bool $clicked = false;
     public bool $popupShown = false;
     public float $clickTime = 0.0;
+
+    // Taunt slideshow position: current frame index and when it started showing.
+    public int $tauntStep = 0;
+    public float $tauntStepStart = 0.0;
 
     // Dodging popup: -1 means "not placed yet" (centre on first paint). The dialog jumps away
     // when the pointer approaches so it can never be clicked.
@@ -56,9 +59,7 @@ final class VncSession
     public float $connectTime;
     public float $lastBeepTime = 0.0;
     public float $lastClipboardTime = 0.0;
-    public float $lastAnimationTime = 0.0;
     public float $tauntStartTime = 0.0;
-    public int $animationFrame = 0;
     public int $lastActiveTime;
 
     public ?string $cachedFramebuffer = null;
