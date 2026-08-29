@@ -1,0 +1,14 @@
+protocol: sip
+listen: [5060]
+severity: medium
+tags: [protocol, sip, voip, pbx, asterisk]
+title: SIP / VoIP Asterisk PBX
+framing: raw
+banner: ""
+rules:
+  - match: { regex: '^(OPTIONS|REGISTER|INVITE|ACK|BYE|CANCEL)' }
+    send: ""
+    close: false
+default:
+  send: ""
+  close: false

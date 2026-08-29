@@ -265,4 +265,40 @@ final class SqliteHitStoreTest extends TestCase
         self::assertStringContainsString('raw', $row['path']);
         self::assertSame('\\x00binary', $row['body']);
     }
+
+    public function test_recording_persistence_and_filtering(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+        $store->append([
+            'ts' => '2026-08-29T12:00:00+00:00',
+            'ip' => '5.5.5.5',
+            'method' => 'SIP',
+            'event' => 'call_end',
+            'path' => 'SIP call ended: 101',
+            'recording' => '/funnypot/recording?id=call-test-123',
+        ]);
+        $store->append([
+            'ts' => '2026-08-29T12:01:00+00:00',
+            'ip' => '5.5.5.5',
+            'method' => 'SIP',
+            'event' => 'login',
+            'path' => 'SIP REGISTER ext:101',
+            'recording' => '',
+        ]);
+
+        $rows = $store->delta(0)['rows'];
+        self::assertCount(2, $rows);
+        self::assertSame('/funnypot/recording?id=call-test-123', $rows[0]['recording']);
+        self::assertSame('', $rows[1]['recording']);
+
+        // Filter by recording: 1
+        $recs = $store->delta(0, ['recording' => '1'])['rows'];
+        self::assertCount(1, $recs);
+        self::assertSame('call_end', $recs[0]['event']);
+
+        // Filter by method: SIP (all SIP logs)
+        $sip = $store->delta(0, ['method' => 'SIP'])['rows'];
+        self::assertCount(2, $sip);
+    }
 }
+

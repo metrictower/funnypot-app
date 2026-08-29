@@ -5,3 +5,7 @@ scripts/deploy.env
 .claude/
 demo/storage/*.sqlite*
 .idea/
+
+# SIP persona audio: licence-encumbered clips (Lenny, scam-call recordings, movie soundboards) —
+# supplied at deploy, never committed. The drop-in framework + this dir's README ship; clips do not.
+demo/assets/audio/*/

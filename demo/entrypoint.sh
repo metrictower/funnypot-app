@@ -89,6 +89,7 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     php /app/demo/listen.php imap       0.0.0.0:143   &
     php /app/demo/listen.php finger     0.0.0.0:79    &
     php /app/demo/listen.php vnc        0.0.0.0:5900  &
+    php /app/demo/listen.php sip        0.0.0.0:5060  &
     php /app/demo/listen.php rsync      0.0.0.0:873   &
     php /app/demo/listen.php clamav     0.0.0.0:3310  &
     php /app/demo/listen.php zookeeper  0.0.0.0:2181  &

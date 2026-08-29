@@ -25,6 +25,8 @@ use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\SshServer;
 use Funnypot\Protocol\Vnc\VncConfig;
 use Funnypot\Protocol\Vnc\VncServer;
+use Funnypot\Protocol\Sip\SipConfig;
+use Funnypot\Protocol\Sip\SipServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -53,7 +55,8 @@ $categories = AbuseIpdb::categoriesForProtocol($protocol);
 
 $log = static function (array $entry) use ($store, $abuse, $threatIntel, $protocol, $port, $categories): void {
     $store->append($entry);
-    if (($abuse !== null || $threatIntel !== null) && !empty($entry['ip'])) {
+    // Anti-Spoofing Guard (B2): Only report when verified/reportable (e.g. not unverified UDP)
+    if (($entry['reportable'] ?? true) && ($abuse !== null || $threatIntel !== null) && !empty($entry['ip'])) {
         $event = (string) ($entry['event'] ?? '');
         $data = trim(substr((string) ($entry['path'] ?? $entry['body'] ?? ''), 0, 100));
         $comment = sprintf('funnypot %s honeypot, port %d: %s %s', strtoupper($protocol), $port, $event, $data);
@@ -88,6 +91,14 @@ if ($protocol === 'ssh') {
 if ($protocol === 'vnc') {
     $vncConfig = VncConfig::fromEnv();
     (new VncServer($vncConfig, $log))->run($bind);
+    exit(0);
+}
+
+// SIP is an Asterisk PBX VoIP honeypot: answers OPTIONS/REGISTER, captures credentials and toll-fraud
+// dialed numbers, and streams multi-persona audio tarpits (Lenny, Daisy, Dave, IVR, Fax).
+if ($protocol === 'sip') {
+    $sipConfig = SipConfig::fromEnv();
+    (new SipServer($sipConfig, $log))->listen($bind);
     exit(0);
 }
 

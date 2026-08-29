@@ -64,7 +64,7 @@ SSH_OPTS=(-i "$KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o Connec
 # Known HTTP + alt-HTTP + app/panel ports (nginx) plus the TCP protocol-honeypot ports (mail/cache/
 # shell + databases + SCADA — see demo/entrypoint.sh). Keep in sync with demo/entrypoint.sh +
 # demo/Dockerfile and open the matching inbound rules in the EC2 security group (the SG gates reachability).
-PORTS="21 23 25 79 80 81 88 110 143 443 502 591 873 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 4243 4433 4443 5000 5432 5555 5601 5900 5984 6379 7001 7070 7080 7474 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
+PORTS="21 23 25 79 80 81 88 110 143 443 502 591 873 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 4243 4433 4443 5000 5060 5432 5555 5601 5900 5984 6379 7001 7070 7080 7474 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
 
 echo "==> [1/4] build image locally ($PLATFORM)"
 docker build --platform "$PLATFORM" -f "$REPO_ROOT/demo/Dockerfile" -t funnypot "$REPO_ROOT"
@@ -106,6 +106,7 @@ fi
 echo "==> [4/4] (re)start container (logs persisted to ~/funnypot-data on the host)"
 PFLAGS=""
 for p in $PORTS; do PFLAGS="$PFLAGS -p $p:$p"; done
+PFLAGS="$PFLAGS -p 5060:5060/udp"
 # Serve the SSH honeypot on the real port 22 (host 22 -> container's ssh listener on 2222).
 # Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
 # FUNNYPOT_SSH_PORT set to the moved sshd port above.
@@ -153,6 +154,8 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
         -e FUNNYPOT_VNC_STROBE_RESIZE='${FUNNYPOT_VNC_STROBE_RESIZE:-}' \
         -e FUNNYPOT_VNC_TINY_WIDTH='${FUNNYPOT_VNC_TINY_WIDTH:-480}' \
         -e FUNNYPOT_VNC_TINY_HEIGHT='${FUNNYPOT_VNC_TINY_HEIGHT:-480}' \
+        -e FUNNYPOT_SIP_STYLE='${FUNNYPOT_SIP_STYLE:-}' \
+        -e FUNNYPOT_SIP_AUDIO_MODE='${FUNNYPOT_SIP_AUDIO_MODE:-auto}' \
         -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
         -e FUNNYPOT_ADMIN_PASSWORD='$ADMIN_PASSWORD' \
         -e FUNNYPOT_MODE='${FUNNYPOT_MODE:-}' \

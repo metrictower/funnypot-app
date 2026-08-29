@@ -24,6 +24,7 @@ function applyFilter(){document.querySelectorAll('#rows tr').forEach(tr=>tr.clas
 // (nuclei-exact > CRS-class > custom attack > LLM) is mirrored here so the label names what served.
 function detectSource(r){
   if(r.method==='VNC'||r.proto==='vnc') return 'VNC';
+  if(r.method==='SIP'||r.proto==='sip') return 'SIP';
   if(r.event==='llm-fake') return 'LLM';
   if(r.event==='decoy-archive') return 'Decoy';
   const ids=r.templates||[];
@@ -41,11 +42,12 @@ function rowEl(r){
   const ids=(r.templates&&r.templates.length)?`<div class="ids">${esc(r.templates.join(', '))}</div>`:'';
   const bodyLabel=r.event==='llm-fake'?'response':'payload';
   const payload=r.body?`<div class="payload"><b>${bodyLabel}:</b> ${esc(r.body)}</div>`:'';
+  const audio=r.recording?`<div class="call-player"><audio controls preload="none" src="${esc(r.recording)}"></audio></div>`:'';
   const served=r.served?'<span class="served">served</span>':'&mdash;';
   const cc=r.cc?` <span class="ids">${esc(r.cc)}</span>`:'';
   const known=r.known_attacker?' <span class="badge known" title="known attacker (threat-intel blocklist)">known</span>':'';
   const t=(r.ts||'').substr(11,8);
-  tr.innerHTML=`<td>${t}</td><td>${esc(r.ip)}${cc}${known}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${ids}${payload}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
+  tr.innerHTML=`<td>${t}</td><td>${esc(r.ip)}${cc}${known}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${ids}${payload}${audio}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
   return tr;
 }
 const empty=()=>{$('rows').innerHTML='<tr><td colspan=5 class=empty>No hits yet &mdash; point a scanner at this host.</td></tr>';};

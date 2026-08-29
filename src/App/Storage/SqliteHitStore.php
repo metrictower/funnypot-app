@@ -156,6 +156,9 @@ final class SqliteHitStore implements HitStore
         if (!empty($f['known'])) {
             $clauses[] = 'known_attacker = 1';
         }
+        if (!empty($f['recording']) || !empty($f['has_recording'])) {
+            $clauses[] = "(recording IS NOT NULL AND recording <> '')";
+        }
 
         return [implode(' AND ', $clauses), $params];
     }
@@ -353,13 +356,17 @@ final class SqliteHitStore implements HitStore
                 templates TEXT, body TEXT, event TEXT,
                 log4shell INTEGER DEFAULT 0, honeytoken TEXT,
                 cc TEXT, city TEXT, lat REAL, lon REAL, asn TEXT,
-                known_attacker INTEGER DEFAULT 0
+                known_attacker INTEGER DEFAULT 0,
+                recording TEXT
             )'
         );
         // Add columns introduced after a db was first created (idempotent migration for old files).
         $cols = $db->query('PRAGMA table_info(hits)')->fetchAll(PDO::FETCH_COLUMN, 1);
         if (!in_array('known_attacker', $cols, true)) {
             $db->exec('ALTER TABLE hits ADD COLUMN known_attacker INTEGER DEFAULT 0');
+        }
+        if (!in_array('recording', $cols, true)) {
+            $db->exec('ALTER TABLE hits ADD COLUMN recording TEXT');
         }
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ip ON hits(ip)');
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ts ON hits(ts)');
@@ -385,8 +392,8 @@ final class SqliteHitStore implements HitStore
     {
         if ($this->insertStmt === null) {
             $this->insertStmt = $this->db->prepare(
-                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker)
-                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker)'
+                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker,recording)
+                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker,:recording)'
             );
         }
         $st = $this->insertStmt;
@@ -410,6 +417,7 @@ final class SqliteHitStore implements HitStore
             ':lon' => isset($geo['lon']) ? (float) $geo['lon'] : null,
             ':asn' => (string) ($geo['asn'] ?? ''),
             ':known_attacker' => !empty($e['known_attacker']) ? 1 : 0,
+            ':recording' => (string) ($e['recording'] ?? ''),
         ]);
     }
 
@@ -443,6 +451,7 @@ final class SqliteHitStore implements HitStore
             'lat' => $r['lat'] !== null ? (float) $r['lat'] : null,
             'lon' => $r['lon'] !== null ? (float) $r['lon'] : null,
             'known_attacker' => !empty($r['known_attacker']),
+            'recording' => (string) ($r['recording'] ?? ''),
         ];
     }
 

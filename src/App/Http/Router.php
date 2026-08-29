@@ -97,6 +97,11 @@ final class Router
 
                 return;
             }
+            if ($method === 'GET' && isset($_GET['recording'])) {
+                $this->dashboard->recording((string) $_GET['recording']);
+
+                return;
+            }
             if ($method === 'GET') {
                 $this->dashboard->shell($this->config->dashboardPath);
 
@@ -200,8 +205,23 @@ final class Router
 
                 return;
             }
+            if ($method === 'GET' && isset($_GET['recording'])) {
+                $this->dashboard->recording((string) $_GET['recording']);
+
+                return;
+            }
             if ($method === 'GET') {
                 $this->dashboard->shell($this->config->funnypotPath);
+
+                return;
+            }
+        }
+
+        // Direct recording URL e.g. /funnypot/recording?id=...
+        if (($method === 'GET' || $method === 'HEAD') && (rtrim($path, '/') === $fp . '/recording' || $path === '/funnypot/recording')) {
+            $recId = (string) ($_GET['id'] ?? ($_GET['recording'] ?? ''));
+            if ($recId !== '') {
+                $this->dashboard->recording($recId);
 
                 return;
             }

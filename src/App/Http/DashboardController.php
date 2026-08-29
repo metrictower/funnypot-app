@@ -9,6 +9,7 @@ use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Emulation\EmulationCatalog;
 use Funnypot\App\Emulation\EmulationPolicy;
+use Funnypot\Protocol\Sip\WavWriter;
 use Geo;
 
 /**
@@ -63,7 +64,7 @@ final class DashboardController
     private function filters(): array
     {
         $f = [];
-        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q'] as $k) {
+        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording'] as $k) {
             if (isset($_GET[$k]) && $_GET[$k] !== '') {
                 $f[$k] = (string) $_GET[$k];
             }
@@ -233,6 +234,8 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"event":"panel"}\'>admin panel</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"shell"}\'>web console</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"VNC"}\'>VNC</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"SIP"}\'>SIP logs</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"SIP","recording":"1"}\'>SIP recordings</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"clipboard"}\'>clipboard grabs</button>';
         echo '<button class=\'btn qv\' data-f=\'{"known":"1"}\'>known attackers</button>';
         echo '<button class=\'btn qv\' data-f=\'{"served":"1"}\'>fakes served</button>';
@@ -259,5 +262,83 @@ final class DashboardController
         echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
         echo "<script>{$js}</script>";
         echo "</div></body></html>";
+    }
+
+    public function recording(string $id): void
+    {
+        $id = preg_replace('/[^a-zA-Z0-9_-]/', '', $id);
+        if ($id === '') {
+            http_response_code(400);
+            echo 'invalid recording id';
+
+            return;
+        }
+
+        $recordingsDir = dirname(__DIR__, 3) . '/demo/storage/recordings';
+        $ulawGz = $recordingsDir . '/' . $id . '.ulaw.gz';
+        $rxGz = $recordingsDir . '/' . $id . '.rx.ulaw.gz';
+        $ulaw = $recordingsDir . '/' . $id . '.ulaw';
+        $wav = $recordingsDir . '/' . $id . '.wav';
+
+        // Recordings are stored as gzip'd mu-law; decompress + expand to a playable WAV on request.
+        // When the caller's channel was captured too, serve stereo (left=caller, right=persona).
+        // Plain .ulaw and legacy .wav are also served.
+        if (is_file($ulawGz)) {
+            $persona = (string) gzdecode((string) file_get_contents($ulawGz));
+            if (is_file($rxGz)) {
+                $caller = (string) gzdecode((string) file_get_contents($rxGz));
+                $body = WavWriter::stereoWavBytes($caller, $persona);
+            } else {
+                $body = WavWriter::wavBytes($persona);
+            }
+        } elseif (is_file($ulaw)) {
+            $body = WavWriter::wavBytes((string) file_get_contents($ulaw));
+        } elseif (is_file($wav)) {
+            $body = (string) file_get_contents($wav);
+        } else {
+            http_response_code(404);
+            echo 'recording not found';
+
+            return;
+        }
+
+        $this->serveAudioRange($body);
+    }
+
+    /**
+     * Serves audio bytes with HTTP Range support. HTML5 <audio> issues a Range request and needs a
+     * 206 with Content-Range to seek and play a long file to the end; a plain 200 makes some
+     * browsers stop after the first buffered second.
+     */
+    private function serveAudioRange(string $body): void
+    {
+        $len = strlen($body);
+        header('Content-Type: audio/wav');
+        header('Accept-Ranges: bytes');
+        header('Cache-Control: private, max-age=3600');
+
+        $range = $_SERVER['HTTP_RANGE'] ?? '';
+        if ($range !== '' && preg_match('/bytes=(\d*)-(\d*)/', $range, $m)) {
+            $start = $m[1] === '' ? 0 : (int) $m[1];
+            $end = $m[2] === '' ? $len - 1 : (int) $m[2];
+            $end = min($end, $len - 1);
+
+            if ($start > $end || $start >= $len) {
+                http_response_code(416);
+                header('Content-Range: bytes */' . $len);
+
+                return;
+            }
+
+            http_response_code(206);
+            header('Content-Range: bytes ' . $start . '-' . $end . '/' . $len);
+            header('Content-Length: ' . (string) ($end - $start + 1));
+            echo substr($body, $start, $end - $start + 1);
+
+            return;
+        }
+
+        header('Content-Length: ' . (string) $len);
+        echo $body;
     }
 }

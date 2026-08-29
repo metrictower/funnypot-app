@@ -43,14 +43,16 @@ td.path{word-break:break-all;max-width:340px}
 .src-custom{background:rgba(180,120,255,.14);color:#b478ff;border:1px solid rgba(180,120,255,.4)}
 .src-llm{background:rgba(60,200,160,.14);color:#3cc8a0;border:1px solid rgba(60,200,160,.4)}
 .src-decoy{background:rgba(168,152,122,.12);color:var(--muted);border:1px solid var(--line)}
-.src-payload{background:rgba(255,107,94,.16);color:var(--red);border:1px solid rgba(255,107,94,.45)}
 .src-vnc{background:rgba(255,80,200,.16);color:#ff50c8;border:1px solid rgba(255,80,200,.45)}
+.src-sip{background:rgba(160,80,255,.16);color:#b070ff;border:1px solid rgba(160,80,255,.45)}
 .ids{color:var(--muted);font-size:12px}
 tr.flash{animation:flash 1.4s ease-out}
 @keyframes flash{from{background:rgba(240,180,0,.28)}to{background:transparent}}
 .empty{color:var(--muted);text-align:center;padding:20px}
 .payload{color:var(--red);font-size:12px;word-break:break-all;margin-top:3px;white-space:pre-wrap}
 .payload b{color:var(--muted);font-weight:600}
+.call-player{margin-top:6px}
+.call-player audio{height:28px;width:240px;outline:none;border-radius:6px}
 .controls{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
 .btn{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
 .btn:hover{border-color:var(--amber)}.btn:disabled{opacity:.5;cursor:default}
