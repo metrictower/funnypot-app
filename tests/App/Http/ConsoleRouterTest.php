@@ -249,6 +249,11 @@ final class TestHitSpy implements HitStore
         return ['recent' => 0, 'extended' => 0];
     }
 
+    public function recentEventCount(string $ip, string $event, int $sinceSeconds): int
+    {
+        return 0;
+    }
+
     public function flagBulkScan(string $ip, int $hours): void
     {
     }

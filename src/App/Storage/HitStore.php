@@ -68,6 +68,13 @@ interface HitStore
      */
     public function probeVelocity(string $ip): array;
 
+    /**
+     * How many hits this IP has logged with the given event in the last $sinceSeconds — the signal
+     * behind the AI-API "believable first, troll after" budget (a fresh IP gets a few real answers,
+     * then degrades). Windowed so the budget refreshes after a quiet gap, like a real session.
+     */
+    public function recentEventCount(string $ip, string $event, int $sinceSeconds): int;
+
     /** Pin an IP to plain-404-only (the LLM gate's bulk-scan cooldown) for $hours. */
     public function flagBulkScan(string $ip, int $hours): void;
 

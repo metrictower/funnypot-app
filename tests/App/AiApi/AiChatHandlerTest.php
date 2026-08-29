@@ -82,7 +82,9 @@ final class AiChatHandlerTest extends TestCase
         bool $strictModel = false,
         float $temp = 1.5,
         float $minP = 0.0,
-        float $topP = 1.0
+        float $topP = 1.0,
+        int $realFirst = 5,
+        int $realWindowS = 600
     ): AiChatHandler {
         $this->store = new SqliteHitStore($this->dbPath('hits'));
         $this->abuse = new AbuseIpdb('testkey', $this->dbPath('intel'), ['10.0.0.1']);
@@ -107,6 +109,8 @@ final class AiChatHandlerTest extends TestCase
             $minP,
             $topP,
             4,
+            $realFirst,
+            $realWindowS,
             0,
             static function (int $s, array $h, string $b) use ($cap): void {
                 $cap->status = $s;
@@ -390,11 +394,12 @@ final class AiChatHandlerTest extends TestCase
     public function test_non_code_request_sends_the_word_swapped_text_to_the_model(): void
     {
         $prompt = null;
+        // realFirst=0 forces the troll path (past the believable-first budget) so the corruption runs.
         $handler = $this->make(function (string $url, string $body) use (&$prompt): array {
             $prompt = (json_decode($body, true))['prompt'] ?? '';
 
             return ['status' => 200, 'body' => (string) json_encode(['content' => 'a confident answer'])];
-        });
+        }, false, false, 1.5, 0.0, 1.0, 0);
 
         $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
             'model' => self::OLLAMA_MODEL,
@@ -416,15 +421,15 @@ final class AiChatHandlerTest extends TestCase
 
     public function test_unswappable_question_serves_static_fallback_not_a_correct_answer(): void
     {
-        // "what is 2+2" has no swappable content word, so the corruption is a no-op. The helpful model
-        // would answer it CORRECTLY ("4") — the one thing a nonsense endpoint must never do. It must
-        // serve static nonsense with no sidecar call instead.
+        // In troll mode (realFirst=0), "what is 2+2" has no swappable content word, so corruption is a
+        // no-op. The helpful model would answer it CORRECTLY ("4") — the one thing the troll persona
+        // must never do. It must serve static nonsense with no sidecar call instead.
         $calls = 0;
         $handler = $this->make(function () use (&$calls): array {
             $calls++;
 
             return ['status' => 200, 'body' => (string) json_encode(['content' => '4'])];
-        });
+        }, false, false, 1.5, 0.0, 1.0, 0);
 
         $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
             'model' => self::OLLAMA_MODEL,
@@ -438,6 +443,55 @@ final class AiChatHandlerTest extends TestCase
             new ChatRequest('ollama-chat', self::OLLAMA_MODEL, 'what is 2+2', false, false, false)
         );
         self::assertStringContainsString($expected, $this->cap->body);
+    }
+
+    public function test_first_request_is_answered_straight_not_corrupted(): void
+    {
+        // A fresh IP within the believable-first budget (default realFirst=5) gets the RAW question,
+        // not the word-swapped one — a real box on the opening probe.
+        $prompt = null;
+        $handler = $this->make(function (string $url, string $body) use (&$prompt): array {
+            $prompt = (json_decode($body, true))['prompt'] ?? '';
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'Paris'])];
+        });
+
+        $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
+            'model' => self::OPENAI_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertIsString($prompt);
+        self::assertStringContainsString('what is the capital of France', $prompt);   // uncorrupted
+        self::assertStringContainsString('Paris', $this->cap->body);                  // real answer served
+    }
+
+    public function test_believable_budget_degrades_to_troll_after_the_first_n(): void
+    {
+        // realFirst=2: this IP's first two chats reach the sidecar (normal); the third is past the
+        // budget → troll. "hi" is unswappable, so troll mode serves static nonsense with NO sidecar
+        // call — the clean signal that the mode flipped from believable to troll.
+        $calls = 0;
+        $handler = $this->make(function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'a real answer'])];
+        }, false, false, 1.5, 0.0, 1.0, 2);
+
+        for ($i = 0; $i < 3; $i++) {
+            $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+                'model' => self::OLLAMA_MODEL,
+                'messages' => [['role' => 'user', 'content' => 'hi']],
+                'stream' => false,
+            ]), self::IP);
+        }
+
+        self::assertSame(2, $calls, 'only the first two (within budget) reach the sidecar');
+        $expected = (new NonsenseFallback())->text(
+            new ChatRequest('ollama-chat', self::OLLAMA_MODEL, 'hi', false, false, false)
+        );
+        self::assertStringContainsString($expected, $this->cap->body);   // 3rd degraded to static nonsense
     }
 
     public function test_exploit_substring_in_the_answer_degrades_to_fallback(): void

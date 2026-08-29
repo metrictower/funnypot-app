@@ -47,6 +47,8 @@ a 500).
 | `FUNNYPOT_AI_TEMP` | `0.8` | Sampling temperature for the chat sidecar call. |
 | `FUNNYPOT_AI_MIN_P` | `0.0` | Sampling `min_p` for the chat sidecar call. |
 | `FUNNYPOT_AI_TOP_P` | `1.0` | Sampling `top_p` for the chat sidecar call. |
+| `FUNNYPOT_AI_REAL_FIRST` | `5` | A fresh IP's first N chat answers in the window are answered **straight** (real, correct) before the box degrades to the troll persona. `0` = always troll (the pre-escalation behavior). |
+| `FUNNYPOT_AI_REAL_WINDOW_S` | `600` | The sliding window (seconds) the first-N budget is counted over. A quiet gap longer than this refreshes the budget, so a returning scanner gets believable answers again — like a real session. |
 
 These four sampling/gating vars are read directly by `AppConfig::fromEnv()` — see
 `src/App/Config/AppConfig.php` for the exact parsing (the `_STRICT_` flags use the same
@@ -67,9 +69,10 @@ elsewhere). None of these are AI-API-specific — tune them once for the sidecar
 
 ## How the nonsense works
 
-The chat handler never asks the model to "be wrong" — live testing showed it just ignores that and
-answers correctly. Instead it corrupts the *question* and has the model answer the corrupted question
-straight:
+The box is believable first, troll after: a fresh IP's opening chats are answered for real, then it
+degrades. When it does troll, it never asks the model to "be wrong" — live testing showed it just
+ignores that and answers correctly — so instead it corrupts the *question* and has the model answer the
+corrupted question straight:
 
 0. **Identity/capability probes are answered for real** (checked first, so they never reach the troll
    path). A message that reads as "what model are you / who made you / what can you do" gets a
@@ -79,18 +82,26 @@ straight:
    gate: the answer is cheap and canned, so it convinces without becoming usable compute. The detector
    is deliberately narrower than a bare "model" so it doesn't misfire on requests like "download the
    model file".
-1. **Word-swap.** Content words in the attacker's message are swapped for absurd nouns (pineapple,
-   walrus, trombone, ...) while function words and sentence shape are kept, so "what is the capital of
-   France" becomes a still-grammatical "what is the trombone of pineapple" — and the model answers
-   *that* faithfully. If nothing in the message is swappable (short/trivial input, so a real answer
-   would come back correct), it falls straight to the static fallback instead.
-2. **Code requests get a static wrong-language snippet**, not a model call — a message that reads as
+1. **Believable-first budget (per IP).** A fresh IP's first `FUNNYPOT_AI_REAL_FIRST` chat answers
+   within `FUNNYPOT_AI_REAL_WINDOW_S` are answered **straight** — the raw question goes to the sidecar
+   and the real (correct) reply is served — so the box behaves like a live model on the opening probes.
+   The count is this IP's prior `ai-api` hits in the window (`HitStore::recentEventCount`), so the
+   *current* request is not yet counted; past the budget the box degrades to the word-swap troll below.
+   The window slides, so a quiet gap refreshes the budget like a real session. Code requests are the
+   one exception — never answered for real, even inside the budget (see 3).
+2. **Word-swap (troll mode, past the budget).** Content words in the attacker's message are swapped for
+   absurd nouns (pineapple, walrus, trombone, ...) while function words and sentence shape are kept, so
+   "what is the capital of France" becomes a still-grammatical "what is the trombone of pineapple" — and
+   the model answers *that* faithfully. If nothing in the message is swappable (short/trivial input, so
+   a real answer would come back correct), it falls straight to the static fallback instead.
+3. **Code requests get a static wrong-language snippet**, not a model call — a message that reads as
    a code/script/function request is detected up front and answered with a curated, deliberately
    wrong-language or gibberish sample (BASIC, x86 asm, brainfuck, ...), so the honeypot never risks
    the sidecar emitting real working code back to the attacker who asked for it.
-3. **Degrade ladder, always resolve-before-stream.** The full answer text is resolved before any byte
+4. **Degrade ladder, always resolve-before-stream.** The full answer text is resolved before any byte
    is emitted, so a fault never produces a half-finished stream:
-   - Sidecar reachable, gate open, concurrency slot free → live word-swapped LLM answer.
+   - Sidecar reachable, gate open, concurrency slot free → live LLM answer (straight within the
+     believable-first budget, word-swapped once past it).
    - Probe gate declines (bulk-scan pin, velocity, plausibility), no concurrency slot, sidecar
      timeout/error/empty output → static curated nonsense answer (deterministic per question, so a
      retried question gets the same wrong answer).

@@ -63,6 +63,10 @@ class AiChatHandler
         private float $minP = 0.0,
         private float $topP = 1.0,
         private int $maxConcurrent = 4,
+        // Believable-first budget: a fresh IP's first $realFirst chat answers within $realWindowS are
+        // answered straight (real, correct); after that it degrades to the word-swap troll persona.
+        private int $realFirst = 5,
+        private int $realWindowS = 600,
         private int $delayMs = 20,
         private $emitBuffered = null,
         private $emitterFactory = null,
@@ -167,17 +171,28 @@ class AiChatHandler
             return $this->fallback->text($req);
         }
 
+        // Believable-first: a fresh IP's opening chats (this IP's prior ai-api hits in the window are
+        // below the budget) are answered STRAIGHT — a real box on the first probes. Past the budget the
+        // question is corrupted into the troll persona. The count is prior hits (this one is logged
+        // after resolve), so request #1 sees 0. A pinned bulk scanner never reaches here (gate above).
+        $normal = $this->store->recentEventCount($ip, 'ai-api', $this->realWindowS) < $this->realFirst;
+
         try {
-            // Corrupt the question (swap content words for absurd nouns) and have the model answer THAT
-            // straight — the nonsense lives in the question, not in an instruction to be wrong. Random
-            // seed per request so the same question does not always get the identical reply.
-            $mangled = $this->wordSwap->corrupt($req->userText);
-            // Nothing swappable (e.g. "what is 2+2", "hi") → the helpful model would answer CORRECTLY,
-            // which is the one thing a nonsense endpoint must never do. Serve static nonsense instead.
-            if ($mangled === $req->userText) {
-                return $this->fallback->text($req);
+            if ($normal) {
+                // Answer the real question — believable early engagement, capped by the budget.
+                $promptText = $req->userText;
+            } else {
+                // Corrupt the question (swap content words for absurd nouns) and have the model answer
+                // THAT straight — the nonsense lives in the question, not in an instruction to be wrong.
+                $promptText = $this->wordSwap->corrupt($req->userText);
+                // Nothing swappable (e.g. "what is 2+2", "hi") → the helpful model would answer
+                // CORRECTLY, which the troll persona must never do. Serve static nonsense instead.
+                if ($promptText === $req->userText) {
+                    return $this->fallback->text($req);
+                }
             }
-            $raw = $this->llm->generate($this->prompt->build($mangled), '', [
+            // Random seed per request so the same question does not always get the identical reply.
+            $raw = $this->llm->generate($this->prompt->build($promptText), '', [
                 'temperature' => $this->temp,
                 'min_p' => $this->minP,
                 'top_p' => $this->topP,

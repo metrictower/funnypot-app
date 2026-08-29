@@ -252,6 +252,23 @@ final class SqliteHitStoreTest extends TestCase
         self::assertSame(['recent' => 0, 'extended' => 0], $store->probeVelocity('unknown'));
     }
 
+    public function test_recent_event_count(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+        foreach (range(1, 3) as $i) {   // 3 recent ai-api hits from the target IP
+            $store->append(['ts' => gmdate('c'), 'ip' => '9.9.9.9', 'method' => 'POST', 'path' => '/v1/chat/completions', 'event' => 'ai-api']);
+        }
+        $store->append(['ts' => gmdate('c', time() - 700), 'ip' => '9.9.9.9', 'method' => 'POST', 'path' => '/v1/chat/completions', 'event' => 'ai-api']);   // outside 600s
+        $store->append(['ts' => gmdate('c'), 'ip' => '9.9.9.9', 'method' => 'GET', 'path' => '/', 'event' => 'llm-fake']);                                    // different event
+        $store->append(['ts' => gmdate('c'), 'ip' => '1.1.1.1', 'method' => 'POST', 'path' => '/v1/chat/completions', 'event' => 'ai-api']);                  // different IP
+
+        self::assertSame(3, $store->recentEventCount('9.9.9.9', 'ai-api', 600));      // window excludes the old one
+        self::assertSame(4, $store->recentEventCount('9.9.9.9', 'ai-api', 86400));    // wider window includes it
+        self::assertSame(1, $store->recentEventCount('9.9.9.9', 'llm-fake', 600));    // events counted separately
+        self::assertSame(1, $store->recentEventCount('1.1.1.1', 'ai-api', 600));      // IPs counted separately
+        self::assertSame(0, $store->recentEventCount('unknown', 'ai-api', 600));
+    }
+
     public function test_binary_bytes_are_sanitised_not_dropped(): void
     {
         $store = new SqliteHitStore($this->dbPath());

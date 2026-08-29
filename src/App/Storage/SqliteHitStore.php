@@ -305,6 +305,17 @@ final class SqliteHitStore implements HitStore
         return ['recent' => (int) ($row['recent'] ?? 0), 'extended' => (int) ($row['extended'] ?? 0)];
     }
 
+    public function recentEventCount(string $ip, string $event, int $sinceSeconds): int
+    {
+        if ($ip === '' || $ip === 'unknown') {
+            return 0;
+        }
+        $st = $this->db->prepare('SELECT COUNT(*) FROM hits WHERE ip = :ip AND event = :ev AND ts >= :since');
+        $st->execute([':ip' => $ip, ':ev' => $event, ':since' => gmdate('c', time() - max(0, $sinceSeconds))]);
+
+        return (int) $st->fetchColumn();
+    }
+
     public function flagBulkScan(string $ip, int $hours): void
     {
         if ($ip === '' || $ip === 'unknown') {

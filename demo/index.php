@@ -218,6 +218,8 @@ if ($config->aiApiEnabled) {
         $config->aiMinP,
         $config->aiTopP,
         $config->llmMaxConcurrent,
+        $config->aiRealFirst,
+        $config->aiRealWindowS,
     ));
 }
 

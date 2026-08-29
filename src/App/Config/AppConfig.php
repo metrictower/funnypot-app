@@ -74,6 +74,11 @@ final class AppConfig
         public float $aiTemp,
         public float $aiMinP,
         public float $aiTopP,
+        // A fresh IP gets its first N chat answers straight (believable), then the box degrades to the
+        // troll persona — a real box on the opening probes, useless as free compute after. Windowed so
+        // the budget refreshes after a quiet gap, like a real session.
+        public int $aiRealFirst,
+        public int $aiRealWindowS,
         public string $llmUrl,
         public int $llmTimeoutMs,
         public int $llmNPredict,
@@ -199,6 +204,8 @@ final class AppConfig
             aiTemp: (float) $str('FUNNYPOT_AI_TEMP', '0.8'),
             aiMinP: (float) $str('FUNNYPOT_AI_MIN_P', '0.0'),
             aiTopP: (float) $str('FUNNYPOT_AI_TOP_P', '1.0'),
+            aiRealFirst: max(0, (int) $str('FUNNYPOT_AI_REAL_FIRST', '5')),
+            aiRealWindowS: max(1, (int) $str('FUNNYPOT_AI_REAL_WINDOW_S', '600')),
             llmUrl: $str('FUNNYPOT_LLM_URL', 'http://funnypot-llm:8080/completion'),
             // A CPU 0.5B GBNF generation runs ~3-8s (slower on a small box); the timeout must clear
             // that or every fake times out into a plain 404. The concurrency cap bounds how many
