@@ -733,30 +733,11 @@ final class SipServer
      */
     private function handleInvite(SipMessage $req, string $peerIp, int $peerPort, string $transport, $tcpSock): void
     {
-        // Same enumeration shaping as REGISTER/OPTIONS: an INVITE to a number/AOR this PBX doesn't
-        // host answers 404 (a real dial plan rejects unknown destinations), so a tool enumerating
-        // via INVITE sees the same map. A plausible dialed number proceeds to the normal call flow.
-        // The probe is still logged as intel.
-        $ext = $this->addressedExtension($req);
-        if ($ext !== null && !$this->config->isValidExtension($ext)) {
-            $res = $req->buildNotFound('tag-' . bin2hex(random_bytes(3)), $this->config->userAgent);
-            $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
-
-            $this->logEvent([
-                'proto' => 'sip',
-                'method' => 'SIP',
-                'event' => 'probe',
-                'ip' => $peerIp,
-                'port' => $peerPort,
-                'path' => "SIP INVITE to:{$ext} unknown extension (404) enumeration probe",
-                'matched' => 1,
-                'served' => 1,
-                'reportable' => ($transport === 'tcp'),
-            ]);
-
-            return;
-        }
-
+        // An INVITE always ANSWERS — never 404 on the dialed target. A caller dials external numbers
+        // (toll-fraud targets, premium/international) that are not PBX extensions; the whole point of
+        // this honeypot is to answer, connect, stream a persona and capture the dialed number. Gating
+        // INVITE on extension validity (like REGISTER/OPTIONS enumeration) would silently reject the
+        // exact toll-fraud calls we want to record. The dialed number is captured on the call event.
         $callId = $req->getCallId() ?? ('call-' . bin2hex(random_bytes(4)));
         $sessionKey = $this->sessionKey($callId, $peerIp, $peerPort);
 

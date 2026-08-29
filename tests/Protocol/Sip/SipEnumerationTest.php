@@ -161,25 +161,28 @@ final class SipEnumerationTest extends TestCase
 
     // --- INVITE shaping ---
 
-    public function test_invite_to_invalid_ext_returns_404_and_logs_probe(): void
+    public function test_invite_always_answers_even_for_an_off_directory_target(): void
     {
+        // An INVITE must ALWAYS connect — never 404 on the dialed target. Callers dial external
+        // numbers / arbitrary targets (toll-fraud, or an operator test call) that are not PBX
+        // extensions; the honeypot answers, connects and streams a persona to capture them. The
+        // enumeration 404-gate applies only to REGISTER/OPTIONS, never to a call.
         $logged = [];
         $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
-        $raw = "INVITE sip:asdf9zqxwer@target SIP/2.0\r\n"
+        $raw = "INVITE sip:3333666@target SIP/2.0\r\n"
             . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-i\r\n"
-            . "From: <sip:a@9.9.9.9>;tag=f\r\nTo: <sip:asdf9zqxwer@target>\r\n"
-            . "Call-ID: inv-junk\r\nCSeq: 1 INVITE\r\n\r\n";
+            . "From: <sip:a@9.9.9.9>;tag=f\r\nTo: <sip:3333666@target>\r\n"
+            . "Call-ID: inv-offdir\r\nCSeq: 1 INVITE\r\n\r\n";
         $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
 
-        // No call session is set up for an unknown destination.
-        $this->assertSame(0, $server->getActiveSessionCount());
+        // The call is set up (answered), and the dialed number is captured on the call event.
+        $this->assertSame(1, $server->getActiveSessionCount());
         $ev = end($logged);
-        $this->assertSame('probe', $ev['event']);
-        $this->assertStringContainsString('asdf9zqxwer', $ev['path']);
-        $this->assertStringContainsString('404', $ev['path']);
+        $this->assertSame('call', $ev['event']);
+        $this->assertStringContainsString('3333666', $ev['path']);
     }
 
     public function test_invite_to_valid_number_still_connects(): void
