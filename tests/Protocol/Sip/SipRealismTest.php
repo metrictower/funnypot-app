@@ -25,6 +25,23 @@ final class SipRealismTest extends TestCase
         $this->assertStringNotContainsString("User-Agent:", $res, 'a response emitting both Server and User-Agent is a stack-fingerprint tell');
     }
 
+    public function test_options_ok_advertises_a_full_pjsip_capability_set(): void
+    {
+        // The OPTIONS reply is the scanner's first-contact fingerprint: it must read as a complete
+        // Asterisk (SDP negotiation + event subscriptions) so the box is marked live and escalated to.
+        $req = SipMessage::parse("OPTIONS sip:pbx SIP/2.0\r\nVia: SIP/2.0/UDP 1.1.1.1:5060;branch=z9hG4bK-o\r\nCall-ID: c\r\nCSeq: 1 OPTIONS\r\n\r\n");
+        $res = $req->buildOk('tag-o', '<sip:10.0.0.1:5060>', '', [
+            'Accept' => 'application/sdp',
+            'Allow-Events' => 'message-summary, presence, dialog, refer, cc',
+        ]);
+        $this->assertStringContainsString('Allow: INVITE, ACK, CANCEL, OPTIONS, BYE', $res);
+        $this->assertStringContainsString('Supported: 100rel, timer, replaces, norefersub', $res);
+        $this->assertStringContainsString('Accept: application/sdp', $res);
+        $this->assertStringContainsString('Allow-Events: message-summary, presence, dialog, refer, cc', $res);
+        // The REGISTER-only 'path' extension must not appear here — advertising it on OPTIONS is a tell.
+        $this->assertStringNotContainsString('path', $res);
+    }
+
     public function test_unknown_method_gets_501_not_a_bare_200(): void
     {
         $res = SipMessage::parse("PING sip:x SIP/2.0\r\nCall-ID: c\r\nCSeq: 1 PING\r\n\r\n")->buildNotImplemented();

@@ -289,7 +289,7 @@ final class SipMessage
         $headers = array_merge([
             'Contact' => $contact,
             'Allow' => 'INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, MESSAGE',
-            'Supported' => 'replaces, timer',
+            'Supported' => '100rel, timer, replaces, norefersub',
         ], $extra);
 
         if ($sdpBody !== '') {

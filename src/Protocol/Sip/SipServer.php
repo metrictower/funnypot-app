@@ -451,7 +451,14 @@ final class SipServer
             return;
         }
 
-        $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+        // OPTIONS is the scanner's first-contact fingerprint surface — answer as a fuller Asterisk so
+        // svmap/sipvicious mark the box live and escalate to REGISTER/INVITE. Accept + Allow-Events
+        // advertise a complete pjsip stack (SDP negotiation + event subscriptions); Allow/Supported
+        // stay Asterisk-20-faithful (no REGISTER-only 'path' extension, which would be a tell here).
+        $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [
+            'Accept' => 'application/sdp',
+            'Allow-Events' => 'message-summary, presence, dialog, refer, cc',
+        ], $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
         // Anti-Spoofing (B2): Bare UDP OPTIONS are spoofable; only reportable over TCP
