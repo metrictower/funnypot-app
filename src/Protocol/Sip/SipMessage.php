@@ -301,8 +301,10 @@ final class SipMessage
 
     public function buildUnauthorized(string $toTag, string $realm, string $nonce, string $userAgent = 'Asterisk PBX 20.5.0'): string
     {
+        // Real Asterisk/pjsip advertises qop="auth"; verifyDigest accepts both qop and no-qop
+        // responses, so this stays easy to authenticate while dropping a stack tell.
         return $this->buildResponse(401, 'Unauthorized', $toTag, [
-            'WWW-Authenticate' => "Digest algorithm=MD5, realm=\"{$realm}\", nonce=\"{$nonce}\"",
+            'WWW-Authenticate' => "Digest realm=\"{$realm}\", nonce=\"{$nonce}\", algorithm=MD5, qop=\"auth\"",
         ], '', $userAgent);
     }
 

@@ -832,7 +832,9 @@ final class SipServer
         //    would be an RTP-reflection vector (return-routability is only proven by the ACK).
         $serverIp = $this->getServerIp();
         $localRtpPort = $this->rtpStreamer->getLocalPort();
-        $sdp = SipMessage::buildSdp($serverIp, $localRtpPort, '1', $this->config->userAgent);
+        // Per-call SDP session id/version — a constant "o=- 1 1" is a cross-call fingerprint.
+        $sessionId = (string) random_int(1000000000, 2147483647);
+        $sdp = SipMessage::buildSdp($serverIp, $localRtpPort, $sessionId, $this->config->userAgent);
         $contact = "<sip:{$dialedNumber}@{$serverIp}:5060>";
 
         $this->sendResponse($req->buildRinging($s->toTag, $this->config->userAgent), $peerIp, $peerPort, $transport, $tcpSock);

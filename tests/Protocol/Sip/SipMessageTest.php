@@ -118,7 +118,7 @@ final class SipMessageTest extends TestCase
         // 401 Unauthorized
         $unauth = $req->buildUnauthorized('tag-99', 'asterisk', 'random-nonce-123', 'Asterisk PBX 20.5.0');
         $this->assertStringContainsString('SIP/2.0 401 Unauthorized', $unauth);
-        $this->assertStringContainsString('WWW-Authenticate: Digest algorithm=MD5, realm="asterisk", nonce="random-nonce-123"', $unauth);
+        $this->assertStringContainsString('WWW-Authenticate: Digest realm="asterisk", nonce="random-nonce-123", algorithm=MD5, qop="auth"', $unauth);
         $this->assertStringContainsString('To: <sip:100@target>;tag=tag-99', $unauth);
 
         // 200 OK with SDP
