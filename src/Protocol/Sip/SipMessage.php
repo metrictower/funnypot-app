@@ -129,6 +129,67 @@ final class SipMessage
         return $msg;
     }
 
+    /**
+     * Byte length of the first complete SIP message at the start of $buf (header delimiter +
+     * Content-Length body), or null if $buf does not yet hold a complete message. Frames a stream
+     * transport (TCP), where one read may carry a partial message — wait for the rest — or several
+     * pipelined ones. Without this a body split across two reads is parsed truncated (SDP port lost).
+     */
+    public static function frameLength(string $buf): ?int
+    {
+        $delim = "\r\n\r\n";
+        $pos = strpos($buf, $delim);
+        if ($pos === false) {
+            $delim = "\n\n";
+            $pos = strpos($buf, $delim);
+            if ($pos === false) {
+                return null; // headers not fully arrived
+            }
+        }
+
+        $headerText = substr($buf, 0, $pos);
+        $bodyStart = $pos + strlen($delim);
+        $contentLength = 0;
+        if (preg_match('/^(?:Content-Length|l):[ \t]*(\d+)/im', $headerText, $m)) {
+            $contentLength = (int) $m[1];
+        }
+        $total = $bodyStart + $contentLength;
+
+        return strlen($buf) >= $total ? $total : null;
+    }
+
+    /**
+     * Best-effort 400 Bad Request for a parseable-but-invalid request, echoing the routing headers a
+     * response needs (real Asterisk answers 400 rather than dropping). Returns null when those
+     * headers are absent — ungrammatical garbage is dropped, never answered out of nothing.
+     */
+    public static function build400(string $raw, string $userAgent = 'Asterisk PBX 20.5.0'): ?string
+    {
+        if (!preg_match('/^(?:Via|v):[ \t]*(.+)$/im', $raw, $via)) {
+            return null;
+        }
+        if (!preg_match('/^(?:Call-ID|i):[ \t]*(.+)$/im', $raw, $cid)) {
+            return null;
+        }
+        if (!preg_match('/^CSeq:[ \t]*(.+)$/im', $raw, $cseq)) {
+            return null;
+        }
+        $from = preg_match('/^(?:From|f):[ \t]*(.+)$/im', $raw, $m) ? rtrim($m[1]) : '<sip:anonymous@invalid>';
+        $to = preg_match('/^(?:To|t):[ \t]*(.+)$/im', $raw, $m) ? rtrim($m[1]) : '<sip:anonymous@invalid>';
+        if (stripos($to, 'tag=') === false) {
+            $to .= ';tag=tag-' . bin2hex(random_bytes(3));
+        }
+
+        return "SIP/2.0 400 Bad Request\r\n"
+            . 'Via: ' . rtrim($via[1]) . "\r\n"
+            . 'From: ' . $from . "\r\n"
+            . 'To: ' . $to . "\r\n"
+            . 'Call-ID: ' . rtrim($cid[1]) . "\r\n"
+            . 'CSeq: ' . rtrim($cseq[1]) . "\r\n"
+            . 'Server: ' . $userAgent . "\r\n"
+            . "Content-Length: 0\r\n\r\n";
+    }
+
     public function getHeader(string $name): ?string
     {
         $k = strtolower($name);

@@ -273,6 +273,13 @@ final class SipServer
         [$peerIp, $peerPort] = $this->splitAddr($peerAddr);
         $req = SipMessage::parse($data);
         if (!$req) {
+            // Parseable-but-invalid: 400 like a real Asterisk (best-effort, rate-limited by the F4
+            // bucket); ungrammatical garbage without routing headers is dropped.
+            $bad = SipMessage::build400($data, $this->config->userAgent);
+            if ($bad !== null) {
+                $this->sendResponse($bad, $peerIp, $peerPort, 'udp');
+            }
+
             return;
         }
 
@@ -325,17 +332,26 @@ final class SipServer
             return;
         }
 
-        $buf = $this->tcpBuffers[$id];
+        $name = stream_socket_get_name($sock, true);
+        [$peerIp, $peerPort] = $name ? $this->splitAddr($name) : ['127.0.0.1', 5060];
 
-        // Attempt to parse complete SIP message
-        $req = SipMessage::parse($buf);
-        if ($req) {
-            $name = stream_socket_get_name($sock, true);
-            [$peerIp, $peerPort] = $name ? $this->splitAddr($name) : ['127.0.0.1', 5060];
-            $this->dispatchMessage($req, $peerIp, $peerPort, 'tcp', $sock);
+        // Drain every complete SIP message in the buffer. One read can carry a partial message (wait
+        // for the rest) or several pipelined ones; consume exactly each framed message and keep the
+        // remainder buffered, so a body split across reads is never parsed truncated.
+        while (($frameLen = SipMessage::frameLength($this->tcpBuffers[$id])) !== null) {
+            $frame = substr($this->tcpBuffers[$id], 0, $frameLen);
+            $this->tcpBuffers[$id] = substr($this->tcpBuffers[$id], $frameLen);
 
-            // Clear buffer up to parsed length if Content-Length accounted for
-            $this->tcpBuffers[$id] = '';
+            $req = SipMessage::parse($frame);
+            if ($req) {
+                $this->dispatchMessage($req, $peerIp, $peerPort, 'tcp', $sock);
+            } else {
+                // Parseable-but-invalid: answer 400 like a real Asterisk (best-effort), else drop.
+                $bad = SipMessage::build400($frame, $this->config->userAgent);
+                if ($bad !== null) {
+                    $this->sendResponse($bad, $peerIp, $peerPort, 'tcp', $sock);
+                }
+            }
         }
     }
 
