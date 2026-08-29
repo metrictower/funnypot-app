@@ -8,6 +8,7 @@ use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipMessage;
 use Funnypot\Protocol\Sip\SipServer;
+use Funnypot\Protocol\Sip\ToneGenerator;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -84,5 +85,17 @@ final class SipRealismTest extends TestCase
     {
         $this->assertSame('8,18', AbuseIpdb::categoriesForProtocol('sip'));
         $this->assertNotSame('14,15', AbuseIpdb::categoriesForProtocol('sip'), 'SIP fraud must not fall to the port-scan default');
+    }
+
+    public function test_comfort_noise_is_faint_hiss_not_dead_silence(): void
+    {
+        $slice = (new ToneGenerator())->getComfortNoiseSlice();
+        $this->assertSame(160, strlen($slice));
+        $this->assertNotSame(str_repeat(chr(0xff), 160), $slice, 'inter-clip pauses must not be pure mu-law silence');
+        // Every sample stays in the lowest mu-law amplitude band: faint line hiss, never an audible tone.
+        for ($i = 0, $n = strlen($slice); $i < $n; $i++) {
+            $val = ~ord($slice[$i]) & 0xff;
+            $this->assertSame(0, ($val >> 4) & 0x07, 'comfort noise must stay at the lowest amplitude');
+        }
     }
 }

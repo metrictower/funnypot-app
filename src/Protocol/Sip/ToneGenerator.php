@@ -108,4 +108,23 @@ final class ToneGenerator
     {
         return count($this->ringSlices);
     }
+
+    /**
+     * A 160-byte slice of faint line hiss (comfort noise) for the gaps between clips. Pure 0xff
+     * (mu-law digital zero) is dead silence — a synthetic tell that answering-machine / human
+     * detection heuristics flag instantly; a real phone line is never perfectly silent. The bytes are
+     * chosen to decode to small magnitudes around both mu-law zeros (0xff / 0x7f), so it reads as a
+     * quiet live line, not a tone. Cheap and inert.
+     */
+    public function getComfortNoiseSlice(): string
+    {
+        // Low-magnitude mu-law bytes: 0xF8..0xFF (small +) and 0x78..0x7F (small -).
+        $out = '';
+        for ($i = 0; $i < 160; $i++) {
+            $mag = mt_rand(0, 7);                 // 0..7 -> very low amplitude
+            $out .= chr((mt_rand(0, 1) ? 0xF8 : 0x78) | $mag);
+        }
+
+        return $out;
+    }
 }

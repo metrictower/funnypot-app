@@ -179,11 +179,12 @@ final class PersonaSoundboard
         $clips = $this->personaClips[$persona];
         $activeClip = $clips[$s->personaClipIndex % count($clips)];
 
-        // In a natural silence pause between clips (0xff is mu-law zero/silence).
+        // In a natural pause between clips: emit faint line hiss, not pure 0xff (mu-law digital zero).
+        // Dead silence is a synthetic tell answering-machine detectors flag; a real line always hisses.
         if ($s->personaPauseRemaining > 0) {
             $s->personaPauseRemaining--;
 
-            return str_repeat(chr(0xff), 160);
+            return $this->toneGen->getComfortNoiseSlice();
         }
 
         $offset = $s->personaClipOffset;
