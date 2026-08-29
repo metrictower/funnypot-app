@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Sip;
 
+use Funnypot\App\Render\Fake\Org;
+use Funnypot\Core\Support\PersonaIdentity;
+use Funnypot\Core\Support\VisualPersona;
+
 /**
  * Configuration for the SIP and RTP VoIP honeypot service.
  */
@@ -15,6 +19,15 @@ final class SipConfig
      * @var list<string>
      */
     private const DEFAULT_EXTENSION_ALLOWLIST = ['admin', 'root', 'sip', 'test', 'operator', 'voip', 'phone'];
+
+    /**
+     * Memoized 'org'-mode roster extension set (ext => true) for O(1) membership, so the roster is
+     * derived once for the server's lifetime, not rebuilt per probe. null after a build means the
+     * roster could not be derived — the caller then falls back to the pattern policy.
+     * @var array<string, true>|null
+     */
+    private ?array $orgExtSet = null;
+    private bool $orgExtBuilt = false;
 
     public function __construct(
         public string $style = 'realistic',
@@ -50,10 +63,21 @@ final class SipConfig
          * Operator override for the valid-extension policy. null = built-in default (any plausible
          * dialed number + a small username allowlist). A non-empty list of rule strings REPLACES the
          * default: explicit extensions, `*`/`?` globs, or `re:PATTERN` anchored regexes (all matched
-         * case-insensitively). See isValidExtension().
+         * case-insensitively). See isValidExtension(). Only consulted in 'pattern' mode.
          * @var list<string>|null
          */
         public ?array $validExtensionRules = null,
+        /**
+         * Which valid-extension policy runs. 'pattern' = the numeric/allowlist (or operator-rule)
+         * default; 'org' = the bounded, coherent extension directory of the seeded fake org, so a
+         * scanner enumerates exactly the extensions the office HR/directory panels render. See
+         * isValidExtension().
+         */
+        public string $extensionMode = 'pattern',
+        /** Persona seed + email domain for 'org' mode, resolved the SAME way the office panels are so
+         *  the SIP directory and those panels describe one company. Private per-deploy value. */
+        public int $personaSeed = 0,
+        public string $personaDomain = '',
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -79,7 +103,20 @@ final class SipConfig
             return false;
         }
 
-        // Operator-configured policy fully replaces the default when set.
+        // 'org' mode: valid = a member of the seeded roster's bounded extension directory, plus the
+        // by-name allowlist so common-name probes are still captured. A scanner therefore maps only
+        // the ~90-270 real-looking extensions the office panels show, not an infinite numeric space.
+        if ($this->extensionMode === 'org') {
+            $set = $this->orgExtensionSet();
+            if ($set !== null) {
+                return isset($set[$ext])
+                    || in_array(strtolower($ext), self::DEFAULT_EXTENSION_ALLOWLIST, true);
+            }
+            // Roster could not be derived — fall through to the pattern policy so SIP never breaks.
+        }
+
+        // 'pattern' mode (also the 'org' fallback): operator-configured policy fully replaces the
+        // default when set.
         if ($this->validExtensionRules !== null && $this->validExtensionRules !== []) {
             return $this->matchesRules($ext, $this->validExtensionRules);
         }
@@ -92,6 +129,61 @@ final class SipConfig
 
         // Plus a small allowlist of common by-name accounts scanners target.
         return in_array(strtolower($ext), self::DEFAULT_EXTENSION_ALLOWLIST, true);
+    }
+
+    /**
+     * The seeded org roster's extension directory (sorted), for 'org' mode; an empty list otherwise
+     * or when the roster can't be derived. Server-side only — never emitted to a client. Exposed so
+     * the coherence between the SIP directory and the office HR/directory panels can be verified.
+     * @return list<string>
+     */
+    public function orgExtensions(): array
+    {
+        if ($this->extensionMode !== 'org') {
+            return [];
+        }
+        $set = $this->orgExtensionSet();
+        if ($set === null) {
+            return [];
+        }
+        // array_keys coerces numeric-string keys ("2002") back to ints, so cast to keep the
+        // directory string-typed and byte-identical to the roster's own ext strings.
+        $exts = array_map('strval', array_keys($set));
+        sort($exts);
+
+        return $exts;
+    }
+
+    /**
+     * Build (once, memoized) the roster extension set from the same seeded Org the office panels
+     * render, so the SIP directory and those panels agree. Fault-isolated: any failure deriving the
+     * roster returns null, so the caller degrades to the pattern policy rather than breaking SIP.
+     * @return array<string, true>|null
+     */
+    private function orgExtensionSet(): ?array
+    {
+        if ($this->orgExtBuilt) {
+            return $this->orgExtSet;
+        }
+        $this->orgExtBuilt = true;
+
+        try {
+            $org = Org::fromSeed($this->personaSeed, $this->personaDomain);
+            $set = [];
+            foreach ($org->people($org->headcount()) as $person) {
+                $ext = trim((string) ($person['ext'] ?? ''));
+                if ($ext !== '') {
+                    $set[$ext] = true;
+                }
+            }
+            // A roster that yields no extensions is treated as a derivation failure (fall back), not
+            // an empty directory that would 404 the whole company.
+            $this->orgExtSet = $set === [] ? null : $set;
+        } catch (\Throwable $e) {
+            $this->orgExtSet = null;
+        }
+
+        return $this->orgExtSet;
     }
 
     /**
@@ -163,6 +255,30 @@ final class SipConfig
             }
         }
 
+        // Extension policy mode. 'org' binds the valid set to the seeded company roster; anything
+        // else keeps the 'pattern' (numeric/allowlist) default.
+        $extensionMode = strtolower(getenv('FUNNYPOT_SIP_EXTENSION_MODE') ?: 'pattern');
+        if ($extensionMode !== 'org') {
+            $extensionMode = 'pattern';
+        }
+
+        // Resolve the persona seed (and, for 'org' mode, its email domain) exactly as the office
+        // panels do — from the private per-deploy material — so the SIP extension directory and the
+        // HR/directory panels present one coherent company. Fault-isolated: if the identity can't be
+        // derived, seed/domain stay at their defaults and 'org' mode degrades to the pattern policy.
+        $personaMaterial = getenv('FUNNYPOT_PERSONA_SEED') ?: (getenv('FUNNYPOT_PERSONA_SECRET') ?: 'funnypot');
+        $personaSeed = 0;
+        $personaDomain = '';
+        try {
+            $personaSeed = PersonaIdentity::seedFromMaterial($personaMaterial);
+            if ($extensionMode === 'org') {
+                $personaDomain = VisualPersona::fromSeed($personaSeed)->domain();
+            }
+        } catch (\Throwable $e) {
+            $personaSeed = 0;
+            $personaDomain = '';
+        }
+
         return new self(
             style: $style,
             bind: $bind,
@@ -182,6 +298,9 @@ final class SipConfig
             latchedCredentialsFile: $latchedFile,
             latchPasswords: $latchPasswords,
             validExtensionRules: $validExtRules,
+            extensionMode: $extensionMode,
+            personaSeed: $personaSeed,
+            personaDomain: $personaDomain,
         );
     }
 }

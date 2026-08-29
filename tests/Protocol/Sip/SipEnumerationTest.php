@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\Protocol\Sip;
 
+use Funnypot\App\Render\Fake\Org;
+use Funnypot\Core\Support\PersonaIdentity;
+use Funnypot\Core\Support\VisualPersona;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipMessage;
 use Funnypot\Protocol\Sip\SipServer;
@@ -197,7 +200,128 @@ final class SipEnumerationTest extends TestCase
         $this->assertSame('call', end($logged)['event']);
     }
 
+    // --- 'org' mode: extension directory coherent with the seeded company roster (FP-0180) ---
+
+    public function test_org_mode_valid_set_equals_org_roster_and_derives_seed_like_panels(): void
+    {
+        // Coherence via fromEnv: the SIP directory resolves the SAME seed+domain the office panels do
+        // (PersonaIdentity::seedFromMaterial + the persona domain), so the two describe one company.
+        putenv('FUNNYPOT_PERSONA_SEED=fp0180-coherence');
+        putenv('FUNNYPOT_SIP_EXTENSION_MODE=org');
+        try {
+            $cfg = SipConfig::fromEnv();
+
+            $seed = PersonaIdentity::seedFromMaterial('fp0180-coherence');
+            $domain = VisualPersona::fromSeed($seed)->domain();
+            $org = Org::fromSeed($seed, $domain);
+            $roster = array_map(static fn (array $p): string => $p['ext'], $org->people($org->headcount()));
+            sort($roster);
+
+            // The SIP-valid extension directory EQUALS the Org roster's extension set for this seed.
+            $this->assertNotEmpty($roster);
+            $this->assertSame($roster, $cfg->orgExtensions());
+
+            // Every roster extension is valid; a number outside the bounded roster is not.
+            foreach ($roster as $ext) {
+                $this->assertTrue($cfg->isValidExtension($ext), "roster ext {$ext} should be valid");
+            }
+            $this->assertFalse($cfg->isValidExtension('9999'));
+        } finally {
+            putenv('FUNNYPOT_PERSONA_SEED');
+            putenv('FUNNYPOT_SIP_EXTENSION_MODE');
+        }
+    }
+
+    public function test_org_mode_roster_extension_register_gets_401_challenge(): void
+    {
+        [$cfg, $roster] = $this->orgConfig('fp0180-a');
+        $ext = $roster[0]; // a real roster extension (computed from the same seed the config uses)
+        $this->assertTrue($cfg->isValidExtension($ext));
+
+        $server = new SipServer($cfg, null);
+        $resp = $this->roundTrip($server, $this->register($ext, 'org-valid'));
+
+        // A real directory extension keeps the 401 challenge → weak-auth latch, the juicy target.
+        $this->assertStringContainsString('SIP/2.0 401 Unauthorized', $resp);
+        $this->assertStringContainsString('WWW-Authenticate', $resp);
+    }
+
+    public function test_org_mode_off_roster_number_returns_404_and_logs_probe(): void
+    {
+        [$cfg, $roster] = $this->orgConfig('fp0180-b');
+        $this->assertNotContains('9999', $roster); // sanity: the junk number really is off-roster
+
+        $logged = [];
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $resp = $this->roundTrip($server, $this->register('9999', 'org-junk'));
+
+        // Off-roster numbers 404 in 'org' mode — the bounded directory, not the FP-0178 "any number".
+        $this->assertStringContainsString('SIP/2.0 404 Not Found', $resp);
+        $this->assertStringNotContainsString('401 Unauthorized', $resp);
+
+        // Intel is preserved: the probe is still logged as an enumeration attempt.
+        $probes = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'probe'));
+        $this->assertNotEmpty($probes);
+        $ev = end($probes);
+        $this->assertStringContainsString('9999', $ev['path']);
+        $this->assertStringContainsString('enumeration probe', $ev['path']);
+    }
+
+    public function test_org_mode_allowlisted_name_still_gets_401_challenge(): void
+    {
+        [$cfg] = $this->orgConfig('fp0180-allow');
+
+        // The by-name allowlist stays valid in 'org' mode so common-name probes are still captured.
+        $this->assertTrue($cfg->isValidExtension('admin'));
+
+        $server = new SipServer($cfg, null);
+        $resp = $this->roundTrip($server, $this->register('root', 'org-name'));
+        $this->assertStringContainsString('SIP/2.0 401 Unauthorized', $resp);
+    }
+
+    public function test_pattern_mode_still_accepts_any_number_off_roster(): void
+    {
+        // Same seed/domain, contrasting modes: 'pattern' keeps the FP-0178 behavior (any E.164-ish
+        // number is valid, roster or not) while 'org' bounds it to the roster.
+        $seed = PersonaIdentity::seedFromMaterial('fp0180-d');
+        $domain = VisualPersona::fromSeed($seed)->domain();
+        $pattern = new SipConfig(rtpPort: 0, extensionMode: 'pattern', personaSeed: $seed, personaDomain: $domain);
+        $org = new SipConfig(rtpPort: 0, extensionMode: 'org', personaSeed: $seed, personaDomain: $domain);
+
+        $this->assertTrue($pattern->isValidExtension('9999'));   // pattern: any number valid (FP-0178)
+        $this->assertFalse($org->isValidExtension('9999'));      // org: bounded to the roster
+
+        // The directory is only exposed (server-side) in 'org' mode.
+        $this->assertSame([], $pattern->orgExtensions());
+        $this->assertNotEmpty($org->orgExtensions());
+
+        // Pattern mode's operator-rule override and default allowlist are untouched by the new mode.
+        $this->assertTrue($pattern->isValidExtension('admin'));
+        $this->assertFalse($pattern->isValidExtension('asdf9zqxwer'));
+    }
+
     // --- helpers ---
+
+    /**
+     * An 'org'-mode SipConfig plus its sorted roster extension list, both derived from the same seed
+     * material so a test can pick a guaranteed real (or off-) roster extension.
+     *
+     * @return array{0: SipConfig, 1: list<string>}
+     */
+    private function orgConfig(string $material, string $bind = '127.0.0.1:0'): array
+    {
+        $seed = PersonaIdentity::seedFromMaterial($material);
+        $domain = VisualPersona::fromSeed($seed)->domain();
+        $cfg = new SipConfig(bind: $bind, rtpPort: 0, extensionMode: 'org', personaSeed: $seed, personaDomain: $domain);
+
+        $org = Org::fromSeed($seed, $domain);
+        $roster = array_map(static fn (array $p): string => $p['ext'], $org->people($org->headcount()));
+        sort($roster);
+
+        return [$cfg, $roster];
+    }
 
     private function register(string $ext, string $callId): string
     {
