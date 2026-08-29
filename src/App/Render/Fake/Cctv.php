@@ -26,6 +26,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Cctv
 {
+    use SeededInstanceCache;
+
     /** Frozen "now" base for burned timecodes / recording windows — the one shared clock. A const
      *  can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
     public static function deployEpoch(): int
@@ -47,7 +49,12 @@ final class Cctv
 
     public static function fromSeed(int $seed): self
     {
-        return new self($seed);
+        return self::seededInstance(
+            (string) $seed,
+            static function () use ($seed): self {
+                return new self($seed);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

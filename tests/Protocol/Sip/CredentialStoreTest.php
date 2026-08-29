@@ -47,7 +47,7 @@ final class CredentialStoreTest extends TestCase
     public function test_sip_server_smart_credential_latching(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'permissive', latchPasswords: true, latchedCredentialsFile: $this->tempFile);
+        $cfg = new SipConfig(authMode: 'permissive', latchPasswords: true, latchedCredentialsFile: $this->tempFile, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });

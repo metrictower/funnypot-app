@@ -18,6 +18,7 @@
         "metrictower/funnypot-core": "^0.4"
     },
     "require-dev": {
+        "brianium/paratest": "^6.11",
         "phpunit/phpunit": "^9.5",
         "symfony/yaml": "^5.4 || ^6.0"
     },
@@ -35,5 +36,15 @@
     },
     "config": {
         "sort-packages": true
+    },
+    "scripts": {
+        "test": "paratest --runner=WrapperRunner",
+        "test:fast": "paratest --runner=WrapperRunner --testsuite fast",
+        "test:serial": "phpunit"
+    },
+    "scripts-descriptions": {
+        "test": "Full suite in parallel across all cores (~6s).",
+        "test:fast": "Parallel, minus the seeded-panel render tests (quickest smoke).",
+        "test:serial": "Full suite in a single process (debugging / deterministic ordering)."
     }
 }

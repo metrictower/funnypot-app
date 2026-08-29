@@ -33,6 +33,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class ItServices
 {
+    use SeededInstanceCache;
+
     /** @var int */
     private $seed;
 
@@ -64,7 +66,12 @@ final class ItServices
 
     public static function fromSeed(int $seed, string $domain = ''): self
     {
-        return new self($seed, $domain);
+        return self::seededInstance(
+            $seed . '|' . $domain,
+            static function () use ($seed, $domain): self {
+                return new self($seed, $domain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

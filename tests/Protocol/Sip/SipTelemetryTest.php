@@ -19,7 +19,7 @@ final class SipTelemetryTest extends TestCase
     public function test_user_agent_and_tool_are_attributed_and_logged(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -37,7 +37,7 @@ final class SipTelemetryTest extends TestCase
     public function test_transport_tells_flag_spoofable_and_automated_traffic(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -58,7 +58,7 @@ final class SipTelemetryTest extends TestCase
     public function test_tcp_transport_tell_marks_return_routable(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -87,7 +87,7 @@ final class SipTelemetryTest extends TestCase
     public function test_rtp_dtmf_decodes_digit_and_dedups_by_timestamp(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -115,7 +115,7 @@ final class SipTelemetryTest extends TestCase
     public function test_info_dtmf_relay_is_captured(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -133,7 +133,7 @@ final class SipTelemetryTest extends TestCase
     public function test_info_bare_dtmf_body_is_captured(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -148,7 +148,7 @@ final class SipTelemetryTest extends TestCase
 
     public function test_f4_udp_response_bucket_drains_after_burst(): void
     {
-        $server = new SipServer(new SipConfig(), null);
+        $server = new SipServer(new SipConfig(rtpPort: 0), null);
 
         $allow = new \ReflectionMethod($server, 'udpResponseAllowed');
         $allow->setAccessible(true);

@@ -27,6 +27,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Org
 {
+    use SeededInstanceCache;
+
     /**
      * Org-chart level fan-out: LEVEL_BRANCH[d] is how many children each depth-d node has at depth
      * d+1. Front-loaded small (CEO -> a few VPs -> a few Directors each -> a few Managers each) so the
@@ -46,6 +48,13 @@ final class Org
     /** @var string the host persona domain emails render at ('' -> the standalone fallback). */
     private $personaDomain;
 
+    /** Per-instance memo of the roster's hot path: emailLocal() rescans nameAt() for every earlier
+     *  index (O(N^2)), so caching name + person rows makes a full roster build pay each hash once. */
+    /** @var array<int, array{0:string,1:string}> */
+    private $nameCache = [];
+    /** @var array<int, array<string, mixed>> */
+    private $personCache = [];
+
     private function __construct(int $seed, string $personaDomain)
     {
         $this->seed = $seed;
@@ -59,7 +68,12 @@ final class Org
      */
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---
@@ -298,6 +312,9 @@ final class Org
     /** @return array{0:string,1:string} [first, last] — pure function of index. */
     private function nameAt(int $i): array
     {
+        if (isset($this->nameCache[$i])) {
+            return $this->nameCache[$i];
+        }
         $fore = [
             'Aoife', 'Liam', 'Priya', 'Chen', 'Sofia', 'Marcus', 'Nadia', 'Tomas', 'Grace', 'Omar',
             'Elena', 'Kenji', 'Fatima', 'Sean', 'Ingrid', 'Diego', 'Hana', 'Noah', 'Amara', 'Viktor',
@@ -310,10 +327,16 @@ final class Org
             'Dubois', 'Santos', 'Ivanov', 'Murphy', 'Kelly', 'Reyes', 'Andersen', 'Bianchi', 'Farrell', 'Schmidt',
             'Doyle', 'Weber', 'Silva', 'Larsen', 'Mensah', 'Horvat', 'Walsh', 'Romano', 'Keane', 'Bauer',
         ];
+        if (isset($this->nameCache[$i])) {
+            return $this->nameCache[$i];
+        }
         $first = $fore[$this->h('fore|' . $i) % count($fore)];
         $last = $sur[$this->h('sur|' . $i) % count($sur)];
-        return [$first, $last];
+
+        return $this->nameCache[$i] = [$first, $last];
     }
+
+    // (person rows are memoized in personAt so repeated people()/person() calls stay O(1))
 
     /**
      * Email local part, unique across the roster: base is first.last, and a numeric suffix is added when
@@ -336,6 +359,9 @@ final class Org
     /** @return array{...} one fully cross-referenced person record. */
     private function personAt(int $i): array
     {
+        if (isset($this->personCache[$i])) {
+            return $this->personCache[$i];
+        }
         $nm = $this->nameAt($i);
         $first = $nm[0];
         $last = $nm[1];
@@ -357,7 +383,7 @@ final class Org
         $extSlot = $this->permute($i, 'ext');
         $deskSlot = $this->permute($i, 'desk');
 
-        return [
+        return $this->personCache[$i] = [
             'id' => $this->idFor($i),
             'first' => $first,
             'last' => $last,

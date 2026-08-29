@@ -35,6 +35,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Facilities
 {
+    use SeededInstanceCache;
+
     /** Frozen "now" for ages/dates so a static reload is not a tell. Matches Building/Org/Access. A
      *  const can't call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
     public static function deployEpoch(): int
@@ -67,7 +69,12 @@ final class Facilities
 
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

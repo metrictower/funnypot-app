@@ -26,6 +26,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Helpdesk
 {
+    use SeededInstanceCache;
+
     /** Fiscal year embedded in ticket ids — the deploy year, so a later-year deploy mints later-year ids.
      *  A const can't call FrozenClock::year(), so this is a runtime accessor. */
     private static function fy(): string
@@ -57,7 +59,12 @@ final class Helpdesk
 
     public static function fromSeed(int $seed, string $domain = ''): self
     {
-        return new self($seed, $domain);
+        return self::seededInstance(
+            $seed . '|' . $domain,
+            static function () use ($seed, $domain): self {
+                return new self($seed, $domain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

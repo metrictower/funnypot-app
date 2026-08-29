@@ -27,6 +27,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Hvac
 {
+    use SeededInstanceCache;
+
     /** Frozen "now" so a static reload is not a tell (spec E11). Matches Building/Org. A const can't
      *  call FrozenClock::epoch(), so this is a runtime accessor, not a class const. */
     public static function deployEpoch(): int
@@ -51,7 +53,12 @@ final class Hvac
 
     public static function fromSeed(int $seed): self
     {
-        return new self($seed);
+        return self::seededInstance(
+            (string) $seed,
+            static function () use ($seed): self {
+                return new self($seed);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

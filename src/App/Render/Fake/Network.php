@@ -33,6 +33,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Network
 {
+    use SeededInstanceCache;
+
     /** Shared service fabric on 10.0.5.x (spec §C.7) — one set of infrastructure hosts everywhere. */
     private const SVC = [
         'syslog' => '10.0.5.30',
@@ -73,7 +75,12 @@ final class Network
      */
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

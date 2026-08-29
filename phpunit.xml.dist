@@ -4,6 +4,11 @@
          bootstrap="tests/bootstrap.php"
          colors="true"
          cacheResult="false">
+    <php>
+        <!-- The whole-suite serial run accumulates ~120MB of PHPUnit result state on its own; give it
+             headroom over PHP's 128M CLI default. Parallel runs stay far below this per worker. -->
+        <ini name="memory_limit" value="512M"/>
+    </php>
     <testsuites>
         <testsuite name="funnypot">
             <directory>tests</directory>

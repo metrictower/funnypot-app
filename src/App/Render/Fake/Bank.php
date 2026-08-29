@@ -39,6 +39,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Bank
 {
+    use SeededInstanceCache;
+
     /** A ledger's advertised depth is a big seeded constant; only the requested page is ever built. */
     private const LEDGER_MIN = 4200;
     private const LEDGER_MAX = 9800;
@@ -121,7 +123,12 @@ final class Bank
 
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

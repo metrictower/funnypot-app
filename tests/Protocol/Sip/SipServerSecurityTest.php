@@ -14,7 +14,7 @@ final class SipServerSecurityTest extends TestCase
     public function test_b1_anti_reflection_pins_rtp_ip_to_udp_source(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -49,7 +49,7 @@ final class SipServerSecurityTest extends TestCase
     public function test_b1_concurrency_and_per_ip_ceilings(): void
     {
         $logged = [];
-        $cfg = new SipConfig(maxActiveCalls: 2, perIpCalls: 1);
+        $cfg = new SipConfig(maxActiveCalls: 2, perIpCalls: 1, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
@@ -90,7 +90,7 @@ final class SipServerSecurityTest extends TestCase
     public function test_b2_anti_spoofing_abuse_reporting_suppression(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 
@@ -133,7 +133,7 @@ final class SipServerSecurityTest extends TestCase
     public function test_no_rtp_reflection_without_return_routable_ack(): void
     {
         $logged = [];
-        $server = new SipServer(new SipConfig(recordCalls: true), static function (array $e) use (&$logged): void {
+        $server = new SipServer(new SipConfig(recordCalls: true, rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
 

@@ -16,6 +16,8 @@ use Funnypot\Shell\Host\HostIdentity;
  */
 final class Fleet
 {
+    use SeededInstanceCache;
+
     private const DATACENTERS = ['fra1', 'iad1', 'lon1', 'ams2', 'sin1', 'nyc3', 'sfo2', 'syd1'];
 
     private function __construct(private int $seed, private int $count)
@@ -24,7 +26,12 @@ final class Fleet
 
     public static function fromSeed(int $seed, int $count = 24): self
     {
-        return new self($seed, max(1, $count));
+        return self::seededInstance(
+            $seed . '|' . max(1, $count),
+            static function () use ($seed, $count): self {
+                return new self($seed, max(1, $count));
+            }
+        );
     }
 
     /** Host 0 is the persona box; peers derive from it deterministically. */

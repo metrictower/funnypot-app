@@ -33,6 +33,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Integrations
 {
+    use SeededInstanceCache;
+
     /** @var int */
     private $seed;
 
@@ -56,7 +58,12 @@ final class Integrations
 
     public static function fromSeed(int $seed): self
     {
-        return new self($seed);
+        return self::seededInstance(
+            (string) $seed,
+            static function () use ($seed): self {
+                return new self($seed);
+            }
+        );
     }
 
     /** The Network estate, so the SNMP switch rows reference switches that actually exist there. */

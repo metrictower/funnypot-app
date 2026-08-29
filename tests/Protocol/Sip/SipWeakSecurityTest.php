@@ -40,7 +40,7 @@ final class SipWeakSecurityTest extends TestCase
     public function test_open_unauthenticated_registration(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'open');
+        $cfg = new SipConfig(authMode: 'open', rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
@@ -65,7 +65,7 @@ final class SipWeakSecurityTest extends TestCase
     public function test_weak_security_accepts_username_as_password(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'weak', latchedCredentialsFile: $this->latchedFile);
+        $cfg = new SipConfig(authMode: 'weak', latchedCredentialsFile: $this->latchedFile, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
@@ -101,7 +101,7 @@ final class SipWeakSecurityTest extends TestCase
     public function test_weak_security_accepts_common_default_passwords(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'weak', defaultPasswords: ['1234', 'admin', 'secret'], latchedCredentialsFile: $this->latchedFile);
+        $cfg = new SipConfig(authMode: 'weak', defaultPasswords: ['1234', 'admin', 'secret'], latchedCredentialsFile: $this->latchedFile, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
@@ -131,7 +131,7 @@ final class SipWeakSecurityTest extends TestCase
     public function test_weak_security_rejects_non_default_password(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'weak', defaultPasswords: ['1234'], latchedCredentialsFile: $this->latchedFile);
+        $cfg = new SipConfig(authMode: 'weak', defaultPasswords: ['1234'], latchedCredentialsFile: $this->latchedFile, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
@@ -162,7 +162,7 @@ final class SipWeakSecurityTest extends TestCase
     public function test_call_recording_creates_wav_and_logs_url(): void
     {
         $logged = [];
-        $cfg = new SipConfig(recordCalls: true, recordingsDir: $this->recordingsDir);
+        $cfg = new SipConfig(recordCalls: true, recordingsDir: $this->recordingsDir, rtpPort: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });

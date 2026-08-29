@@ -20,6 +20,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class FakeFiles
 {
+    use SeededInstanceCache;
+
     /** @var int */
     private $seed;
 
@@ -30,7 +32,12 @@ final class FakeFiles
 
     public static function fromSeed(int $seed): self
     {
-        return new self($seed);
+        return self::seededInstance(
+            (string) $seed,
+            static function () use ($seed): self {
+                return new self($seed);
+            }
+        );
     }
 
     // --- deterministic seeded primitives (frozen per seed) ---

@@ -273,8 +273,16 @@ the [funnypot-core README](https://github.com/metrictower/funnypot-core) for the
 
 ```bash
 composer install
-vendor/bin/phpunit          # app suite: SSH handshake/transport, protocol emulators, the catalog
+composer test          # full suite in parallel across all cores (~6s)
+composer test:fast     # parallel, minus the seeded-panel render tests (quickest smoke)
+composer test:serial   # single process (deterministic ordering / debugging)
 ```
+
+Tests are pure PHPUnit (no DB or container). The parallel runner is
+[paratest](https://github.com/paratestphp/paratest); the seeded fake-data generators memoize per
+`(seed, domain)` so the panel render tests don't rebuild the same roster on every assertion —
+together these take the suite from minutes to seconds. `vendor/bin/phpunit` still works for a plain
+serial run.
 
 The engine has its own test suite in the [`funnypot-core`](https://github.com/metrictower/funnypot-core) repo,
 including a golden test that runs real nuclei against a live server.

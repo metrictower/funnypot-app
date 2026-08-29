@@ -30,6 +30,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Payroll
 {
+    use SeededInstanceCache;
+
     /** How many monthly runs the register goes back (frozen, deterministic). */
     public const RUN_HISTORY = 20;
 
@@ -54,7 +56,12 @@ final class Payroll
      */
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     /**

@@ -27,6 +27,8 @@ namespace Funnypot\App\Render\Fake;
  */
 final class Hr
 {
+    use SeededInstanceCache;
+
     /** @var int */
     private $seed;
 
@@ -52,7 +54,12 @@ final class Hr
      */
     public static function fromSeed(int $seed, string $personaDomain = ''): self
     {
-        return new self($seed, $personaDomain);
+        return self::seededInstance(
+            $seed . '|' . $personaDomain,
+            static function () use ($seed, $personaDomain): self {
+                return new self($seed, $personaDomain);
+            }
+        );
     }
 
     /**
