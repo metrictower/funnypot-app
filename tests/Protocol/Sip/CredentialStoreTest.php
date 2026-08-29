@@ -96,4 +96,56 @@ final class CredentialStoreTest extends TestCase
         $this->assertSame('login', $log3['event']);
         $this->assertStringContainsString('latched credentials verified', $log3['path']);
     }
+
+    /**
+     * Regression: a softphone re-REGISTERs with the SAME password but a fresh nonce every time (the
+     * digest response is nonce-dependent). The latch must recognise it as the same credential and
+     * verify — not spuriously reject it as a "conflicting" guess. A genuinely different password on a
+     * fresh nonce must still conflict.
+     */
+    public function test_reregister_same_password_new_nonce_is_verified(): void
+    {
+        $logged = [];
+        $cfg = new SipConfig(authMode: 'weak', latchPasswords: true, latchedCredentialsFile: $this->tempFile, rtpPort: 0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $ref = new \ReflectionProperty($server, 'activeNonces');
+        $ref->setAccessible(true);
+        $freshNonce = static function () use ($server, $ref): string {
+            // An authless REGISTER makes the server mint + challenge with a new nonce.
+            $server->dispatchMessage(
+                SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n-" . bin2hex(random_bytes(3)) . "\r\nCSeq: 1 REGISTER\r\n\r\n"),
+                '10.0.0.9',
+                5060,
+                'udp'
+            );
+            return (string) array_key_last($ref->getValue($server));
+        };
+        $ha2 = md5('REGISTER:sip:target');
+        $reg = static function (string $pass, string $nonce) use ($server, $ha2): SipMessage {
+            $resp = md5(md5("root:asterisk:{$pass}") . ":{$nonce}:" . $ha2);
+            return SipMessage::parse(
+                "REGISTER sip:target SIP/2.0\r\nCall-ID: r-" . bin2hex(random_bytes(3)) . "\r\nCSeq: 2 REGISTER\r\n"
+                . "Authorization: Digest username=\"root\", realm=\"asterisk\", nonce=\"{$nonce}\", uri=\"sip:target\", response=\"{$resp}\"\r\n\r\n"
+            );
+        };
+
+        // 1. First REGISTER with password == username: accepted + latched.
+        $n1 = $freshNonce();
+        $server->dispatchMessage($reg('root', $n1), '10.0.0.9', 5060, 'udp');
+        $this->assertStringContainsString("ACCEPTED & LATCHED password 'root'", end($logged)['path']);
+
+        // 2. Re-REGISTER, SAME password, DIFFERENT nonce -> must verify (this was the bug).
+        $n2 = $freshNonce();
+        $this->assertNotSame($n1, $n2, 'precondition: a fresh nonce was issued');
+        $server->dispatchMessage($reg('root', $n2), '10.0.0.9', 5060, 'udp');
+        $this->assertStringContainsString('latched credentials verified', end($logged)['path']);
+
+        // 3. A genuinely different password on a fresh nonce still conflicts.
+        $n3 = $freshNonce();
+        $server->dispatchMessage($reg('hunter2', $n3), '10.0.0.9', 5060, 'udp');
+        $this->assertStringContainsString('REJECTED conflicting password', end($logged)['path']);
+    }
 }

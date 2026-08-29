@@ -476,7 +476,15 @@ final class SipServer
         // If an IP has already latched a working password for this extension, enforce that password strictly!
         // Conflicting password attempts are rejected with 403 Forbidden so svcrack sees only 1 valid password.
         if ($this->config->latchPasswords && $this->credStore->hasLatched($peerIp, $user)) {
-            if ($this->credStore->matches($peerIp, $user, $responseHash)) {
+            // Same credential if the latched plaintext re-verifies against THIS request's nonce/nc
+            // (a real softphone re-REGISTERs with the same password but a fresh nonce/nc, so a raw
+            // response-hash compare would spuriously reject it), or — for an uncrackable permissive
+            // password we could only store as its hash — if the exact response repeats.
+            $latched = $this->credStore->getLatched($peerIp, $user);
+            $sameCredential = $latched !== null
+                && (SipMessage::verifyDigest($auth, $latched, $req->method) || hash_equals($latched, $responseHash));
+
+            if ($sameCredential) {
                 // Re-authentication using the latched password succeeds!
                 $res = $req->buildRegisteredOk($toTag, $contact, 3600, $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
@@ -556,8 +564,14 @@ final class SipServer
 
         if ($accepted) {
             // SUCCESS: Latch this credential for this IP and extension so future conflicting guesses fail!
+            // Latch the recovered plaintext when we know it, so re-auth survives the caller's nonce/nc
+            // changing on every refresh; only when the password is uncrackable (permissive accepting an
+            // arbitrary password) do we fall back to latching the raw response hash.
             if ($this->config->latchPasswords) {
-                $this->credStore->latch($peerIp, $user, $responseHash);
+                $latchValue = ($matchedPass !== '' && strpos($matchedPass, 'cracked_hash:') !== 0)
+                    ? $matchedPass
+                    : $responseHash;
+                $this->credStore->latch($peerIp, $user, $latchValue);
             }
 
             $res = $req->buildRegisteredOk($toTag, $contact, 3600, $this->config->userAgent);
