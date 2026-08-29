@@ -44,3 +44,23 @@ them on your own honeypot, but supply them at deploy — don't redistribute them
 
 Legally clean sources for shippable personas: **LibriVox** (public domain), **Asterisk Core Sounds**
 (CC BY-SA, already µ-law), **Freesound** (CC0), or a **TTS-scripted** persona you author yourself.
+
+## Persona provenance + license (what's dealt into the cycle)
+
+Cycle order is set by each folder's `persona.json` `order` (lower = earlier). Current voice cycle:
+`lenny → el_chango → cohen → allison → vindiesel → …` (the rest default to order 100, alphabetical).
+
+Real-recorded, cleanly-licensed additions after `lenny`:
+
+- **el_chango** — a Córdoban/Argentine-Spanish re-recording of the Lenny concept (a rambling,
+  grumbling old-timer). Real recorded voice, already 8 kHz µ-law (drop-in, no transcode).
+  Source: `github.com/asternic/el_chango` — **MIT** (the cleanest license in this space).
+- **cohen** — "Cohen on the Telephone" (Joe Hayman, 1913): a confused, hard-of-hearing man
+  mishearing every word on a bad line — the proto-Lenny. Source: Internet Archive
+  `78_cohen-on-the-telephone_joe-hayman_gbia3029365b` — **US public domain** (pre-1923). Transcoded
+  from the MP3 to 8 kHz µ-law and split into ~25 s clips.
+
+More clean sources vetted for future personas: **El Chango** (MIT), pre-1925 **78rpm comic
+monologues** (archive.org George Blood collection) and the **UCSB Cylinder Audio Archive** (public
+domain), **LibriVox** / **Mozilla Common Voice** / **Freesound-CC0** (all CC0/PD). Avoid Jolly Roger
+(proprietary), Kitboga (personal IP / fan-TTS), and celebrity/movie soundboards (uncleared copyright).
