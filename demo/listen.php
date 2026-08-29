@@ -31,6 +31,14 @@ use Funnypot\Protocol\Rdp\RdpConfig;
 use Funnypot\Protocol\Rdp\RdpServer;
 use Funnypot\Protocol\Smb\SmbConfig;
 use Funnypot\Protocol\Smb\SmbServer;
+use Funnypot\Protocol\Mssql\MssqlConfig;
+use Funnypot\Protocol\Mssql\MssqlServer;
+use Funnypot\Protocol\Mqtt\MqttConfig;
+use Funnypot\Protocol\Mqtt\MqttServer;
+use Funnypot\Protocol\Snmp\SnmpConfig;
+use Funnypot\Protocol\Snmp\SnmpServer;
+use Funnypot\Protocol\Ldap\LdapConfig;
+use Funnypot\Protocol\Ldap\LdapServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -117,6 +125,34 @@ if ($protocol === 'rdp') {
 // credentials, answers plausibly, shares nothing.
 if ($protocol === 'smb') {
     (new SmbServer(SmbConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// MSSQL/TDS: captures the SQL login (username, de-obfuscated password, host/app/library), then
+// returns "login failed"; never authenticates.
+if ($protocol === 'mssql') {
+    (new MssqlServer(MssqlConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// MQTT broker honeypot: captures CONNECT creds/client-id + SUBSCRIBE/PUBLISH topics + payloads;
+// acks so the client keeps talking, brokers nothing.
+if ($protocol === 'mqtt') {
+    (new MqttServer(MqttConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// SNMP agent (UDP): captures the brute-forced community string + requested OIDs; answers the system
+// group only, anti-amplification (response never exceeds request, per-IP throttle); serves no real data.
+if ($protocol === 'snmp') {
+    (new SnmpServer(SnmpConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// LDAP directory honeypot: captures bind DN + password + search filters; denies by default, returns
+// no directory data.
+if ($protocol === 'ldap') {
+    (new LdapServer(LdapConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

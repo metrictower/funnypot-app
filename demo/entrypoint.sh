@@ -105,6 +105,10 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn sip         0.0.0.0:5060
     spawn rdp         0.0.0.0:3389
     spawn smb         0.0.0.0:445
+    spawn mssql       0.0.0.0:1433
+    spawn mqtt        0.0.0.0:1883
+    spawn snmp        0.0.0.0:161
+    spawn ldap        0.0.0.0:389
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181

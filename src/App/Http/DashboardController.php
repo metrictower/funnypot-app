@@ -240,6 +240,10 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"method":"SIP","recording":"1"}\'>SIP recordings</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"RDP"}\'>RDP</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"SMB"}\'>SMB</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"MSSQL"}\'>MSSQL</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"MQTT"}\'>MQTT</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"SNMP"}\'>SNMP</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"LDAP"}\'>LDAP</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"clipboard"}\'>clipboard grabs</button>';
         echo '<button class=\'btn qv\' data-f=\'{"known":"1"}\'>known attackers</button>';
         echo '<button class=\'btn qv\' data-f=\'{"served":"1"}\'>fakes served</button>';
