@@ -411,6 +411,29 @@ final class SipServer
      */
     private function handleOptions(SipMessage $req, string $peerIp, int $peerPort, string $transport, $tcpSock): void
     {
+        // Same enumeration shaping as REGISTER/INVITE: an OPTIONS aimed at a specific AOR this PBX
+        // doesn't host answers 404 (svmap maps only real extensions). A server-directed OPTIONS
+        // keep-alive (no user part in the Request-URI) keeps the normal 200 OK. Probe still logged.
+        $ext = $this->addressedExtension($req);
+        if ($ext !== null && !$this->config->isValidExtension($ext)) {
+            $res = $req->buildNotFound('tag-' . bin2hex(random_bytes(3)), $this->config->userAgent);
+            $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+
+            $this->logEvent([
+                'proto' => 'sip',
+                'method' => 'SIP',
+                'event' => 'probe',
+                'ip' => $peerIp,
+                'port' => $peerPort,
+                'path' => "SIP OPTIONS ext:{$ext} unknown extension (404) enumeration probe ({$transport})",
+                'matched' => 1,
+                'served' => 1,
+                'reportable' => ($transport === 'tcp'),
+            ]);
+
+            return;
+        }
+
         $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
@@ -489,6 +512,29 @@ final class SipServer
         $auth = $req->getDigestAuth();
         $toTag = 'tag-' . bin2hex(random_bytes(3));
         $contact = $req->getHeader('contact') ?? "<sip:{$peerIp}:{$peerPort}>";
+
+        // Extension-enumeration shaping: a REGISTER for an AOR this PBX does not host answers 404,
+        // not the 401 challenge — so svwar sees a bounded, realistic extension map (valid ones
+        // challenge → juicy target) instead of an impossible infinite-extension PBX. The probe is
+        // still logged as intel. Only shaped when a specific extension is identifiable; a
+        // server-directed REGISTER with no AOR falls through to the normal challenge flow.
+        $ext = $this->registerExtension($req, $auth);
+        if ($ext !== null && !$this->config->isValidExtension($ext)) {
+            $this->sendResponse($req->buildNotFound($toTag, $this->config->userAgent), $peerIp, $peerPort, $transport, $tcpSock);
+            $this->logEvent([
+                'proto' => 'sip',
+                'method' => 'SIP',
+                'event' => 'probe',
+                'ip' => $peerIp,
+                'port' => $peerPort,
+                'path' => "SIP REGISTER ext:{$ext} unknown extension (404) enumeration probe",
+                'matched' => 1,
+                'served' => 1,
+                'reportable' => ($transport === 'tcp'),
+            ]);
+
+            return;
+        }
 
         // 1. Unauthenticated open access mode:
         if ($this->config->authMode === 'open') {
@@ -687,6 +733,30 @@ final class SipServer
      */
     private function handleInvite(SipMessage $req, string $peerIp, int $peerPort, string $transport, $tcpSock): void
     {
+        // Same enumeration shaping as REGISTER/OPTIONS: an INVITE to a number/AOR this PBX doesn't
+        // host answers 404 (a real dial plan rejects unknown destinations), so a tool enumerating
+        // via INVITE sees the same map. A plausible dialed number proceeds to the normal call flow.
+        // The probe is still logged as intel.
+        $ext = $this->addressedExtension($req);
+        if ($ext !== null && !$this->config->isValidExtension($ext)) {
+            $res = $req->buildNotFound('tag-' . bin2hex(random_bytes(3)), $this->config->userAgent);
+            $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+
+            $this->logEvent([
+                'proto' => 'sip',
+                'method' => 'SIP',
+                'event' => 'probe',
+                'ip' => $peerIp,
+                'port' => $peerPort,
+                'path' => "SIP INVITE to:{$ext} unknown extension (404) enumeration probe",
+                'matched' => 1,
+                'served' => 1,
+                'reportable' => ($transport === 'tcp'),
+            ]);
+
+            return;
+        }
+
         $callId = $req->getCallId() ?? ('call-' . bin2hex(random_bytes(4)));
         $sessionKey = $this->sessionKey($callId, $peerIp, $peerPort);
 
@@ -867,6 +937,42 @@ final class SipServer
             'served' => 1,
             'reportable' => ($transport === 'tcp'),
         ]);
+    }
+
+    /**
+     * The extension/AOR a REGISTER targets, or null if none can be identified. On the credential leg
+     * the digest username is the AOR; otherwise it is the user part of the To / From / Request-URI.
+     * Returns null (no shaping — keep the normal challenge) for a server-directed REGISTER that names
+     * no specific AOR.
+     * @param array<string, string> $auth
+     */
+    private function registerExtension(SipMessage $req, array $auth): ?string
+    {
+        $user = trim($auth['username'] ?? '');
+        if ($user !== '') {
+            return $user;
+        }
+        foreach ([$req->getTo(), $req->getFrom(), $req->uri] as $src) {
+            if ($src !== null && preg_match('/sip:([^@;>\s]+)@/i', $src, $m)) {
+                return trim($m[1]);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The extension/AOR an OPTIONS or INVITE addresses, or null if none. A specific AOR is addressed
+     * only when the Request-URI carries a user part (sip:user@host); a bare sip:host targets the
+     * server itself (a keep-alive), not an extension, so it is not enumeration-shaped.
+     */
+    private function addressedExtension(SipMessage $req): ?string
+    {
+        if (preg_match('/sip:([^@;>\s]+)@/i', $req->uri, $m)) {
+            return trim($m[1]);
+        }
+
+        return null;
     }
 
     /**

@@ -9,6 +9,13 @@ namespace Funnypot\Protocol\Sip;
  */
 final class SipConfig
 {
+    /**
+     * Common SIP usernames scanners spray by name (not by number). Kept valid by default so those
+     * probes still reach the weak-auth latch instead of being 404'd away as junk.
+     * @var list<string>
+     */
+    private const DEFAULT_EXTENSION_ALLOWLIST = ['admin', 'root', 'sip', 'test', 'operator', 'voip', 'phone'];
+
     public function __construct(
         public string $style = 'realistic',
         public string $bind = '0.0.0.0:5060',
@@ -39,6 +46,14 @@ final class SipConfig
         public int $recordingsMaxBytes = 268435456,
         public string $latchedCredentialsFile = '',
         public bool $latchPasswords = true,
+        /**
+         * Operator override for the valid-extension policy. null = built-in default (any plausible
+         * dialed number + a small username allowlist). A non-empty list of rule strings REPLACES the
+         * default: explicit extensions, `*`/`?` globs, or `re:PATTERN` anchored regexes (all matched
+         * case-insensitively). See isValidExtension().
+         * @var list<string>|null
+         */
+        public ?array $validExtensionRules = null,
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -49,6 +64,69 @@ final class SipConfig
         if ($this->latchedCredentialsFile === '') {
             $this->latchedCredentialsFile = dirname(__DIR__, 3) . '/demo/storage/sip-latched.json';
         }
+    }
+
+    /**
+     * Whether an addressed extension/AOR should be treated as one this PBX hosts. Valid ones get the
+     * 401-challenge / call-setup flow; invalid ones get a 404, so an enumeration tool (svwar/svmap)
+     * sees a bounded, plausible extension map — a real "fat target" — instead of an impossible
+     * PBX that answers every extension. Cosmetic response shaping only; every probe is still logged.
+     */
+    public function isValidExtension(string $ext): bool
+    {
+        $ext = trim($ext);
+        if ($ext === '') {
+            return false;
+        }
+
+        // Operator-configured policy fully replaces the default when set.
+        if ($this->validExtensionRules !== null && $this->validExtensionRules !== []) {
+            return $this->matchesRules($ext, $this->validExtensionRules);
+        }
+
+        // Default: any plausible dialed number (E.164-ish digits, optional leading '+'). This covers
+        // short internal extensions (100, 200) and long toll-fraud target numbers alike.
+        if (preg_match('/^\+?[0-9]{1,15}$/', $ext) === 1) {
+            return true;
+        }
+
+        // Plus a small allowlist of common by-name accounts scanners target.
+        return in_array(strtolower($ext), self::DEFAULT_EXTENSION_ALLOWLIST, true);
+    }
+
+    /**
+     * Match an extension against an operator rule list. Each rule is an explicit extension (exact,
+     * case-insensitive), a glob using `*`/`?`, or `re:PATTERN` (anchored regex). A bad regex is
+     * treated as a non-match rather than throwing — this feeds the fault-isolated listener.
+     * @param list<string> $rules
+     */
+    private function matchesRules(string $ext, array $rules): bool
+    {
+        $lower = strtolower($ext);
+        foreach ($rules as $rule) {
+            $rule = trim($rule);
+            if ($rule === '') {
+                continue;
+            }
+            if (str_starts_with($rule, 're:')) {
+                if (@preg_match('/^' . substr($rule, 3) . '$/i', $ext) === 1) {
+                    return true;
+                }
+                continue;
+            }
+            if (strpbrk($rule, '*?') !== false) {
+                $regex = '/^' . str_replace(['\*', '\?'], ['.*', '.'], preg_quote($rule, '/')) . '$/i';
+                if (@preg_match($regex, $ext) === 1) {
+                    return true;
+                }
+                continue;
+            }
+            if ($lower === strtolower($rule)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function fromEnv(): self
@@ -71,6 +149,20 @@ final class SipConfig
         $latchedFile = getenv('FUNNYPOT_SIP_LATCHED_FILE') ?: '';
         $latchPasswords = getenv('FUNNYPOT_SIP_LATCH_PASSWORDS') !== '0';
 
+        // Comma-separated valid-extension policy: explicit extensions, globs, or `re:PATTERN`
+        // regexes. Empty/unset keeps the built-in default (see SipConfig::isValidExtension()).
+        $validExtRaw = getenv('FUNNYPOT_SIP_VALID_EXTENSIONS');
+        $validExtRules = null;
+        if ($validExtRaw !== false && trim($validExtRaw) !== '') {
+            $validExtRules = array_values(array_filter(
+                array_map('trim', explode(',', $validExtRaw)),
+                static fn (string $s): bool => $s !== ''
+            ));
+            if ($validExtRules === []) {
+                $validExtRules = null;
+            }
+        }
+
         return new self(
             style: $style,
             bind: $bind,
@@ -89,6 +181,7 @@ final class SipConfig
             recordingsMaxBytes: max(0, $recMaxBytes),
             latchedCredentialsFile: $latchedFile,
             latchPasswords: $latchPasswords,
+            validExtensionRules: $validExtRules,
         );
     }
 }

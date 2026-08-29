@@ -316,6 +316,13 @@ final class SipMessage
         return $this->buildResponse(486, 'Busy Here', $toTag, [], '', $userAgent);
     }
 
+    public function buildNotFound(string $toTag, string $userAgent = 'Asterisk PBX 20.5.0'): string
+    {
+        // A real PBX answers a REGISTER/INVITE/OPTIONS for an AOR it does not host with 404, not a
+        // 401 challenge — challenging every extension implies an impossible infinite-extension PBX.
+        return $this->buildResponse(404, 'Not Found', $toTag, [], '', $userAgent);
+    }
+
     public function buildNotImplemented(string $userAgent = 'Asterisk PBX 20.5.0'): string
     {
         // Real Asterisk answers an unknown/unsupported method with 501, not a 200 OK — a bare 200 to a
