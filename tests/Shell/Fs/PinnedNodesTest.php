@@ -27,6 +27,62 @@ final class PinnedNodesTest extends TestCase
         self::assertStringContainsString('root:x:0:0:', $fs->read('/etc/passwd'));
     }
 
+    public function test_root_home_has_skel_history_ssh_and_loot(): void
+    {
+        $fs = $this->fs();
+        $names = array_map(fn ($n) => $n->name, $fs->list('/root'));
+        foreach (['.bashrc', '.profile', '.bash_logout', '.bash_history', '.ssh', '.env', '.aws'] as $want) {
+            self::assertContains($want, $names, "/root missing {$want}");
+        }
+        // Skel dotfiles are the standard Debian defaults.
+        self::assertStringContainsString('~/.bashrc', $fs->read('/root/.bashrc'));
+        self::assertStringContainsString('clear_console', $fs->read('/root/.bash_logout'));
+        // History reads as real operator commands.
+        self::assertStringContainsString('systemctl restart nginx', $fs->read('/root/.bash_history') . '');
+        self::assertMatchesRegularExpression('/\n$/', $fs->read('/root/.bash_history'));
+
+        // Everything under /root is root-owned.
+        foreach ($fs->list('/root') as $n) {
+            self::assertSame(0, $n->uid, "/root/{$n->name} not root-owned");
+        }
+    }
+
+    public function test_ssh_store_is_pinned_exclusive_and_inert(): void
+    {
+        $fs = $this->fs();
+        $names = array_map(fn ($n) => $n->name, $fs->list('/root/.ssh'));
+        sort($names);
+        // A key store is a CLOSED set — no procedural base64 blobs sprinkled in.
+        self::assertSame(['authorized_keys', 'id_rsa', 'id_rsa.pub', 'known_hosts'], $names);
+
+        $ak = $fs->read('/root/.ssh/authorized_keys');
+        self::assertStringContainsString('ssh-rsa AAAAB3NzaC1yc2E', $ak);      // correct RSA wire prefix
+        self::assertStringContainsString('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5', $ak);
+        // Private key is an OpenSSH PEM block — inert, not a working key.
+        self::assertStringStartsWith('-----BEGIN OPENSSH PRIVATE KEY-----', $fs->read('/root/.ssh/id_rsa'));
+    }
+
+    public function test_loot_is_inert_and_cross_file_coherent(): void
+    {
+        $fs = $this->fs();
+        $env = $fs->read('/root/.env');
+        $creds = $fs->read('/root/.aws/credentials');
+        self::assertMatchesRegularExpression('/^AWS_ACCESS_KEY_ID=AKIA[A-Z0-9]{16}$/m', $env);
+        // Never the known-fake placeholder that unmasks the trap on sight.
+        self::assertStringNotContainsString('AKIAIOSFODNN7EXAMPLE', $env);
+        // The same AWS pair appears in the .env and the credentials file (a cross-check finds agreement).
+        self::assertSame(1, preg_match('/AWS_ACCESS_KEY_ID=(AKIA[A-Z0-9]{16})/', $env, $m));
+        self::assertStringContainsString('aws_access_key_id = ' . $m[1], $creds);
+    }
+
+    public function test_root_loot_varies_per_install(): void
+    {
+        // Skel is constant, but per-host secrets must differ between installs (keyed by the secret).
+        $a = (new FakeFilesystem(Draw::seed("secretA\0h\0dev"), 'developer', 7))->read('/root/.env');
+        $b = (new FakeFilesystem(Draw::seed("secretB\0h\0dev"), 'developer', 7))->read('/root/.env');
+        self::assertNotSame($a, $b);
+    }
+
     public function test_pinned_content_is_stable_and_size_matches(): void
     {
         $a = $this->fs()->read('/etc/passwd');

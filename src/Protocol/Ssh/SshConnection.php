@@ -606,7 +606,9 @@ final class SshConnection
     private function runExec(string $command): void
     {
         $this->log('command', trim($command));
-        $out = $this->shell()->run($command, $this->session);
+        // Non-PTY exec (`ssh host cmd`): openssh writes the command's raw stdout with bare \n, no tty
+        // cooking. Pass interactive=false so the shell does not CRLF-convert — matching real exec.
+        $out = $this->shell()->run($command, $this->session, false);
         if ($out !== '') {
             $this->shellData($out);
         }

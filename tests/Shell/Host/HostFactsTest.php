@@ -42,6 +42,73 @@ final class HostFactsTest extends TestCase
         self::assertSame(count($rows), count($hf->procPids()));
     }
 
+    public function test_cpuinfo_has_full_per_core_fields(): void
+    {
+        $hf = new HostFacts(4242);
+        $ci = (string) $hf->proc('cpuinfo');
+        // A real /proc/cpuinfo block carries these per-core fields; a bare processor/model/flags stub
+        // was a tell. Also: real tabs (not literal \t), a per-core MHz, cache size, microcode, bugs.
+        foreach (['cpu MHz', 'cache size', 'microcode', 'bogomips', 'clflush size', 'address sizes',
+            'power management', 'stepping', 'apicid'] as $field) {
+            self::assertStringContainsString($field, $ci, "cpuinfo missing {$field}");
+        }
+        self::assertStringNotContainsString('\t', $ci, 'literal backslash-t leaked (single-quoted tab)');
+        preg_match('/flags\t\t: (.*)/', $ci, $m);
+        self::assertGreaterThan(100, count(explode(' ', trim($m[1]))), 'a real Xeon has a large flag set');
+        self::assertStringContainsString('bugs', $ci);
+    }
+
+    public function test_meminfo_is_full_length_and_coherent(): void
+    {
+        $hf = new HostFacts(4242);
+        $mi = (string) $hf->proc('meminfo');
+        self::assertGreaterThanOrEqual(45, substr_count($mi, "\n"), '/proc/meminfo should be ~50 lines');
+        foreach (['MemTotal', 'MemAvailable', 'Slab', 'SReclaimable', 'KernelStack', 'PageTables',
+            'Committed_AS', 'VmallocTotal', 'Hugepagesize', 'DirectMap4k'] as $field) {
+            self::assertStringContainsString($field . ':', $mi, "meminfo missing {$field}");
+        }
+        // Every field ends in " kB"; the sub-lines never exceed MemTotal.
+        preg_match('/MemTotal:\s+(\d+) kB/', $mi, $mt);
+        $total = (int) $mt[1];
+        foreach (['MemFree', 'MemAvailable', 'Cached', 'AnonPages'] as $f) {
+            preg_match('/' . $f . ':\s+(\d+) kB/', $mi, $v);
+            self::assertLessThanOrEqual($total, (int) $v[1], "{$f} exceeds MemTotal");
+        }
+    }
+
+    public function test_df_lists_pseudo_filesystems_in_mount_order(): void
+    {
+        $rows = (new HostFacts(4242))->df();
+        $mounts = array_column($rows, 'mount');
+        // A df with only / and /data (no udev/tmpfs at all) is the tell this fixes.
+        foreach (['/dev', '/run', '/', '/dev/shm', '/run/lock', '/data', '/run/user/0'] as $m) {
+            self::assertContains($m, $mounts, "df missing {$m}");
+        }
+        // udev and the /run tmpfs precede the root volume, as in a real mount table.
+        self::assertLessThan(array_search('/', $mounts, true), array_search('/dev', $mounts, true));
+        // The RAM-backed mounts are sized (not a flat placeholder).
+        $byMount = [];
+        foreach ($rows as $r) {
+            $byMount[$r['mount']] = $r;
+        }
+        self::assertMatchesRegularExpression('/^\d+(\.\d+)?[MGT]$/', $byMount['/dev']['size']);
+        self::assertSame('5.0M', $byMount['/run/lock']['size']);
+    }
+
+    public function test_df_device_sizes_are_seed_varied(): void
+    {
+        // The boot volume size must not be a hardcoded constant across every host.
+        $sizes = [];
+        for ($i = 0; $i < 40; $i++) {
+            foreach ((new HostFacts($i))->df() as $r) {
+                if ($r['mount'] === '/') {
+                    $sizes[$r['size']] = true;
+                }
+            }
+        }
+        self::assertGreaterThan(1, count($sizes), 'root device size never varies by seed');
+    }
+
     public function test_proc_free_df_uname_cohere_with_serverprofile(): void
     {
         $seed = 77;
@@ -61,8 +128,15 @@ final class HostFactsTest extends TestCase
         // loadavg begins with the live load1.
         self::assertStringStartsWith(number_format($sp->liveStats()['load1'], 2), (string) $hf->proc('loadavg'));
 
-        // df root % matches storage().
-        self::assertSame($sp->storage()['rootPct'] . '%', $hf->df()[0]['pct']);
+        // df root % matches storage() — df now lists udev/tmpfs before /, so find the / row by mount.
+        $rootRow = null;
+        foreach ($hf->df() as $d) {
+            if ($d['mount'] === '/') {
+                $rootRow = $d;
+            }
+        }
+        self::assertNotNull($rootRow, 'df has a / row');
+        self::assertSame($sp->storage()['rootPct'] . '%', $rootRow['pct']);
 
         // uname carries the shell's OWN kernel + hostname (HostIdentity, not ServerProfile); netstat lists ssh.
         self::assertStringContainsString($hf->os()['kernel'], $hf->uname());

@@ -45,7 +45,12 @@ final class FakeShell
         return $this->facts->hostname();
     }
 
-    public function run(string $line, ProtocolSession $s): string
+    /**
+     * Run one line. $interactive is the terminal/PTY path (telnet, `ssh host` with a pty), where a
+     * real tty maps every \n to \r\n; a non-PTY exec (`ssh host cmd`) writes raw \n, so callers on
+     * that path pass false. Converting there would be a tell — real openssh exec never CRLF-cooks.
+     */
+    public function run(string $line, ProtocolSession $s, bool $interactive = true): string
     {
         $user = $s->user !== '' ? $s->user : 'root';
         $uid = $user === 'root' ? 0 : 1000;
@@ -79,7 +84,9 @@ final class FakeShell
             $s->close = true;
         }
 
-        $out = str_replace("\n", "\r\n", $out);
+        if ($interactive) {
+            $out = str_replace("\n", "\r\n", $out);
+        }
 
         return strlen($out) > self::MAX_OUTPUT ? substr($out, 0, self::MAX_OUTPUT) : $out;
     }

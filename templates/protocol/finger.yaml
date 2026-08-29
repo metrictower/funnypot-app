@@ -7,8 +7,11 @@ framing: line
 # Client speaks first — a bare newline is the standard "list all users" query, so the banner is
 # silent and the empty-line rule below carries the whole reply.
 banner: ""
+# %%HOST%% is replaced at serve time with the shell's seeded hostname (ProtocolEmulator host injection),
+# left-justified into the Node column, so finger agrees with the telnet/ssh prompt, uname and
+# /etc/hostname on the same box. It abuts the User column — the injector pads the host to the field.
 rules:
   - match: { equals: "" }
-    send: "Node        User        Action     Idle    Login Time\r\nweb01       root        login      00:12   Aug 18 09:14\r\nweb01       admin       idle       02:04   Aug 18 08:02\r\n"
+    send: "Node        User        Action     Idle    Login Time\r\n%%HOST%%root        login      00:12   Aug 18 09:14\r\n%%HOST%%admin       idle       02:04   Aug 18 08:02\r\n"
 default:
-  send: "Node        User        Action     Idle    Login Time\r\nweb01       ?           no such user\r\n"
+  send: "Node        User        Action     Idle    Login Time\r\n%%HOST%%?           no such user\r\n"

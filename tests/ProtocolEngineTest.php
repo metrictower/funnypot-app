@@ -21,6 +21,32 @@ final class ProtocolEngineTest extends TestCase
         return $e;
     }
 
+    private function emuSeeded(string $id, int $seed): ProtocolEmulator
+    {
+        $set = ProtocolTemplateSet::fromFile(__DIR__ . '/../resources/compiled/funnypot-protocols.php', $seed);
+        $e = $set->emulator($id);
+        self::assertNotNull($e, "protocol {$id} not compiled");
+
+        return $e;
+    }
+
+    public function test_finger_names_the_seeded_host_not_web01(): void
+    {
+        // finger's Node column must be the SAME host the telnet/ssh shell presents on this box, injected
+        // at serve time — a hardcoded web01 is a cross-protocol tell against the seeded hostname.
+        $seed = 4242;
+        $hostname = \Funnypot\Shell\Host\HostIdentity::fromSeed($seed)->hostname();
+
+        $finger = $this->emuSeeded('finger', $seed);
+        $list = $finger->feed("\r\n", new ProtocolSession(9));
+        self::assertStringContainsString($hostname, $list, 'finger list names the seeded host');
+        self::assertStringNotContainsString('web01', $list);
+        self::assertStringContainsString($hostname, $finger->feed("bob\r\n", new ProtocolSession(1)), 'finger no-such-user names the host too');
+        self::assertStringNotContainsString('%%HOST%%', $list, 'host placeholder must be substituted');
+        // A short host still leaves the columns separated (no merge into the User column).
+        self::assertStringNotContainsString($hostname . 'root', $list);
+    }
+
     // --- redis (RESP codec, pure data) ---
 
     public function test_redis_ping_and_auth_accept_all(): void
