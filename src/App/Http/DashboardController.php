@@ -253,6 +253,10 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"method":"IPMI"}\'>IPMI</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"COAP"}\'>CoAP</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"KERBEROS"}\'>Kerberos</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"NTP"}\'>NTP</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"CASSANDRA"}\'>Cassandra</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"WINRM"}\'>WinRM</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"ORACLE"}\'>Oracle</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"clipboard"}\'>clipboard grabs</button>';
         echo '<button class=\'btn qv\' data-f=\'{"known":"1"}\'>known attackers</button>';
         echo '<button class=\'btn qv\' data-f=\'{"served":"1"}\'>fakes served</button>';

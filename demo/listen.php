@@ -57,6 +57,14 @@ use Funnypot\Protocol\Coap\CoapConfig;
 use Funnypot\Protocol\Coap\CoapServer;
 use Funnypot\Protocol\Kerberos\KerberosConfig;
 use Funnypot\Protocol\Kerberos\KerberosServer;
+use Funnypot\Protocol\Ntp\NtpConfig;
+use Funnypot\Protocol\Ntp\NtpServer;
+use Funnypot\Protocol\Cassandra\CassandraConfig;
+use Funnypot\Protocol\Cassandra\CassandraServer;
+use Funnypot\Protocol\Winrm\WinrmConfig;
+use Funnypot\Protocol\Winrm\WinrmServer;
+use Funnypot\Protocol\Oracle\OracleConfig;
+use Funnypot\Protocol\Oracle\OracleServer;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -234,6 +242,34 @@ if ($protocol === 'coap') {
 // returns KRB-ERROR, issues no ticket.
 if ($protocol === 'kerberos') {
     (new KerberosServer(KerberosConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// NTP (UDP 123): answers a client time query with a plausible stratum-2 server; refuses mode 6/7
+// (monlist) so it can never be a reflector; captures the probe. Anti-amplification.
+if ($protocol === 'ntp') {
+    (new NtpServer(NtpConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// Cassandra (CQL 9042): OPTIONS/STARTUP/AUTH handshake — captures the driver name/version and the
+// SASL PLAIN username/password, then returns bad-credentials; opens no keyspace, serves no data.
+if ($protocol === 'cassandra') {
+    (new CassandraServer(CassandraConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// WinRM (HTTP 5985): WS-Management endpoint — challenges Negotiate/Basic, captures Basic cleartext
+// and the NTLM type-3 username/domain/workstation; always denies, never runs a command.
+if ($protocol === 'winrm') {
+    (new WinrmServer(WinrmConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// Oracle TNS (1521): TNS connect handshake — captures the requested service/SID and connect
+// descriptor; returns a plausible refuse/redirect, exposes no database.
+if ($protocol === 'oracle') {
+    (new OracleServer(OracleConfig::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

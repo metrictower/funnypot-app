@@ -118,6 +118,8 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn ipmi        0.0.0.0:623
     spawn coap        0.0.0.0:5683
     spawn kerberos    0.0.0.0:88
+    spawn ntp         0.0.0.0:123
+    spawn winrm       0.0.0.0:5985
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181
@@ -125,6 +127,8 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn mysql       0.0.0.0:3306
     spawn postgresql  0.0.0.0:5432
     spawn mongodb     0.0.0.0:27017
+    spawn cassandra   0.0.0.0:9042
+    spawn oracle      0.0.0.0:1521
     # industrial control (SCADA)
     spawn modbus      0.0.0.0:502
     spawn ethernet-ip 0.0.0.0:44818
