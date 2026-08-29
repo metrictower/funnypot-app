@@ -106,6 +106,9 @@ final class AppConfig
         /** Hide the funnypot dashboard/main page entirely — its path falls through to the honeypot like
          *  any probe, so the "Welcome to funnypot" page is never exposed. */
         public bool $hideMainPage,
+        /** FULL-request capture (opt-in) — store every header + full query + full body of every request in
+         *  a separate raw-capture.sqlite, for analysing a vuln scan. Off in normal operation. */
+        public bool $captureRaw,
     ) {
     }
 
@@ -171,6 +174,7 @@ final class AppConfig
             dashboardPath: '/' . trim($str('FUNNYPOT_DASHBOARD_PATH', '/__fp/'), '/') . '/',
             funnypotPath: '/' . trim($str('FUNNYPOT_APP_PATH', 'funnypot'), '/'),
             hideMainPage: in_array(strtolower((string) getenv('FUNNYPOT_HIDE_MAIN')), ['1', 'on', 'true', 'yes'], true),
+            captureRaw: in_array(strtolower((string) getenv('FUNNYPOT_CAPTURE_RAW')), ['1', 'on', 'true', 'yes'], true),
             blocklistEnabled: in_array(strtolower((string) getenv('FUNNYPOT_BLOCKLIST')), ['1', 'on', 'true', 'yes'], true),
             intelDbPath: $str('FUNNYPOT_INTEL_DB', $store . '/intel.sqlite'),
             blocklistMinLists: max(1, (int) $str('FUNNYPOT_BLOCKLIST_MIN_LISTS', '1')),

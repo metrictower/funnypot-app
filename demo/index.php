@@ -45,6 +45,7 @@ use Funnypot\App\Render\Skins\AdminLteSkin;
 use Funnypot\App\Render\Skins\GrafanaSkin;
 use Funnypot\App\Render\SkinSet;
 use Funnypot\App\Storage\LlmFakeCache;
+use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
@@ -90,6 +91,13 @@ $geo = new Geo($config->geoDbPath);
 
 $context = RequestContext::fromGlobals();
 $clientIp = HoneypotController::clientIp($config->trustedProxies);
+
+// Full-request capture (opt-in, FUNNYPOT_CAPTURE_RAW) — record EVERY request's complete headers + query +
+// body to a separate raw-capture.sqlite, for analysing a vuln scan. At the front controller so nothing is
+// missed regardless of which handler serves it; fail-open so it never affects the response.
+if ($config->captureRaw) {
+    (new RawCapture(dirname($config->dbPath) . '/raw-capture.sqlite'))->capture($context, $clientIp);
+}
 
 // Coherent chrome: one consistent X-Powered-By on every response (nginx owns Server), so header
 // recon can't catch a version mismatch between the fake bodies and the server banner. Skipped on the

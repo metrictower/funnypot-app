@@ -19,7 +19,7 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_DASHBOARD_PATH', 'FUNNYPOT_CEILING', 'FUNNYPOT_JITTER_MS',
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
-        'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN',
+        'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN', 'FUNNYPOT_CAPTURE_RAW',
     ];
 
     protected function setUp(): void
@@ -52,6 +52,14 @@ final class AppConfigTest extends TestCase
 
         self::assertSame('/ops-console', $c->funnypotPath);
         self::assertTrue($c->hideMainPage);
+    }
+
+    public function test_raw_capture_is_off_by_default_and_opt_in(): void
+    {
+        self::assertFalse(AppConfig::fromEnv('/app/demo')->captureRaw);
+
+        putenv('FUNNYPOT_CAPTURE_RAW=1');
+        self::assertTrue(AppConfig::fromEnv('/app/demo')->captureRaw);
     }
 
     public function test_defaults(): void
