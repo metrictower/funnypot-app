@@ -10,6 +10,7 @@ use Funnypot\Core\Support\VisualPersona;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipMessage;
 use Funnypot\Protocol\Sip\SipServer;
+use Funnypot\Protocol\Sip\SipSession;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -201,6 +202,58 @@ final class SipEnumerationTest extends TestCase
 
         $this->assertSame(1, $server->getActiveSessionCount());
         $this->assertSame('call', end($logged)['event']);
+    }
+
+    // --- randomized ring before answer (a constant answer time is a tell) ---
+
+    public function test_invite_rings_before_answering_and_holds_the_200_ok(): void
+    {
+        // The call must not be answered inline: it rings (180 sent, 200 held) for a randomized
+        // interval within the ring window, so the caller's phone is heard ringing a random count.
+        $server = new SipServer(new SipConfig(rtpPort: 0), null);
+
+        $raw = "INVITE sip:100@target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-r\r\n"
+            . "From: <sip:a@9.9.9.9>;tag=f\r\nTo: <sip:100@target>\r\n"
+            . "Call-ID: inv-ring\r\nCSeq: 1 INVITE\r\n\r\n";
+        $before = microtime(true);
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+        $sessions = array_values($sessProp->getValue($server));
+        $this->assertCount(1, $sessions);
+        $s = $sessions[0];
+
+        $this->assertSame(SipSession::STATE_RINGING, $s->state);
+        $this->assertNotSame('', $s->pendingOk, 'the 200 OK is held during the ring');
+        $this->assertGreaterThanOrEqual($before + 4.0, $s->answerAt, 'answer deferred by at least the min ring');
+        $this->assertLessThanOrEqual($before + 12.0 + 0.5, $s->answerAt, 'answer within the ring window');
+    }
+
+    public function test_pending_answer_is_delivered_once_the_ring_elapses(): void
+    {
+        $server = new SipServer(new SipConfig(rtpPort: 0), null);
+
+        $raw = "INVITE sip:100@target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-r2\r\n"
+            . "From: <sip:a@9.9.9.9>;tag=f\r\nTo: <sip:100@target>\r\n"
+            . "Call-ID: inv-ring2\r\nCSeq: 1 INVITE\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+        $s = array_values($sessProp->getValue($server))[0];
+        // Force the ring to have elapsed.
+        $s->answerAt = microtime(true) - 0.01;
+
+        $deliver = new \ReflectionMethod($server, 'deliverPendingAnswers');
+        $deliver->setAccessible(true);
+        $deliver->invoke($server);
+
+        $this->assertSame(SipSession::STATE_CONNECTED, $s->state);
+        $this->assertSame('', $s->pendingOk);
+        $this->assertSame(0.0, $s->answerAt);
     }
 
     // --- enumeration shaping is only for the credential-guarding modes ---

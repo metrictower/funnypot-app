@@ -33,6 +33,12 @@ final class SipServer
     // (no ACK, so never "streaming") sits in the table until the max-duration cap and quickly fills
     // maxActiveCalls — turning every later caller away with 486 Busy.
     private const INVITE_SETUP_TIMEOUT = 32.0;
+    // Randomized ring before answering. A constant answer time is a dead giveaway, so each call rings
+    // a different length; the window spans several ring-cadence cycles, so the caller's phone (which
+    // renders local ringback from our 180 Ringing) is heard as ring / silence / ring a random number
+    // of times before we pick up. Kept well under INVITE_SETUP_TIMEOUT so a real caller is not reaped.
+    private const RING_MIN_MS = 4000;
+    private const RING_MAX_MS = 12000;
 
     /** @var array<string, SipSession> Active sessions keyed by callId + peerAddr */
     private array $sessions = [];
@@ -206,6 +212,13 @@ final class SipServer
             }
         } catch (\Throwable $e) {
             $this->logFault('select', $e);
+        }
+
+        // Answer any ringing call whose randomized ring interval has elapsed
+        try {
+            $this->deliverPendingAnswers();
+        } catch (\Throwable $e) {
+            $this->logFault('answer', $e);
         }
 
         // Drive RTP media streaming timers
@@ -807,18 +820,24 @@ final class SipServer
         $s->remoteRtpIp = $peerIp;
         // Take RTP port from client's SDP descriptor (default to 16402 if unspecified)
         $s->remoteRtpPort = $req->sdpAudioPort ?? 16402;
-        $s->state = SipSession::STATE_CONNECTED;
+        $s->state = SipSession::STATE_RINGING;
 
         $this->sessions[$sessionKey] = $s;
 
-        // 3. Build and send 200 OK with our SDP descriptor
+        // 3. Ring, then answer after a randomized interval. We send 180 Ringing (no media) so the
+        //    caller's phone renders the standard repeating ring cadence, and hold the 200 OK for a
+        //    random number of ring cycles — a constant answer time is a honeypot tell. The 200 OK is
+        //    delivered from the run loop (deliverPendingAnswers) so the select loop never sleeps.
+        //    Deliberately no server-side early-media ringback: streaming RTP to an un-ACKed source
+        //    would be an RTP-reflection vector (return-routability is only proven by the ACK).
         $serverIp = $this->getServerIp();
         $localRtpPort = $this->rtpStreamer->getLocalPort();
         $sdp = SipMessage::buildSdp($serverIp, $localRtpPort, '1', $this->config->userAgent);
-
         $contact = "<sip:{$dialedNumber}@{$serverIp}:5060>";
-        $ok = $req->buildOk($s->toTag, $contact, $sdp, [], $this->config->userAgent);
-        $this->sendResponse($ok, $peerIp, $peerPort, $transport, $tcpSock);
+
+        $this->sendResponse($req->buildRinging($s->toTag, $this->config->userAgent), $peerIp, $peerPort, $transport, $tcpSock);
+        $s->pendingOk = $req->buildOk($s->toTag, $contact, $sdp, [], $this->config->userAgent);
+        $s->answerAt = microtime(true) + random_int(self::RING_MIN_MS, self::RING_MAX_MS) / 1000.0;
 
         $this->logEvent([
             'proto' => 'sip',
@@ -1244,6 +1263,29 @@ final class SipServer
         $match = $this->findSessionByCallId($callId, $peerIp);
 
         return $match ? $match[1]->toTag : null;
+    }
+
+    /**
+     * Deliver the held 200 OK for any ringing call whose randomized ring interval has elapsed. Held
+     * here rather than sent inline at INVITE so the answer time varies call-to-call without the
+     * select loop ever blocking on a sleep.
+     */
+    private function deliverPendingAnswers(): void
+    {
+        $now = microtime(true);
+        foreach ($this->sessions as $s) {
+            if ($s->answerAt <= 0.0 || $now < $s->answerAt) {
+                continue;
+            }
+            try {
+                $this->sendResponse($s->pendingOk, $s->peerIp, $s->peerPort, $s->transport, $s->tcpSocket);
+                $s->state = SipSession::STATE_CONNECTED;
+            } catch (\Throwable $e) {
+                $this->logFault('answer', $e);
+            }
+            $s->answerAt = 0.0;
+            $s->pendingOk = '';
+        }
     }
 
     private function cleanupExpiredSessions(): void

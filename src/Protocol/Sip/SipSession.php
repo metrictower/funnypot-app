@@ -44,6 +44,11 @@ final class SipSession
     public int $rtpPacketsSent = 0;
 
     public float $startTime = 0.0;
+    // A ringing call is answered here (0 = no answer pending). The 200 OK is pre-built and held so
+    // the answer time can vary call-to-call without the select loop ever blocking on a sleep; the
+    // caller's phone renders the repeating ring cadence from our 180 Ringing while it waits.
+    public float $answerAt = 0.0;
+    public string $pendingOk = '';
     public float $lastRtpSendTime = 0.0;
     // Last time the CALLER sent us anything (RTP or signaling). Drives hangup/idle detection —
     // distinct from lastRtpSendTime, which tracks our own outbound stream clock.
