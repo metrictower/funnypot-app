@@ -51,6 +51,8 @@ final class AbuseIpdb
             case 'pop3':
             case 'imap':
                 return '18';           // brute-force
+            case 'sip':
+                return '8,18';         // Fraud VoIP + brute-force (REGISTER spray -> toll-fraud calls)
             default:
                 return '14,15';        // port scan, hacking
         }

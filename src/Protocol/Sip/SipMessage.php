@@ -260,8 +260,9 @@ final class SipMessage
             $res .= "CSeq: {$cseq}\r\n";
         }
 
+        // Responses carry Server only. Real Asterisk puts User-Agent on requests it originates and
+        // Server on responses; emitting both on one response is a stack-fingerprint tell.
         $res .= "Server: {$userAgent}\r\n";
-        $res .= "User-Agent: {$userAgent}\r\n";
 
         foreach ($extraHeaders as $k => $v) {
             $res .= "{$k}: {$v}\r\n";
@@ -315,6 +316,13 @@ final class SipMessage
         return $this->buildResponse(486, 'Busy Here', $toTag, [], '', $userAgent);
     }
 
+    public function buildNotImplemented(string $userAgent = 'Asterisk PBX 20.5.0'): string
+    {
+        // Real Asterisk answers an unknown/unsupported method with 501, not a 200 OK — a bare 200 to a
+        // garbage verb is a one-packet honeypot tell.
+        return $this->buildResponse(501, 'Not Implemented', '', [], '', $userAgent);
+    }
+
     public function buildRegisteredOk(string $toTag, string $contact = '', int $expires = 3600, string $userAgent = 'Asterisk PBX 20.5.0'): string
     {
         $headers = [
@@ -361,9 +369,11 @@ final class SipMessage
      */
     public static function buildSdp(string $mediaIp, int $audioPort, string $sessionId = '1', string $userAgent = 'Asterisk PBX 20.5.0'): string
     {
+        // pjsip (Asterisk's default channel driver on 20.x) emits a bare origin username and a short
+        // session name — not "o=root .../s=<product version>", which leaked the emulator's identity.
         return "v=0\r\n"
-            . "o=root {$sessionId} {$sessionId} IN IP4 {$mediaIp}\r\n"
-            . "s={$userAgent}\r\n"
+            . "o=- {$sessionId} {$sessionId} IN IP4 {$mediaIp}\r\n"
+            . "s=Asterisk\r\n"
             . "c=IN IP4 {$mediaIp}\r\n"
             . "t=0 0\r\n"
             . "m=audio {$audioPort} RTP/AVP 0 101\r\n"

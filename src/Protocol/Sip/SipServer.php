@@ -369,10 +369,39 @@ final class SipServer
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 
-            default:
-                // Return 200 OK for other discovery methods (NOTIFY, etc.)
+            case 'MESSAGE':
+                // SIP MESSAGE = SMS-over-SIP: smishing content, A2P spam, or open-relay probing. Capture
+                // the target, sender and body as intel and 202-accept it (an Asterisk with messaging
+                // would) to draw more samples. INERT: the message is only logged, never relayed.
+                $this->handleMessage($req, $peerIp, $peerPort, $transport, $tcpSock);
+                break;
+
+            case 'NOTIFY':
+            case 'SUBSCRIBE':
+            case 'PUBLISH':
+            case 'REFER':
+            case 'UPDATE':
+            case 'PRACK':
+                // Known SIP methods we don't fully model: acknowledge so a client stays engaged.
                 $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+                break;
+
+            default:
+                // Unknown/garbage verb -> 501, like a real Asterisk. A bare 200 to any method is a
+                // one-packet honeypot detector. Still logged as a probe (intel).
+                $this->sendResponse($req->buildNotImplemented($this->config->userAgent), $peerIp, $peerPort, $transport, $tcpSock);
+                $this->logEvent([
+                    'proto' => 'sip',
+                    'method' => 'SIP',
+                    'event' => 'probe',
+                    'ip' => $peerIp,
+                    'port' => $peerPort,
+                    'path' => 'SIP ' . substr($req->method, 0, 16) . ' unsupported method (501)',
+                    'matched' => 1,
+                    'served' => 1,
+                    'reportable' => ($transport === 'tcp'),
+                ]);
                 break;
         }
     }
@@ -812,6 +841,35 @@ final class SipServer
     }
 
     /**
+     * SIP MESSAGE (RFC 3428): SMS-over-SIP. Attackers use it for smishing, A2P spam and to probe
+     * whether the PBX is an open message relay. Capture the target, sender and body as intel and
+     * 200-accept it so more samples arrive. INERT invariant: the message is only logged, never relayed.
+     */
+    private function handleMessage(SipMessage $req, string $peerIp, int $peerPort, string $transport, $tcpSock): void
+    {
+        $target = $req->getDialedNumber();                 // Request-URI user = destination MSISDN/ext
+        $ctype = strtolower($req->getHeader('content-type') ?? '');
+        $body = trim($req->body);
+        // Collapse + cap the body: it is intel, and a flood must not bloat the log.
+        $snippet = substr((string) preg_replace('/\s+/', ' ', $body), 0, 400);
+
+        $res = $req->buildResponse(200, 'OK', 'tag-' . bin2hex(random_bytes(3)), [], '', $this->config->userAgent);
+        $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'message',
+            'ip' => $peerIp,
+            'port' => $peerPort,
+            'path' => "SIP MESSAGE to:{$target} ({$ctype}): {$snippet}",
+            'matched' => 1,
+            'served' => 1,
+            'reportable' => ($transport === 'tcp'),
+        ]);
+    }
+
+    /**
      * Finds an active session matching Call-ID and source IP.
      * @return array{0: string, 1: SipSession}|null
      */
@@ -883,6 +941,10 @@ final class SipServer
      */
     private function sendResponse(string $raw, string $peerIp, int $peerPort, string $transport, $tcpSock = null): void
     {
+        // RFC 3581: if the client's top Via asked for ;rport, echo the observed source as
+        // received=/rport= — real edge PBXs do this for NAT traversal, and omitting it is a tell.
+        $raw = $this->addViaReceived($raw, $peerIp, $peerPort);
+
         if ($transport === 'tcp' && $tcpSock && is_resource($tcpSock)) {
             @fwrite($tcpSock, $raw);
         } elseif ($this->udpSocket && is_resource($this->udpSocket)) {
@@ -900,6 +962,22 @@ final class SipServer
      * Token-bucket admission for a UDP reply to $ip (F4 anti-reflection throttle). Returns false when
      * the apparent source has drained its bucket, so the reply is dropped rather than reflected.
      */
+    /**
+     * Echo the observed source into the first Via as received=/rport= when the client requested rport
+     * (RFC 3581). Only the top Via, only when a bare ;rport is present; other responses pass through.
+     */
+    private function addViaReceived(string $raw, string $peerIp, int $peerPort): string
+    {
+        $out = preg_replace(
+            '/(^Via:[^\r\n]*?);rport(?![=\w])/mi',
+            '$1;received=' . $peerIp . ';rport=' . $peerPort,
+            $raw,
+            1
+        );
+
+        return $out ?? $raw;
+    }
+
     private function udpResponseAllowed(string $ip): bool
     {
         $now = microtime(true);
