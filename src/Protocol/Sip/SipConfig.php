@@ -96,6 +96,16 @@ final class SipConfig
      * sees a bounded, plausible extension map — a real "fat target" — instead of an impossible
      * PBX that answers every extension. Cosmetic response shaping only; every probe is still logged.
      */
+    /**
+     * Whether REGISTER/OPTIONS to an unknown AOR is 404-shaped (a bounded, realistic extension map
+     * for dictionary scanners). Only the credential-guarding modes shape; the permissive/open modes
+     * exist to be trivially easy to reach, so they engage every probe instead of turning it away.
+     */
+    public function shapesExtensionEnumeration(): bool
+    {
+        return in_array($this->authMode, ['weak', 'strict'], true);
+    }
+
     public function isValidExtension(string $ext): bool
     {
         $ext = trim($ext);

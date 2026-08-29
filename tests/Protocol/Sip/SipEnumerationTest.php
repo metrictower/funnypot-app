@@ -203,6 +203,57 @@ final class SipEnumerationTest extends TestCase
         $this->assertSame('call', end($logged)['event']);
     }
 
+    // --- enumeration shaping is only for the credential-guarding modes ---
+
+    public function test_permissive_mode_engages_off_roster_register_instead_of_404(): void
+    {
+        // permissive/open exist to be trivially easy to reach, so an off-roster/junk AOR must be
+        // challenged (engaged), not 404-shaped away — the 404 map is a weak/strict-mode behaviour.
+        $logged = [];
+        $cfg = new SipConfig(rtpPort: 0, authMode: 'permissive');
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $raw = "REGISTER sip:target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-p\r\n"
+            . "From: <sip:asdf9zqxwer@target>;tag=f\r\nTo: <sip:asdf9zqxwer@target>\r\n"
+            . "Call-ID: reg-perm\r\nCSeq: 1 REGISTER\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+
+        $ev = end($logged);
+        $this->assertStringNotContainsString('enumeration probe', $ev['path']);
+        $this->assertStringNotContainsString('404', $ev['path']);
+        $this->assertStringContainsString('challenge sent', $ev['path']);
+    }
+
+    public function test_unacked_invite_session_is_evicted_at_setup_timeout(): void
+    {
+        // A scan INVITE that never ACKs must not hold a call slot until the max-duration cap — a
+        // handful would fill maxActiveCalls and 486-Busy every later caller (and the test call).
+        $server = new SipServer(new SipConfig(rtpPort: 0), null);
+
+        $raw = "INVITE sip:100@target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-nb\r\n"
+            . "From: <sip:a@9.9.9.9>;tag=f\r\nTo: <sip:100@target>\r\n"
+            . "Call-ID: inv-noack\r\nCSeq: 1 INVITE\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+        $this->assertSame(1, $server->getActiveSessionCount());
+
+        // Age the never-ACKed (non-streaming) session past the RFC 3261 setup timeout.
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+        foreach ($sessProp->getValue($server) as $s) {
+            $s->startTime = microtime(true) - 40.0;
+        }
+
+        $cleanup = new \ReflectionMethod($server, 'cleanupExpiredSessions');
+        $cleanup->setAccessible(true);
+        $cleanup->invoke($server);
+
+        $this->assertSame(0, $server->getActiveSessionCount(), 'stalled no-ACK INVITE must be evicted');
+    }
+
     // --- 'org' mode: extension directory coherent with the seeded company roster (FP-0180) ---
 
     public function test_org_mode_valid_set_equals_org_roster_and_derives_seed_like_panels(): void

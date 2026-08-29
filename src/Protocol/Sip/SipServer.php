@@ -29,6 +29,10 @@ final class SipServer
     private const MAX_TCP_CLIENTS = 128;
     private const MAX_TCP_BUFFER = 16384;
     private const TCP_IDLE_TIMEOUT = 30.0;
+    // RFC 3261 Timer B/H: give up on an INVITE that is never ACKed. Without this a scan INVITE
+    // (no ACK, so never "streaming") sits in the table until the max-duration cap and quickly fills
+    // maxActiveCalls — turning every later caller away with 486 Busy.
+    private const INVITE_SETUP_TIMEOUT = 32.0;
 
     /** @var array<string, SipSession> Active sessions keyed by callId + peerAddr */
     private array $sessions = [];
@@ -415,7 +419,7 @@ final class SipServer
         // doesn't host answers 404 (svmap maps only real extensions). A server-directed OPTIONS
         // keep-alive (no user part in the Request-URI) keeps the normal 200 OK. Probe still logged.
         $ext = $this->addressedExtension($req);
-        if ($ext !== null && !$this->config->isValidExtension($ext)) {
+        if ($this->config->shapesExtensionEnumeration() && $ext !== null && !$this->config->isValidExtension($ext)) {
             $res = $req->buildNotFound('tag-' . bin2hex(random_bytes(3)), $this->config->userAgent);
             $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
@@ -519,7 +523,7 @@ final class SipServer
         // still logged as intel. Only shaped when a specific extension is identifiable; a
         // server-directed REGISTER with no AOR falls through to the normal challenge flow.
         $ext = $this->registerExtension($req, $auth);
-        if ($ext !== null && !$this->config->isValidExtension($ext)) {
+        if ($this->config->shapesExtensionEnumeration() && $ext !== null && !$this->config->isValidExtension($ext)) {
             $this->sendResponse($req->buildNotFound($toTag, $this->config->userAgent), $peerIp, $peerPort, $transport, $tcpSock);
             $this->logEvent([
                 'proto' => 'sip',
@@ -1251,7 +1255,12 @@ final class SipServer
             // to the max-duration cap and recording minutes of silence.
             $baseline = $s->lastInboundTime > 0.0 ? $s->lastInboundTime : $s->startTime;
             $idle = $now - $baseline;
-            if ($s->getDuration() > $this->config->maxCallDuration || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)) {
+            // A never-ACKed INVITE never becomes "streaming", so the idle clause below can't reap it.
+            // Evict it at the setup timeout so scan INVITEs can't exhaust the call table.
+            $setupStalled = !$s->isStreaming() && ($now - $s->startTime) > self::INVITE_SETUP_TIMEOUT;
+            if ($s->getDuration() > $this->config->maxCallDuration
+                || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)
+                || $setupStalled) {
                 try {
                     $this->endSession($s, $key);
                 } catch (\Throwable $e) {
