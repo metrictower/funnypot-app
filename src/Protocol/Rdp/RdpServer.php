@@ -134,7 +134,15 @@ final class RdpServer
                     continue;
                 }
 
-                $this->processInbound($session);
+                // Fault isolation: a malformed packet must close only this connection, never escape
+                // the loop and crash the listener (degrade, never crash).
+                try {
+                    $this->processInbound($session);
+                } catch (\Throwable $e) {
+                    $this->logFault($conns[$id]['ip'] ?? '', $e);
+                    $this->close($conns, $perIp, $id);
+                    continue;
+                }
                 if ($session->close) {
                     $this->close($conns, $perIp, $id);
                     continue;
@@ -833,6 +841,22 @@ final class RdpServer
         $entry['matched'] = 1;
         $entry['served'] = 1;
         ($this->logger)($entry);
+    }
+
+    /** Records a per-connection fault to the event stream without ever escaping the run loop. */
+    private function logFault(string $ip, \Throwable $e): void
+    {
+        try {
+            $this->logEvent([
+                'event' => 'error',
+                'ip' => $ip,
+                'port' => 3389,
+                'path' => 'RDP internal fault: ' . $e->getMessage(),
+                'severity' => 'low',
+            ]);
+        } catch (\Throwable $ignored) {
+            // keeping the listener alive matters more than this one log line
+        }
     }
 
     private static function portOf(string $bind): int

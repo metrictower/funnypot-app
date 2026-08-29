@@ -152,7 +152,15 @@ final class SmbServer
                     continue;
                 }
 
-                $this->processInbound($session);
+                // Fault isolation: a malformed packet must close only this connection, never escape
+                // the loop and crash the listener (degrade, never crash).
+                try {
+                    $this->processInbound($session);
+                } catch (\Throwable $e) {
+                    $this->logFault($conns[$id]['ip'] ?? '', $e);
+                    $this->close($conns, $perIp, $id);
+                    continue;
+                }
                 if ($session->close) {
                     // Deliver any queued denial/response best-effort before dropping the socket.
                     if ($session->outbuf !== '') {
@@ -832,6 +840,22 @@ final class SmbServer
         $entry['matched'] = 1;
         $entry['served'] = 1;
         ($this->logger)($entry);
+    }
+
+    /** Records a per-connection fault to the event stream without ever escaping the run loop. */
+    private function logFault(string $ip, \Throwable $e): void
+    {
+        try {
+            $this->logEvent([
+                'event' => 'error',
+                'ip' => $ip,
+                'port' => 445,
+                'path' => 'SMB internal fault: ' . $e->getMessage(),
+                'severity' => 'low',
+            ]);
+        } catch (\Throwable $ignored) {
+            // keeping the listener alive matters more than this one log line
+        }
     }
 
     private static function portOf(string $bind): int
