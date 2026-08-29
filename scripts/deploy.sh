@@ -36,6 +36,10 @@ ADMIN_PASSWORD="${FUNNYPOT_ADMIN_PASSWORD:-}"
 # to a plain 404 whenever it is slow or down — the honeypot is never blocked on it. Set
 # FUNNYPOT_LLM_ON=0 to skip the sidecar entirely; every value below is still overridable via its
 # FUNNYPOT_LLM_* env var.
+# FUNNYPOT_APP_ONLY=1: quick deploy of an app-code change — build + ship ONLY the ~40 MB app image
+# and reuse the LLM sidecar image already on the host (its container is recreated from that on-box
+# image, so the ~1 GB model is never rebuilt or re-sent). LLM stays enabled.
+APP_ONLY="${FUNNYPOT_APP_ONLY:-0}"
 LLM_ON="${FUNNYPOT_LLM_ON:-1}"
 LLM_REPO="${FUNNYPOT_LLM_REPO:-$REPO_ROOT/../funnypot-llm}"
 LLM_MEM="${FUNNYPOT_LLM_MEM:-1500m}"
@@ -69,13 +73,15 @@ PORTS="21 23 25 79 80 81 88 110 143 443 502 591 873 2082 2083 2086 2087 2095 209
 echo "==> [1/4] build image locally ($PLATFORM)"
 docker build --platform "$PLATFORM" -f "$REPO_ROOT/demo/Dockerfile" -t funnypot "$REPO_ROOT"
 
-if [ "$LLM_ON" = "1" ]; then
+if [ "$LLM_ON" = "1" ] && [ "$APP_ONLY" != "1" ]; then
     echo "==> [1b/4] build funnypot-llm sidecar image ($PLATFORM) from $LLM_REPO"
     if [ ! -f "$LLM_REPO/Dockerfile" ]; then
         echo "error: funnypot-llm repo not found at $LLM_REPO (set FUNNYPOT_LLM_REPO)." >&2
         exit 1
     fi
     docker build --platform "$PLATFORM" -t funnypot-llm "$LLM_REPO"
+elif [ "$APP_ONLY" = "1" ]; then
+    echo "==> [1b/4] app-only deploy — skipping sidecar build (reusing the on-host image)"
 fi
 
 echo "==> [2/4] ensure docker engine on $USER@$HOST"
@@ -97,9 +103,11 @@ else
     echo "==> [3/4] ship image (~40 MB gzipped) + load on server"
     docker save funnypot | gzip | ssh "${SSH_OPTS[@]}" "$USER@$HOST" 'gunzip | sudo docker load'
 
-    if [ "$LLM_ON" = "1" ]; then
+    if [ "$LLM_ON" = "1" ] && [ "$APP_ONLY" != "1" ]; then
         echo "==> [3b/4] ship funnypot-llm image (model baked in — larger; only re-sent when it changes)"
         docker save funnypot-llm | gzip | ssh "${SSH_OPTS[@]}" "$USER@$HOST" 'gunzip | sudo docker load'
+    elif [ "$APP_ONLY" = "1" ]; then
+        echo "==> [3b/4] app-only deploy — skipping sidecar ship (~1 GB not re-sent)"
     fi
 fi
 
