@@ -198,4 +198,41 @@ final class SipWeakSecurityTest extends TestCase
         // And it round-trips back to mu-law bytes.
         $this->assertNotFalse(gzdecode((string) file_get_contents($expectedRec)));
     }
+
+    /**
+     * Regression: pruneRecordings() must glob every recording extension WITHOUT GLOB_BRACE (undefined
+     * on musl/Alpine, where it is a fatal error that kills the listener) and delete oldest-first until
+     * under the cap. Writing one file per extension proves all three are seen and pruned.
+     */
+    public function test_prune_recordings_globs_all_extensions_and_enforces_cap(): void
+    {
+        $cfg = new SipConfig(recordCalls: true, recordingsDir: $this->recordingsDir, recordingsMaxBytes: 300, rtpPort: 0);
+        $server = new SipServer($cfg, null);
+
+        $mk = function (string $name, int $bytes, int $ageSeconds): string {
+            $p = $this->recordingsDir . '/' . $name;
+            file_put_contents($p, str_repeat('x', $bytes));
+            touch($p, time() - $ageSeconds);
+            return $p;
+        };
+        $old = $mk('old.ulaw.gz', 200, 300);   // oldest
+        $mid = $mk('mid.ulaw', 200, 200);
+        $new = $mk('new.wav', 200, 100);       // newest
+
+        $prune = new \ReflectionMethod($server, 'pruneRecordings');
+        $prune->setAccessible(true);
+        $prune->invoke($server); // must not throw (the GLOB_BRACE regression)
+
+        // 600 bytes over a 300 cap -> oldest deleted until <= cap; newest survives.
+        $this->assertFileDoesNotExist($old);
+        $this->assertFileDoesNotExist($mid);
+        $this->assertFileExists($new);
+
+        $remaining = array_merge(
+            glob($this->recordingsDir . '/*.ulaw.gz') ?: [],
+            glob($this->recordingsDir . '/*.ulaw') ?: [],
+            glob($this->recordingsDir . '/*.wav') ?: []
+        );
+        $this->assertLessThanOrEqual(300, array_sum(array_map('filesize', $remaining)));
+    }
 }

@@ -969,7 +969,14 @@ final class SipServer
         if ($cap <= 0) {
             return;
         }
-        $files = glob($this->config->recordingsDir . '/*.{ulaw.gz,ulaw,wav}', GLOB_BRACE) ?: [];
+        // Glob each extension separately and merge: GLOB_BRACE is not defined on musl/Alpine (the
+        // prod image), where using it is a fatal "undefined constant" that would kill the listener.
+        // '*.ulaw' does not match '*.ulaw.gz' (different final extension), so there is no overlap.
+        $files = array_merge(
+            glob($this->config->recordingsDir . '/*.ulaw.gz') ?: [],
+            glob($this->config->recordingsDir . '/*.ulaw') ?: [],
+            glob($this->config->recordingsDir . '/*.wav') ?: []
+        );
         if ($files === []) {
             return;
         }
