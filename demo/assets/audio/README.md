@@ -48,7 +48,7 @@ Legally clean sources for shippable personas: **LibriVox** (public domain), **As
 ## Persona provenance + license (what's dealt into the cycle)
 
 Cycle order is set by each folder's `persona.json` `order` (lower = earlier). Current voice cycle:
-`lenny → el_chango → cohen → kimble → allison → vindiesel → …` (rest default to order 100, alphabetical).
+`lenny → el_chango → cohen → allison → …` (rest default to order 100, alphabetical).
 
 Real-recorded, cleanly-licensed additions after `lenny`:
 
@@ -60,15 +60,4 @@ Real-recorded, cleanly-licensed additions after `lenny`:
   `78_cohen-on-the-telephone_joe-hayman_gbia3029365b` — **US public domain** (pre-1923). Transcoded
   from the MP3 to 8 kHz µ-law and split into ~25 s clips.
 
-Movie/celebrity personas (real recorded voice, but **copyright-encumbered** — gitignored/local only,
-your own defensive honeypot, never redistributed — same bucket as `vindiesel`/`taken`):
-
-- **kimble** — Detective John Kimble (Arnold Schwarzenegger, *Kindergarten Cop*, 1990): 18 lines
-  ("It's not a tumor", "I'm a cop you idiot, I'm Detective John Kimble", "Who is your daddy and what
-  does he do", "There is no bathroom", "Stop whining"). Source: a 101soundboards board; copyrighted
-  film audio + right-of-publicity. Transcoded from MP3 to 8 kHz µ-law with the telephone-band filter.
-
-More clean sources vetted for future personas: **El Chango** (MIT), pre-1925 **78rpm comic
-monologues** (archive.org George Blood collection) and the **UCSB Cylinder Audio Archive** (public
-domain), **LibriVox** / **Mozilla Common Voice** / **Freesound-CC0** (all CC0/PD). Avoid Jolly Roger
-(proprietary) and Kitboga (personal IP / fan-TTS).
+Legally clean sources vetted for future personas: **El Chango** (MIT), **AI TTS synthesis** (OpenAI / ElevenLabs via `scripts/generate-sip-persona.php`), pre-1925 **78rpm comic monologues** (archive.org George Blood collection), and the **UCSB Cylinder Audio Archive** (public domain).
