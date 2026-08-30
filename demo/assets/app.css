@@ -47,6 +47,8 @@ td.path{word-break:break-all;max-width:340px}
 .src-panel{background:rgba(240,180,0,.14);color:var(--amber);border:1px solid rgba(240,180,0,.4)}
 .src-vnc{background:rgba(255,80,200,.16);color:#ff50c8;border:1px solid rgba(255,80,200,.45)}
 .src-sip{background:rgba(160,80,255,.16);color:#b070ff;border:1px solid rgba(160,80,255,.45)}
+.badge.tool{background:rgba(56,189,248,.12);color:#38bdf8;border:1px solid rgba(56,189,248,.35);font-size:11px;font-weight:600;margin-left:6px;cursor:pointer}
+.badge.tool:hover{border-color:#38bdf8;background:rgba(56,189,248,.22)}
 .ids{color:var(--muted);font-size:12px}
 tr.flash{animation:flash 1.4s ease-out}
 @keyframes flash{from{background:rgba(240,180,0,.28)}to{background:transparent}}

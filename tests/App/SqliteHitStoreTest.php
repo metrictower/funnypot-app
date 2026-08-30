@@ -317,5 +317,59 @@ final class SqliteHitStoreTest extends TestCase
         $sip = $store->delta(0, ['method' => 'SIP'])['rows'];
         self::assertCount(2, $sip);
     }
+
+    public function testUserAgentAndToolAttribution(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+
+        $store->append([
+            'ts' => '2026-08-30T10:00:00+00:00',
+            'ip' => '172.20.10.3',
+            'method' => 'SIP',
+            'event' => 'call',
+            'path' => 'SIP call connected: 100',
+            'ua' => 'Zoiper v2.10.20.4_1',
+            'tool' => 'zoiper-softphone',
+        ]);
+        $store->append([
+            'ts' => '2026-08-30T10:01:00+00:00',
+            'ip' => '1.2.3.4',
+            'method' => 'GET',
+            'event' => 'scan',
+            'path' => '/login',
+            'ua' => 'sqlmap/1.7.8#stable',
+            'tool' => 'sqlmap',
+        ]);
+        $store->append([
+            'ts' => '2026-08-30T10:02:00+00:00',
+            'ip' => '5.6.7.8',
+            'method' => 'RTSP',
+            'event' => 'probe',
+            'path' => 'rtsp://test/live',
+            'userAgent' => 'Lavf/58.29.100',
+        ]);
+
+        $rows = $store->delta(0)['rows'];
+        self::assertCount(3, $rows);
+        self::assertSame('Zoiper v2.10.20.4_1', $rows[0]['ua']);
+        self::assertSame('zoiper-softphone', $rows[0]['tool']);
+
+        self::assertSame('sqlmap/1.7.8#stable', $rows[1]['ua']);
+        self::assertSame('sqlmap', $rows[1]['tool']);
+
+        self::assertSame('Lavf/58.29.100', $rows[2]['ua']);
+        self::assertSame('', $rows[2]['tool']);
+
+        // Filter exact match by tool
+        $filtered = $store->delta(0, ['tool' => 'zoiper-softphone'])['rows'];
+        self::assertCount(1, $filtered);
+        self::assertSame('172.20.10.3', $filtered[0]['ip']);
+
+        // Free-text search by q matching tool or ua
+        $qSearch = $store->delta(0, ['q' => 'sqlmap'])['rows'];
+        self::assertCount(1, $qSearch);
+        self::assertSame('1.2.3.4', $qSearch[0]['ip']);
+    }
 }
+
 

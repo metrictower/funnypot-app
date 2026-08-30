@@ -133,7 +133,7 @@ final class SqliteHitStore implements HitStore
     {
         $clauses = [];
         $params = [];
-        foreach (['method', 'event', 'cc', 'severity'] as $col) {   // exact match
+        foreach (['method', 'event', 'cc', 'severity', 'tool'] as $col) {   // exact match
             if (isset($f[$col]) && $f[$col] !== '') {
                 $clauses[] = "$col = :$col";
                 $params[":$col"] = (string) $f[$col];
@@ -143,8 +143,8 @@ final class SqliteHitStore implements HitStore
             $clauses[] = 'ip LIKE :ip';
             $params[':ip'] = '%' . $f['ip'] . '%';
         }
-        if (isset($f['q']) && $f['q'] !== '') {                     // free text over path + body
-            $clauses[] = '(path LIKE :q OR body LIKE :q)';
+        if (isset($f['q']) && $f['q'] !== '') {                     // free text over path + body + ua + tool
+            $clauses[] = '(path LIKE :q OR body LIKE :q OR ua LIKE :q OR tool LIKE :q)';
             $params[':q'] = '%' . $f['q'] . '%';
         }
         if (!empty($f['matched'])) {
@@ -368,7 +368,9 @@ final class SqliteHitStore implements HitStore
                 log4shell INTEGER DEFAULT 0, honeytoken TEXT,
                 cc TEXT, city TEXT, lat REAL, lon REAL, asn TEXT,
                 known_attacker INTEGER DEFAULT 0,
-                recording TEXT
+                recording TEXT,
+                ua TEXT,
+                tool TEXT
             )'
         );
         // Add columns introduced after a db was first created (idempotent migration for old files).
@@ -378,6 +380,12 @@ final class SqliteHitStore implements HitStore
         }
         if (!in_array('recording', $cols, true)) {
             $db->exec('ALTER TABLE hits ADD COLUMN recording TEXT');
+        }
+        if (!in_array('ua', $cols, true)) {
+            $db->exec('ALTER TABLE hits ADD COLUMN ua TEXT');
+        }
+        if (!in_array('tool', $cols, true)) {
+            $db->exec('ALTER TABLE hits ADD COLUMN tool TEXT');
         }
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ip ON hits(ip)');
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ts ON hits(ts)');
@@ -403,12 +411,14 @@ final class SqliteHitStore implements HitStore
     {
         if ($this->insertStmt === null) {
             $this->insertStmt = $this->db->prepare(
-                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker,recording)
-                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker,:recording)'
+                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker,recording,ua,tool)
+                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker,:recording,:ua,:tool)'
             );
         }
         $st = $this->insertStmt;
         $geo = $e['geo'] ?? [];
+        $ua = (string) ($e['ua'] ?? ($e['userAgent'] ?? ''));
+        $tool = (string) ($e['tool'] ?? '');
         $st->execute([
             ':ts' => (string) ($e['ts'] ?? ''),
             ':ip' => (string) ($e['ip'] ?? ''),
@@ -429,6 +439,8 @@ final class SqliteHitStore implements HitStore
             ':asn' => (string) ($geo['asn'] ?? ''),
             ':known_attacker' => !empty($e['known_attacker']) ? 1 : 0,
             ':recording' => (string) ($e['recording'] ?? ''),
+            ':ua' => self::clean($ua, 250),
+            ':tool' => self::clean($tool, 64),
         ]);
     }
 
@@ -463,6 +475,8 @@ final class SqliteHitStore implements HitStore
             'lon' => $r['lon'] !== null ? (float) $r['lon'] : null,
             'known_attacker' => !empty($r['known_attacker']),
             'recording' => (string) ($r['recording'] ?? ''),
+            'ua' => (string) ($r['ua'] ?? ''),
+            'tool' => (string) ($r['tool'] ?? ''),
         ];
     }
 

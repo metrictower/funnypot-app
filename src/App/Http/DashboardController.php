@@ -64,7 +64,7 @@ final class DashboardController
     private function filters(): array
     {
         $f = [];
-        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording'] as $k) {
+        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording', 'tool'] as $k) {
             if (isset($_GET[$k]) && $_GET[$k] !== '') {
                 $f[$k] = (string) $_GET[$k];
             }
@@ -262,7 +262,7 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"served":"1"}\'>fakes served</button>';
         echo '<button class=\'btn qv\' data-f=\'{"severity":"critical"}\'>critical</button>';
         echo "</div>";
-        echo "<div class=controls style='margin-bottom:8px'><input id=filter class=filter placeholder='filter by ip&hellip;'>";
+        echo "<div class=controls style='margin-bottom:8px'><input id=filter class=filter placeholder='filter by ip, tool, query&hellip;'>";
         echo "<span class=note style='margin:0 0 0 auto'>stats: all-time (DB) or recent window (file mode)</span></div>";
         echo "<table><thead><tr><th>time</th><th>ip</th><th>request</th><th>verdict</th><th>fake?</th></tr></thead>";
         echo "<tbody id=rows><tr><td colspan=5 class=empty>connecting&hellip;</td></tr></tbody></table>";
