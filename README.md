@@ -41,7 +41,10 @@ the box. This app depends on it.
 Every hit streams onto a live dashboard: HTTP probes, and SSH, telnet, redis and other connections, with
 top talkers, which templates fired, hourly activity and a GeoIP attacker map. One-click quick-filters slice
 the stream by category — SSH/telnet commands, credential attempts, spider-trap hits, and **fake-admin-panel
-navigation** (`event=panel`) — and a free-text path search drills into any section (`/admin/bank`, …).
+navigation** (`event=panel`) — and a free-text path search drills into any section (`/admin/bank`, …). A
+per-row **block** button (and a blocked-IP manager) lets the operator permanently drop an abusive source
+(exact IP or IPv4 CIDR): a blocked source is served nothing across every tier — the HTTP deception, SIP,
+and the TCP protocol emulators — persisted on the data volume and enforced with an O(1) per-packet check.
 
 ![funnypot dashboard](docs/img/dashboard.png)
 

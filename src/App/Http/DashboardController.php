@@ -7,6 +7,7 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\Emulation\EmulationCatalog;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Protocol\Sip\WavWriter;
@@ -25,6 +26,7 @@ final class DashboardController
         private AppConfig $config,
         private string $assetsDir,
         private ?LlmFakeCache $llmCache = null,
+        private ?OperatorBlocklist $operatorBlock = null,
     ) {
     }
 
@@ -188,6 +190,48 @@ final class DashboardController
             return;
         }
 
+        // Operator manual block: add/remove an IP (or IPv4 CIDR); enforced across every tier. Persistent.
+        if ($action === 'block-ip') {
+            $ip = trim((string) ($_POST['ip'] ?? ''));
+            if ($this->operatorBlock === null) {
+                echo json_encode(['ok' => false, 'ip' => $ip, 'error' => 'blocklist unavailable']);
+
+                return;
+            }
+            // Validate before storing, so a typo/invalid entry (which would never match) is rejected
+            // rather than falsely reported as blocked.
+            if (!OperatorBlocklist::isValidEntry($ip)) {
+                echo json_encode(['ok' => false, 'ip' => $ip, 'error' => 'not a valid IP or IPv4 CIDR']);
+
+                return;
+            }
+            // Guard the operator against self-lockout: never block their own configured egress IP.
+            if (in_array($ip, $this->config->selfIps, true)) {
+                echo json_encode(['ok' => false, 'ip' => $ip, 'error' => 'refusing to block a FUNNYPOT_SELF_IPS address']);
+
+                return;
+            }
+            $this->operatorBlock->add($ip, substr((string) ($_POST['note'] ?? ''), 0, 200));
+            echo json_encode(['ok' => true, 'ip' => $ip]);
+
+            return;
+        }
+        if ($action === 'unblock-ip') {
+            $ip = trim((string) ($_POST['ip'] ?? ''));
+            $ok = $this->operatorBlock !== null && $ip !== '';
+            if ($ok) {
+                $this->operatorBlock->remove($ip);
+            }
+            echo json_encode(['ok' => $ok, 'ip' => $ip]);
+
+            return;
+        }
+        if ($action === 'blocked') {
+            echo json_encode(['ok' => true, 'blocked' => $this->operatorBlock !== null ? $this->operatorBlock->all() : []]);
+
+            return;
+        }
+
         http_response_code(400);
         echo json_encode(['error' => 'unknown action']);
     }
@@ -268,7 +312,7 @@ final class DashboardController
         echo "<table><thead><tr><th>time</th><th>ip</th><th>request</th><th>verdict</th><th>fake?</th></tr></thead>";
         echo "<tbody id=rows><tr><td colspan=5 class=empty>connecting&hellip;</td></tr></tbody></table>";
         echo "<div class=controls><button id=older class=btn>load older</button>";
-        echo "<span class=admin><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button></span></div>";
+        echo "<span class=admin><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=blocked class=btn title='view + manage manually blocked IPs'>blocked</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button></span></div>";
         echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map &copy; OpenStreetMap, CARTO</footer>";
         echo "<div id=vmodal class=modal hidden><div class=modal-box>";
         echo "<div class=modal-head><b>Emulations</b><input id=vsearch class=filter placeholder='search&hellip;'><span class=grow></span><button id=vclose class=x title=close>&times;</button></div>";
@@ -279,6 +323,11 @@ final class DashboardController
         echo "<div class=modal-head><b>LLM cache</b><input id=lsearch class=filter placeholder='search path&hellip;'><span class=grow></span><button id=lclose class=x title=close>&times;</button></div>";
         echo "<div id=llist class=vlist></div>";
         echo "<div class=modal-foot><span id=lstat class=note style='margin:0'></span><span class=grow></span><button id=lclear class=btn>Clear all</button></div>";
+        echo "</div></div>";
+        echo "<div id=bmodal class=modal hidden><div class=modal-box>";
+        echo "<div class=modal-head><b>Blocked IPs</b><span class=note style='margin:0'>manually blocked, enforced across every service</span><span class=grow></span><button id=bclose class=x title=close>&times;</button></div>";
+        echo "<div id=blist class=vlist></div>";
+        echo "<div class=modal-foot><input id=bip class=filter placeholder='ip or a.b.c.d/24&hellip;'><button id=badd class=btn>Block</button></div>";
         echo "</div></div>";
         echo "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' crossorigin></script>";
         echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';

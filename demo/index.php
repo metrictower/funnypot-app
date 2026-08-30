@@ -53,6 +53,7 @@ use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\Honeytoken;
 use Funnypot\Core\RequestContext;
@@ -123,6 +124,9 @@ if ($config->honeytokenKey !== '') {
 
 // Threat-intel blocklist: flag hits from known attackers at write time (opt-in, FUNNYPOT_BLOCKLIST).
 $blocklist = $config->blocklistEnabled ? new Blocklist($config->intelDbPath, $config->blocklistMinLists) : null;
+// Operator manual blocklist — always active (independent of the public-feed Blocklist toggle); the
+// dashboard writes it and every tier enforces it. Same intel.sqlite (persisted volume), own table.
+$operatorBlock = new OperatorBlocklist($config->intelDbPath);
 
 // AbuseIPDB reporting: opt-in, and only armed when an API key is set. The service self-excludes our
 // own IP (and is inert without FUNNYPOT_SELF_IPS) so our own tests can never report us.
@@ -229,8 +233,8 @@ if ($config->aiApiEnabled) {
     ));
 }
 
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier());
-$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache);
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock);
+$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath.
 $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist);

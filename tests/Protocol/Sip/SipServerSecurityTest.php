@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\Protocol\Sip;
 
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipMessage;
 use Funnypot\Protocol\Sip\SipServer;
@@ -182,6 +183,32 @@ final class SipServerSecurityTest extends TestCase
         $floods = array_filter($logged2, static fn (array $e): bool => ($e['event'] ?? '') === 'call_flood');
         self::assertCount(20, $calls, 'throttle disabled -> all 20 admitted');
         self::assertEmpty($floods, 'throttle disabled -> no flood rollups');
+    }
+
+    public function test_operator_block_silently_drops_a_blocked_source(): void
+    {
+        $dbFile = sys_get_temp_dir() . '/fpsipblk_' . bin2hex(random_bytes(6)) . '.sqlite';
+        $block = new OperatorBlocklist($dbFile, 0.0);
+        $block->add('203.0.113.66', 'sip flooder');
+
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        }, null, null, null, $block);
+        $makeInvite = $this->inviteMaker();
+
+        // A blocked source produces ZERO events — no session, no log, no response (silent drop).
+        $server->dispatchMessage($makeInvite('blk', '203.0.113.66'), '203.0.113.66', 5060, 'udp');
+        self::assertSame([], $logged, 'a blocked source must be silently dropped');
+        self::assertSame(0, $server->getActiveSessionCount(), 'no session is allocated for a blocked source');
+
+        // A different, unblocked source is served normally.
+        $server->dispatchMessage($makeInvite('ok', '198.51.100.5'), '198.51.100.5', 5060, 'udp');
+        self::assertSame('call', end($logged)['event'] ?? '', 'an unblocked source still connects');
+
+        foreach (['', '-wal', '-shm'] as $s) {
+            @unlink($dbFile . $s);
+        }
     }
 
     public function test_b2_anti_spoofing_abuse_reporting_suppression(): void

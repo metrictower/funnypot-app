@@ -28,7 +28,8 @@ final class Listener
     public function __construct(
         private ProtocolEmulator $emulator,
         private string $protocol,
-        private $logger
+        private $logger,
+        private ?\Funnypot\App\ThreatIntel\OperatorBlocklist $block = null
     ) {
     }
 
@@ -192,8 +193,10 @@ final class Listener
             return;
         }
         $ip = self::ipOf((string) $peer);
-        if (count($conns) >= self::MAX_CONNS || ($perIp[$ip] ?? 0) >= self::PER_IP_CONNS) {
-            @fclose($sock); // over a cap — refuse rather than exhaust
+        // Operator manual block: refuse a blocked source at accept — no banner, zero bytes.
+        if (($this->block !== null && $this->block->isBlocked($ip))
+            || count($conns) >= self::MAX_CONNS || ($perIp[$ip] ?? 0) >= self::PER_IP_CONNS) {
+            @fclose($sock); // blocked, or over a cap — refuse rather than exhaust
 
             return;
         }

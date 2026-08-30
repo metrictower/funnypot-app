@@ -55,9 +55,12 @@ function rowEl(r){
   const cc=r.cc?` <span class="ids">${esc(r.cc)}</span>`:'';
   const known=r.known_attacker?' <span class="badge known" title="known attacker (threat-intel blocklist)">known</span>':'';
   const t=(r.ts||'').substr(11,8);
-  tr.innerHTML=`<td>${t}</td><td>${esc(r.ip)}${cc}${known}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${toolBadge}${ids}${payload}${audio}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
+  const blk=r.ip?` <button class="blockbtn" title="Block this IP everywhere, permanently">block</button>`:'';
+  tr.innerHTML=`<td>${t}</td><td>${esc(r.ip)}${cc}${known}${blk}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${toolBadge}${ids}${payload}${audio}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
   const tbEl=tr.querySelector('.badge.tool');
   if(tbEl){tbEl.onclick=(e)=>{e.stopPropagation();filter=r.tool||r.ua;$('filter').value=filter;applyFilter();};}
+  const blkEl=tr.querySelector('.blockbtn');
+  if(blkEl){blkEl.onclick=(e)=>{e.stopPropagation();if(confirm('Block '+(r.ip||'')+' permanently, across every service?'))adminBlock(r.ip);};}
   return tr;
 }
 const empty=()=>{$('rows').innerHTML='<tr><td colspan=5 class=empty>No hits yet &mdash; point a scanner at this host.</td></tr>';};
@@ -159,6 +162,21 @@ async function llmDelete(key){
   const j=await adminReq('llm-cache-delete','key='+encodeURIComponent(key));
   if(j&&j.ok)openLlmCache();else alert('delete failed');
 }
+async function adminBlock(ip){
+  const j=await adminReq('block-ip','ip='+encodeURIComponent(ip));
+  if(j&&j.ok){cursor=0;older=0;seen.clear();tick();}else alert('block failed');
+}
+async function openBlocked(){
+  const j=await adminReq('blocked');if(!j)return;
+  const b=j.blocked||[];
+  $('blist').innerHTML=b.length?b.map(x=>`<div class="lrow"><code>${esc(x.ip)}</code> <span class=ids>${esc((x.added_at||'').substr(0,10))}${x.note?' &middot; '+esc(x.note):''}</span> <button class="blunbl btn" data-ip="${esc(x.ip)}">unblock</button></div>`).join(''):'<p class=empty>No IPs blocked.</p>';
+  $('blist').querySelectorAll('.blunbl').forEach(bt=>bt.onclick=()=>unblockIp(bt.dataset.ip));
+  $('bmodal').hidden=false;
+}
+async function unblockIp(ip){
+  const j=await adminReq('unblock-ip','ip='+encodeURIComponent(ip));
+  if(j&&j.ok)openBlocked();else alert('unblock failed');
+}
 $('older').onclick=loadOlder;
 $('prune').onclick=()=>{if(confirm('Prune to the newest 1000 events?'))admin('prune','keep=1000');};
 $('clear').onclick=()=>{if(confirm('Delete ALL captured data? This cannot be undone.'))admin('clear');};
@@ -169,6 +187,9 @@ $('vsearch').oninput=e=>{const q=e.target.value.toLowerCase();$('vlist').querySe
 $('llmcache').onclick=openLlmCache;
 $('lclose').onclick=()=>{$('lmodal').hidden=true;};
 $('lclear').onclick=async()=>{if(!confirm('Delete ALL cached LLM responses? They will regenerate on the next hit.'))return;const j=await adminReq('llm-cache-clear');if(j)openLlmCache();};
+$('blocked').onclick=openBlocked;
+$('bclose').onclick=()=>{$('bmodal').hidden=true;};
+$('badd').onclick=async()=>{const ip=($('bip').value||'').trim();if(!ip)return;const j=await adminReq('block-ip','ip='+encodeURIComponent(ip));if(j&&j.ok){$('bip').value='';openBlocked();}else alert('block failed');};
 $('lsearch').oninput=e=>{const q=e.target.value.toLowerCase();$('llist').querySelectorAll('.vrow').forEach(r=>{r.style.display=r.textContent.toLowerCase().includes(q)?'':'none';});};
 $('filter').oninput=e=>{filter=e.target.value.trim();applyFilter();};
 // Quick views: each button carries a filter object in data-f; clicking one reloads the feed

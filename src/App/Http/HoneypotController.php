@@ -10,6 +10,7 @@ use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
@@ -37,6 +38,7 @@ final class HoneypotController
         private ?ThreatIntelReporter $threatIntel = null,
         private ?LlmFakeResponder $llmFakes = null,
         private ?AttackClassifier $attackClassifier = null,
+        private ?OperatorBlocklist $operatorBlock = null,
     ) {
     }
 
@@ -156,6 +158,22 @@ final class HoneypotController
     /** Run the probe through the engine, log it, and emit a fake / decoy archive / believable 404. */
     public function handle(RequestContext $context, string $clientIp, string $tokenVerdict): void
     {
+        // Operator manual block: a manually blocked source is served the plain believable 404 and nothing
+        // else — no engine, no LLM, no decoy, no report, and NO stored row. Same body a genuine miss
+        // returns, so the block is invisible to the attacker; not recording it is the point (a blocked
+        // flood must not keep growing the store). The dashboard's blocked-IP list is the visibility
+        // surface. Checked before the engine so a blocked source costs one O(1) lookup + a static 404.
+        if ($this->operatorBlock !== null && $this->operatorBlock->isBlocked($clientIp)) {
+            $this->serveDelay();
+            http_response_code(404);
+            header('Content-Type: text/html');
+            echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
+                . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
+                . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+
+            return;
+        }
+
         // The emulation catalog's on/off choices become the engine's deny-set + corpus flag.
         $policy = EmulationPolicy::fromPackage(is_file($this->config->vulnsPath) ? $this->config->vulnsPath : null);
         $funnypot = Honeypot::default(new Config(

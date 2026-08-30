@@ -32,6 +32,9 @@ th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);verti
 th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
 td.path{word-break:break-all;max-width:340px}
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700}
+.blockbtn{margin-left:6px;padding:0 7px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:11px;line-height:1.7;cursor:pointer;opacity:.55}
+.blockbtn:hover{opacity:1;color:#fff;background:#c0392b;border-color:#c0392b}
+.lrow{display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid var(--line)}.lrow code{color:var(--ink)}.lrow .btn{margin-left:auto;padding:3px 10px;font-size:12px}
 .scan{background:rgba(240,180,0,.14);color:var(--amber);border:1px solid rgba(240,180,0,.35)}
 .miss{background:rgba(168,152,122,.12);color:var(--muted);border:1px solid var(--line)}
 .served{color:var(--red);font-weight:700}

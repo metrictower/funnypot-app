@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Sip;
 
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
+
 /**
  * Pure-PHP SIP and RTP VoIP honeypot service (RFC 3261 & RFC 3550).
  * Emulates an Asterisk PBX 20 server with anti-reflection (B1) and anti-spoofing (B2) guards.
@@ -111,7 +113,8 @@ final class SipServer
         ?callable $logger = null,
         ?RtpStreamer $rtpStreamer = null,
         ?PersonaSoundboard $soundboard = null,
-        ?CredentialStore $credStore = null
+        ?CredentialStore $credStore = null,
+        private ?OperatorBlocklist $block = null
     ) {
         $this->logger = $logger;
         $this->rtpStreamer = $rtpStreamer ?? new RtpStreamer($this->config->rtpPort);
@@ -304,6 +307,11 @@ final class SipServer
         }
 
         [$peerIp, $peerPort] = $this->splitAddr($peerAddr);
+        // Operator manual block: drop before parse — a blocked UDP source gets zero bytes, not even the
+        // malformed-input 400 below (which would be a reflected packet at a possibly-spoofed victim).
+        if ($this->block !== null && $this->block->isBlocked($peerIp)) {
+            return;
+        }
         $req = SipMessage::parse($data);
         if (!$req) {
             // Parseable-but-invalid: 400 like a real Asterisk (best-effort, rate-limited by the F4
@@ -326,6 +334,13 @@ final class SipServer
     {
         $client = @stream_socket_accept($this->tcpSocket, 0, $peerAddr);
         if ($client) {
+            // Operator manual block: refuse a blocked source at accept — no buffer, no response.
+            $acceptIp = is_string($peerAddr) ? $this->splitAddr($peerAddr)[0] : '';
+            if ($this->block !== null && $acceptIp !== '' && $this->block->isBlocked($acceptIp)) {
+                @fclose($client);
+
+                return;
+            }
             if (count($this->tcpClients) >= self::MAX_TCP_CLIENTS) {
                 @fclose($client); // at capacity — refuse (fd-exhaustion guard)
 
@@ -373,6 +388,15 @@ final class SipServer
         $peer = $this->tcpPeers[$id] ?? '';
         [$peerIp, $peerPort] = $peer !== '' ? $this->splitAddr($peer) : ['', 0];
 
+        // Operator manual block: drop the whole connection for a blocked source (catches an IP blocked
+        // mid-session, and never sends the malformed-input 400 below). Zero further bytes.
+        if ($this->block !== null && $this->block->isBlocked($peerIp)) {
+            @fclose($sock);
+            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id], $this->tcpPeers[$id]);
+
+            return;
+        }
+
         // Drain every complete SIP message in the buffer. One read can carry a partial message (wait
         // for the rest) or several pipelined ones; consume exactly each framed message and keep the
         // remainder buffered, so a body split across reads is never parsed truncated.
@@ -407,6 +431,13 @@ final class SipServer
         $this->currentReq = $req;
         $this->currentTransport = $transport;
         $this->currentPeerPort = $peerPort;
+
+        // Operator manual block: a blocked source gets ZERO bytes for ANY method — no session, no
+        // response, no bucket churn, no log. Silent drop = reflection-safe on UDP. Checked before the
+        // flood throttle (which only covers some methods and mutates bucket state we must not touch here).
+        if ($this->block !== null && $this->block->isBlocked($peerIp)) {
+            return;
+        }
 
         // Per-source flood throttle: a sustained INVITE/REGISTER/OPTIONS/MESSAGE flood from one apparent
         // source is dropped here, before any session is built or byte emitted (silent drop = reflection-

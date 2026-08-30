@@ -17,6 +17,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Protocol\Listener;
@@ -90,6 +91,10 @@ $abuse = ($config->abuseIpdbReport && $config->abuseIpdbKey !== '')
 $threatIntel = ($config->threatIntelReport && $config->threatIntelKey !== '')
     ? new ThreatIntelReporter($config->threatIntelUrl, $config->threatIntelKey, $config->intelDbPath, $config->selfIps, $config->threatIntelDailyCap, $config->threatIntelDedupHours)
     : null;
+// Operator manual blocklist — read here so every protocol listener drops a blocked source before any
+// session/response (silent, reflection-safe). Long-lived loop → the helper caches + reloads periodically,
+// so per-packet cost is O(1). Same intel.sqlite the dashboard writes; always active.
+$operatorBlock = new OperatorBlocklist($config->intelDbPath);
 $port = (int) substr($bind, (int) strrpos($bind, ':') + 1);
 $categories = AbuseIpdb::categoriesForProtocol($protocol);
 
@@ -138,7 +143,7 @@ if ($protocol === 'vnc') {
 // dialed numbers, and streams multi-persona audio tarpits (Lenny, Daisy, Dave, IVR, Fax).
 if ($protocol === 'sip') {
     $sipConfig = SipConfig::fromEnv();
-    (new SipServer($sipConfig, $log))->listen($bind);
+    (new SipServer($sipConfig, $log, null, null, null, $operatorBlock))->listen($bind);
     exit(0);
 }
 
@@ -293,4 +298,4 @@ if ($emulator === null) {
     exit(2);
 }
 
-(new Listener($emulator, $protocol, $log))->run($bind);
+(new Listener($emulator, $protocol, $log, $operatorBlock))->run($bind);
