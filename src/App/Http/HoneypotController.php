@@ -174,6 +174,10 @@ final class HoneypotController
             poweredBy: $this->config->poweredBy,
             exclude: $policy->disabledIds(),
             nucleiReflection: $policy->nucleiEnabled(),
+            // NOTE: isolatedOrigin (FP-0159) is intentionally NOT passed while prod runs core v0.4.0,
+            // which has no such Config param — the named arg fatals there and dark-404s the whole engine.
+            // Re-add `isolatedOrigin: true` once the core release (FP-0194, v0.6.1) lands and the app is
+            // updated to it. The standalone box wants reflecting decoys ON, which is v0.4.0's default anyway.
         ));
 
         $detection = $funnypot->detect($context);
