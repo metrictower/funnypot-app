@@ -202,13 +202,15 @@ final class VncServer
 
     private function accept($server, array &$conns, array &$perIp, int $port, int $now): void
     {
-        $sock = @stream_socket_accept($server, 0);
+        $sock = @stream_socket_accept($server, 0, $peer);
         if ($sock === false) {
             return;
         }
         stream_set_blocking($sock, false);
 
-        $name = (string) @stream_socket_get_name($sock, true);
+        // Attribution source: the peer captured at accept, not a later stream_socket_get_name() on
+        // the non-blocking socket — that can resolve to nothing and collapse the source IP.
+        $name = (string) $peer;
         $ip = ($colon = strrpos($name, ':')) !== false ? substr($name, 0, $colon) : $name;
         $clientPort = ($colon !== false) ? (int) substr($name, $colon + 1) : 0;
 

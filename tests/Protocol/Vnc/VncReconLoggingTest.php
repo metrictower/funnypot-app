@@ -121,6 +121,53 @@ final class VncReconLoggingTest extends TestCase
         self::assertTrue($session->close);
     }
 
+    public function test_accept_captures_real_peer_from_accept_not_a_collapsed_source(): void
+    {
+        $this->events = [];
+        $config = new VncConfig(style: 'realistic', width: 400, height: 300);
+        $server = new VncServer($config, function (array $e): void {
+            $this->events[] = $e;
+        });
+
+        $listen = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        self::assertIsResource($listen, "listen: {$errstr} ({$errno})");
+        $listenAddr = (string) stream_socket_get_name($listen, false);
+        $client = @stream_socket_client('tcp://' . $listenAddr, $errno, $errstr, 1);
+        self::assertIsResource($client, "client: {$errstr} ({$errno})");
+
+        $clientAddr = (string) stream_socket_get_name($client, false);
+        $clientPort = (int) substr($clientAddr, strrpos($clientAddr, ':') + 1);
+
+        $accept = new \ReflectionMethod($server, 'accept');
+        $accept->setAccessible(true);
+
+        // Drive the accept until the connection lands (loopback connect is prompt, but retry to be safe).
+        $conns = [];
+        $perIp = [];
+        for ($i = 0; $i < 100 && $this->eventOfType('connect') === null; $i++) {
+            $args = [$listen, &$conns, &$perIp, 5900, time()];
+            $accept->invokeArgs($server, $args);
+            if ($this->eventOfType('connect') === null) {
+                usleep(1000);
+            }
+        }
+
+        $connect = $this->eventOfType('connect');
+        self::assertNotNull($connect, 'accept must log a connect event');
+        self::assertSame('127.0.0.1', $connect['ip']);
+        // The accept-time peer carries the real ephemeral client port — not a collapsed 0/placeholder.
+        self::assertGreaterThan(0, $clientPort);
+        self::assertStringContainsString("127.0.0.1:{$clientPort}", $connect['path']);
+        // Every VNC event carries a UTC ISO-8601 timestamp for the dashboard.
+        self::assertArrayHasKey('ts', $connect);
+
+        foreach ($conns as $c) {
+            @fclose($c['sock']);
+        }
+        @fclose($client);
+        @fclose($listen);
+    }
+
     /**
      * @return array<string,mixed>|null
      */

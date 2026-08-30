@@ -166,4 +166,103 @@ final class SipTelemetryTest extends TestCase
         // sustained flood from one source is capped near the burst — never unbounded reflection.
         $this->assertSame((int) $burst, $granted);
     }
+
+    public function test_tcp_source_ip_comes_from_accept_time_peer_not_a_fabricated_loopback(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        // A connected pair stands in for an accepted TCP client; the server reads the request from
+        // its end. The real peer is captured at accept, so seed it as handleTcpAccept would.
+        [$client, $sock] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+        stream_set_blocking($client, false);
+        stream_set_blocking($sock, false);
+        $this->seedTcpConn($server, (int) $sock, '203.0.113.7:41000');
+
+        $raw = "OPTIONS sip:target SIP/2.0\r\n"
+            . "Via: SIP/2.0/TCP 203.0.113.7:41000;branch=z9hG4bK-x\r\n"
+            . "Call-ID: tcp-attrib\r\nCSeq: 1 OPTIONS\r\n\r\n";
+        fwrite($client, $raw);
+
+        $handle = new \ReflectionMethod($server, 'handleInboundTcp');
+        $handle->setAccessible(true);
+        $handle->invoke($server, $sock);
+
+        $ev = end($logged);
+        $this->assertSame('203.0.113.7', $ev['ip']);
+        $this->assertNotSame('127.0.0.1', $ev['ip']);
+
+        fclose($client);
+        fclose($sock);
+    }
+
+    public function test_tcp_unresolvable_peer_is_not_fabricated_and_not_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        [$client, $sock] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+        stream_set_blocking($client, false);
+        stream_set_blocking($sock, false);
+        // Peer resolution failed at accept: empty stored peer must never become a fabricated loopback.
+        $this->seedTcpConn($server, (int) $sock, '');
+
+        $raw = "OPTIONS sip:target SIP/2.0\r\n"
+            . "Via: SIP/2.0/TCP 9.9.9.9:5060;branch=z9hG4bK-x\r\n"
+            . "Call-ID: tcp-unknown\r\nCSeq: 1 OPTIONS\r\n\r\n";
+        fwrite($client, $raw);
+
+        $handle = new \ReflectionMethod($server, 'handleInboundTcp');
+        $handle->setAccessible(true);
+        $handle->invoke($server, $sock);
+
+        $ev = end($logged);
+        $this->assertNotSame('127.0.0.1', $ev['ip']);
+        $this->assertNotSame('127.0.0.1:5060', $ev['ip'] . ':' . $ev['port']);
+        $this->assertSame('', $ev['ip']);
+        // An OPTIONS probe over TCP is normally reportable; a placeholder source suppresses that.
+        $this->assertFalse($ev['reportable']);
+
+        fclose($client);
+        fclose($sock);
+    }
+
+    public function test_every_sip_event_carries_an_iso8601_timestamp(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $raw = "OPTIONS sip:target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-x\r\n"
+            . "Call-ID: ts-1\r\nCSeq: 1 OPTIONS\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+
+        $ev = end($logged);
+        $this->assertArrayHasKey('ts', $ev);
+        $this->assertMatchesRegularExpression(
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/',
+            $ev['ts']
+        );
+    }
+
+    /**
+     * Seed the per-connection TCP state handleTcpAccept would set, so handleInboundTcp can be driven
+     * directly with a chosen accept-time peer.
+     */
+    private function seedTcpConn(SipServer $server, int $id, string $peerAddr): void
+    {
+        foreach (['tcpClients' => null, 'tcpBuffers' => '', 'tcpLastActivity' => microtime(true), 'tcpPeers' => $peerAddr] as $prop => $val) {
+            $ref = new \ReflectionProperty($server, $prop);
+            $ref->setAccessible(true);
+            $map = $ref->getValue($server);
+            $map[$id] = $val;
+            $ref->setValue($server, $map);
+        }
+    }
 }

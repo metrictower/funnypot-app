@@ -25,6 +25,14 @@ final class SipServer
     /** @var array<int, float> TCP client socket resource id => last activity time (idle-close). */
     private array $tcpLastActivity = [];
 
+    /**
+     * TCP client socket resource id => accept-time peer address ("ip:port"). Captured at accept
+     * because a later stream_socket_get_name() on a non-blocking accepted socket is unreliable and
+     * can resolve to nothing — the source IP must come from accept, never a fabricated fallback.
+     * @var array<int, string>
+     */
+    private array $tcpPeers = [];
+
     /** Ceilings that stop a TCP flood / slowloris from exhausting fds or memory. */
     private const MAX_TCP_CLIENTS = 128;
     private const MAX_TCP_BUFFER = 16384;
@@ -118,6 +126,7 @@ final class SipServer
         }
         $this->tcpClients = [];
         $this->tcpBuffers = [];
+        $this->tcpPeers = [];
     }
 
     /**
@@ -303,6 +312,8 @@ final class SipServer
             $this->tcpClients[$id] = $client;
             $this->tcpBuffers[$id] = '';
             $this->tcpLastActivity[$id] = microtime(true);
+            // Attribution source: the accepted socket's real peer, captured now while it is reliable.
+            $this->tcpPeers[$id] = is_string($peerAddr) ? $peerAddr : '';
         }
     }
 
@@ -315,7 +326,7 @@ final class SipServer
         $chunk = @fread($sock, 8192);
         if ($chunk === false || $chunk === '') {
             @fclose($sock);
-            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
+            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id], $this->tcpPeers[$id]);
 
             return;
         }
@@ -327,13 +338,16 @@ final class SipServer
         // than buffered without bound.
         if (strlen($this->tcpBuffers[$id]) > self::MAX_TCP_BUFFER) {
             @fclose($sock);
-            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
+            unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id], $this->tcpPeers[$id]);
 
             return;
         }
 
-        $name = stream_socket_get_name($sock, true);
-        [$peerIp, $peerPort] = $name ? $this->splitAddr($name) : ['127.0.0.1', 5060];
+        // Source IP from the accept-time capture, never a fabricated loopback. An unresolvable peer
+        // stays empty (never 127.0.0.1:5060) so it is logged as unknown and suppressed from reports
+        // by logEvent's reportable guard — reporting a placeholder would blame an innocent/local IP.
+        $peer = $this->tcpPeers[$id] ?? '';
+        [$peerIp, $peerPort] = $peer !== '' ? $this->splitAddr($peer) : ['', 0];
 
         // Drain every complete SIP message in the buffer. One read can carry a partial message (wait
         // for the rest) or several pipelined ones; consume exactly each framed message and keep the
@@ -1344,7 +1358,7 @@ final class SipServer
                 if (isset($this->tcpClients[$id])) {
                     @fclose($this->tcpClients[$id]);
                 }
-                unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id]);
+                unset($this->tcpClients[$id], $this->tcpBuffers[$id], $this->tcpLastActivity[$id], $this->tcpPeers[$id]);
             }
         }
 
@@ -1540,6 +1554,10 @@ final class SipServer
 
     private function logEvent(array $event): void
     {
+        // UTC ISO-8601 timestamp on every event, matching the other emulators' envelope so the
+        // dashboard can render a time for SIP hits.
+        $event['ts'] = gmdate('c');
+
         // Enrich every per-message event with attacker attribution + transport tells, unless the
         // caller already set them (session-derived events like call_end / dtmf carry their own).
         if ($this->currentReq !== null) {
@@ -1554,9 +1572,28 @@ final class SipServer
             }
         }
 
+        // Never report a placeholder source. An empty/loopback IP means peer resolution failed;
+        // reporting it would attribute the attack to an innocent or local address.
+        if (($event['reportable'] ?? false) && !$this->isReportableIp((string) ($event['ip'] ?? ''))) {
+            $event['reportable'] = false;
+        }
+
         if ($this->logger) {
             ($this->logger)($event);
         }
+    }
+
+    /**
+     * Whether a source IP is safe to report. An empty/placeholder/loopback address means peer
+     * resolution failed, so it must never reach the reporter.
+     */
+    private function isReportableIp(string $ip): bool
+    {
+        if ($ip === '' || strtolower($ip) === 'unknown') {
+            return false;
+        }
+
+        return $ip !== '::1' && strncmp($ip, '127.', 4) !== 0;
     }
 
     public function getActiveSessionCount(): int
