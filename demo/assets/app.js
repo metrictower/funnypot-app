@@ -1,6 +1,11 @@
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const $=id=>document.getElementById(id);
-let cursor=0, older=0, started=false, filter='';
+let cursor=0, older=0, started=false, filter='', scannersOnly=false;
+// Classified reconnaissance tools (scanners / wardialers) — mirrors SipServer::classifyTool. These are
+// the high-intel probes: we lure them in and want them to STAND OUT on the dashboard. Softphones and
+// PBX relays are deliberately excluded (they are not scanners).
+const SCANNERS=new Set(['sipvicious','sipcli','sip-scan','pplsip-scanner','vaxsip-masscaller','sipsak','warvox','iwar-wardialer','sundayddr-wardialer','sipp']);
+const isScanner=r=>!!(r&&r.tool&&SCANNERS.has(r.tool));
 let serverFilter={};  // active quick-view (e.g. {method:'SSH',event:'command'}); sent to the feed
 const fq=()=>Object.entries(serverFilter).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
 const BASE=(typeof window!=='undefined'&&window.FP_BASE)||'/';  // feed/admin live here (/ public, hidden path in stealth)
@@ -21,7 +26,11 @@ function plot(r){
 }
 function applyFilter(){
   const q=(filter||'').toLowerCase();
-  document.querySelectorAll('#rows tr').forEach(tr=>tr.classList.toggle('hide', q!=='' && !(tr.dataset.ip||'').toLowerCase().includes(q) && !(tr.textContent||'').toLowerCase().includes(q)));
+  document.querySelectorAll('#rows tr').forEach(tr=>{
+    const textFail=q!=='' && !(tr.dataset.ip||'').toLowerCase().includes(q) && !(tr.textContent||'').toLowerCase().includes(q);
+    const scanFail=scannersOnly && !SCANNERS.has(tr.dataset.tool||'');
+    tr.classList.toggle('hide', textFail||scanFail);
+  });
 }
 // Which layer answered this hit, derived from the served template ids / event. Precedence order
 // (nuclei-exact > CRS-class > custom attack > LLM) is mirrored here so the label names what served.
@@ -40,13 +49,15 @@ function detectSource(r){
   return '';
 }
 function rowEl(r){
-  const tr=document.createElement('tr');tr.dataset.ip=r.ip||'';
+  const scanner=isScanner(r);
+  const tr=document.createElement('tr');tr.dataset.ip=r.ip||'';tr.dataset.tool=(r.tool||'');
+  if(scanner)tr.classList.add('scanner-row');
   const badge=r.matched?`<span class="badge scan">SCAN ${esc((r.severity||'').toUpperCase())}</span>`:'<span class="badge miss">404</span>';
   const src=detectSource(r);
   const srcBadge=src?` <span class="badge src src-${src.toLowerCase()}" title="which layer produced the response">${src}</span>`:'';
   const toolName=r.tool||(r.ua?(r.ua.length>22?r.ua.substr(0,21)+'…':r.ua):'');
-  const toolTitle=r.ua?('User-Agent: '+r.ua):(r.tool?('Tool: '+r.tool):'');
-  const toolBadge=toolName?` <span class="badge tool" title="${esc(toolTitle)}">${esc(toolName)}</span>`:'';
+  const toolTitle=scanner?('Reconnaissance tool (lured + captured): '+r.tool):(r.ua?('User-Agent: '+r.ua):(r.tool?('Tool: '+r.tool):''));
+  const toolBadge=toolName?` <span class="badge tool${scanner?' tool-scan':''}" title="${esc(toolTitle)}">${scanner?'&#128269; ':''}${esc(toolName)}</span>`:'';
   const ids=(r.templates&&r.templates.length)?`<div class="ids">${esc(r.templates.join(', '))}</div>`:'';
   const bodyLabel=r.event==='llm-fake'?'response':'payload';
   const payload=r.body?`<div class="payload"><b>${bodyLabel}:</b> ${esc(r.body)}</div>`:'';
@@ -192,6 +203,9 @@ $('bclose').onclick=()=>{$('bmodal').hidden=true;};
 $('badd').onclick=async()=>{const ip=($('bip').value||'').trim();if(!ip)return;const j=await adminReq('block-ip','ip='+encodeURIComponent(ip));if(j&&j.ok){$('bip').value='';openBlocked();}else alert('block failed');};
 $('lsearch').oninput=e=>{const q=e.target.value.toLowerCase();$('llist').querySelectorAll('.vrow').forEach(r=>{r.style.display=r.textContent.toLowerCase().includes(q)?'':'none';});};
 $('filter').oninput=e=>{filter=e.target.value.trim();applyFilter();};
+// Scanners toggle (client-side): show only classified recon-tool rows among what's loaded. Distinct from
+// the server-side quick-views because "is a scanner" is a set membership, not one exact field value.
+if($('qscan'))$('qscan').onclick=()=>{scannersOnly=!scannersOnly;$('qscan').classList.toggle('on',scannersOnly);applyFilter();};
 // Quick views: each button carries a filter object in data-f; clicking one reloads the feed
 // narrowed server-side (e.g. "SSH commands" = method=SSH + event=command).
 function setView(btn){

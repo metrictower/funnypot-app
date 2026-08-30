@@ -52,6 +52,10 @@ td.path{word-break:break-all;max-width:340px}
 .src-sip{background:rgba(160,80,255,.16);color:#b070ff;border:1px solid rgba(160,80,255,.45)}
 .badge.tool{background:rgba(56,189,248,.12);color:#38bdf8;border:1px solid rgba(56,189,248,.35);font-size:11px;font-weight:600;margin-left:6px;cursor:pointer}
 .badge.tool:hover{border-color:#38bdf8;background:rgba(56,189,248,.22)}
+.badge.tool.tool-scan{background:rgba(217,70,160,.16);color:#e879c9;border-color:rgba(217,70,160,.5);font-weight:700}
+.badge.tool.tool-scan:hover{border-color:#e879c9;background:rgba(217,70,160,.28)}
+tr.scanner-row td:first-child{box-shadow:inset 3px 0 0 #d946a0}
+.qscan{font-size:12px;padding:5px 11px}.qscan.on{border-color:#d946a0;color:#e879c9}
 .ids{color:var(--muted);font-size:12px}
 tr.flash{animation:flash 1.4s ease-out}
 @keyframes flash{from{background:rgba(240,180,0,.28)}to{background:transparent}}
