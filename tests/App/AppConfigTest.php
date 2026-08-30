@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\Core\Support\PersonaIdentity;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -20,6 +21,7 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
         'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN', 'FUNNYPOT_CAPTURE_RAW',
+        'FUNNYPOT_PERSONA_SEED', 'FUNNYPOT_PERSONA_SECRET', 'FUNNYPOT_POWERED_BY',
     ];
 
     protected function setUp(): void
@@ -52,6 +54,30 @@ final class AppConfigTest extends TestCase
 
         self::assertSame('/ops-console', $c->funnypotPath);
         self::assertTrue($c->hideMainPage);
+    }
+
+    public function test_powered_by_defaults_to_the_persona_php_version(): void
+    {
+        // The X-Powered-By header and /phpinfo.php must advertise the same PHP version. Both derive from
+        // the ONE per-deploy source, PersonaIdentity::productVersion('php'), so with no override they agree.
+        foreach (['funnypot', 'acme-secret-42', 'seed-xyz'] as $material) {
+            putenv('FUNNYPOT_PERSONA_SEED=' . $material);
+            $c = AppConfig::fromEnv('/app/demo');
+
+            $seed = PersonaIdentity::seedFromMaterial($material);
+            $expected = 'PHP/' . PersonaIdentity::fromSeed($seed)->productVersion('php');
+            self::assertSame($expected, $c->poweredBy, "X-Powered-By must match the persona PHP version for '{$material}'");
+            self::assertMatchesRegularExpression('#^PHP/\d+\.\d+\.\d+$#', $c->poweredBy);
+        }
+    }
+
+    public function test_powered_by_env_still_overrides_the_persona_default(): void
+    {
+        putenv('FUNNYPOT_PERSONA_SEED=funnypot');
+        putenv('FUNNYPOT_POWERED_BY=Apache/2.4.58');
+        $c = AppConfig::fromEnv('/app/demo');
+
+        self::assertSame('Apache/2.4.58', $c->poweredBy);
     }
 
     public function test_raw_capture_is_off_by_default_and_opt_in(): void

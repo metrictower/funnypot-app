@@ -160,6 +160,13 @@ final class AppConfig
         // so the two tiers present one coherent identity.
         $personaMaterial = $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'));
 
+        // Derive the persona once so the seed and the PHP version below share it. X-Powered-By defaults to
+        // the SAME PHP version /phpinfo.php shows (PersonaIdentity::productVersion('php')), so the live
+        // header and the phpinfo page never advertise two different PHP versions — a coherence tell.
+        // FUNNYPOT_POWERED_BY still overrides.
+        $personaSeed = PersonaIdentity::seedFromMaterial($personaMaterial);
+        $defaultPoweredBy = 'PHP/' . PersonaIdentity::fromSeed($personaSeed)->productVersion('php');
+
         return new self(
             mode: getenv('FUNNYPOT_MODE') === 'stealth' ? 'stealth' : 'public',
             style: $str('FUNNYPOT_STYLE', 'realistic'),
@@ -167,7 +174,7 @@ final class AppConfig
             logPath: $str('FUNNYPOT_LOG', $store . '/hits.log'),
             geoDbPath: $str('FUNNYPOT_GEO_DB', $store . '/dbip-country.csv.gz'),
             vulnsPath: $str('FUNNYPOT_VULNS', $store . '/funnypot-vulns.json'),
-            poweredBy: $str('FUNNYPOT_POWERED_BY', 'PHP/8.1.27'),
+            poweredBy: $str('FUNNYPOT_POWERED_BY', $defaultPoweredBy),
             honeytokenKey: $str('FUNNYPOT_HONEYTOKEN_KEY', ''),
             severityCeiling: $str('FUNNYPOT_CEILING', 'critical'),
             latencyMs: (int) ($str('FUNNYPOT_LATENCY_MS', '0')),
@@ -227,7 +234,7 @@ final class AppConfig
             // to a fixed default (set it for a unique per-host identity). seedFromMaterial is the
             // canonical derivation shared with the core template tier, so both resolve the SAME
             // PersonaIdentity for one deployment.
-            personaSeed: PersonaIdentity::seedFromMaterial($personaMaterial),
+            personaSeed: $personaSeed,
             personaMaterial: $personaMaterial,
             // Endless-download bait: on unless explicitly "0". Throttle knobs clamped to sane bounds so
             // a bad env value can't produce a firehose (instant tell + fills disk) or a dead stall.
