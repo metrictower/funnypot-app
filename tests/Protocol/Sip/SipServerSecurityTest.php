@@ -87,6 +87,103 @@ final class SipServerSecurityTest extends TestCase
         $this->assertSame('call_rejected', end($logged)['event']);
     }
 
+    /** @return callable(string,string):SipMessage */
+    private function inviteMaker(): callable
+    {
+        return static function (string $id, string $fromIp): SipMessage {
+            $raw = "INVITE sip:100@target SIP/2.0\r\n"
+                . "Via: SIP/2.0/UDP {$fromIp}:5060;branch=z9hG4bK-{$id}\r\n"
+                . "From: <sip:caller@{$fromIp}>;tag=tag-{$id}\r\n"
+                . "To: <sip:100@target>\r\n"
+                . "Call-ID: call-{$id}\r\n"
+                . "CSeq: 1 INVITE\r\n"
+                . "Content-Length: 0\r\n\r\n";
+
+            return SipMessage::parse($raw);
+        };
+    }
+
+    public function test_flood_throttle_drops_and_rolls_up_after_the_burst(): void
+    {
+        $logged = [];
+        // High concurrency ceilings so the ONLY limiter under test is the call-admission throttle.
+        // burst 5, no refill during the test -> deterministic: first 5 admitted, the rest dropped.
+        $cfg = new SipConfig(rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000, callBurst: 5.0, callRatePerSec: 0.0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $makeInvite = $this->inviteMaker();
+
+        for ($i = 1; $i <= 8; $i++) {
+            $server->dispatchMessage($makeInvite("flood-{$i}", '203.0.113.9'), '203.0.113.9', 5060, 'udp');
+        }
+
+        $calls = array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call');
+        $floods = array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_flood');
+
+        self::assertCount(5, $calls, 'exactly the first burst (5) of INVITEs are admitted + logged as calls');
+        self::assertNotEmpty($floods, 'the flood beyond the burst emits a rollup event');
+        // Rollup is collapsed, not one-per-drop: 3 drops within the window produce a single rollup row.
+        self::assertLessThanOrEqual(1, count($floods), 'drops within the window collapse to one rollup');
+        $flood = array_values($floods)[0];
+        self::assertFalse($flood['reportable'], 'a throttled flood is never reportable (spoofable pre-ACK source)');
+        self::assertStringContainsString('203.0.113.9', (string) $flood['path']);
+        self::assertSame(5, $server->getActiveSessionCount(), 'only the admitted 5 became sessions');
+    }
+
+    public function test_flood_throttle_auto_recovers_after_the_source_slows(): void
+    {
+        // burst 1, fast refill (100/s -> a token every 10ms). Drain, then a short pause refills a token
+        // so the source is admitted again — proving the throttle is adaptive, not a permanent block.
+        $logged = [];
+        $cfg = new SipConfig(rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000, callBurst: 1.0, callRatePerSec: 100.0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $makeInvite = $this->inviteMaker();
+
+        $server->dispatchMessage($makeInvite('r-1', '198.51.100.7'), '198.51.100.7', 5060, 'udp'); // admit (drains)
+        $server->dispatchMessage($makeInvite('r-2', '198.51.100.7'), '198.51.100.7', 5060, 'udp'); // drop
+        self::assertSame('call', $logged[0]['event'] ?? '');
+        self::assertSame('call_flood', end($logged)['event'] ?? '', 'second call drained the bucket and was dropped');
+
+        usleep(40000); // 40ms -> ~4 tokens refilled at 100/s
+
+        $server->dispatchMessage($makeInvite('r-3', '198.51.100.7'), '198.51.100.7', 5060, 'udp'); // admit again
+        self::assertSame('call', end($logged)['event'] ?? '', 'the source is re-admitted once its bucket refills');
+    }
+
+    public function test_flood_throttle_is_per_source_and_disablable(): void
+    {
+        // A second source is unaffected by the first's flood (per-apparent-source keying).
+        $logged = [];
+        $cfg = new SipConfig(rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000, callBurst: 3.0, callRatePerSec: 0.0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $makeInvite = $this->inviteMaker();
+
+        for ($i = 1; $i <= 6; $i++) {
+            $server->dispatchMessage($makeInvite("a-{$i}", '10.9.9.9'), '10.9.9.9', 5060, 'udp'); // floods
+        }
+        $server->dispatchMessage($makeInvite('b-1', '10.8.8.8'), '10.8.8.8', 5060, 'udp'); // fresh source
+        self::assertSame('call', end($logged)['event'], 'a different source is not throttled by the flooder');
+
+        // callBurst <= 0 disables the throttle entirely: every request is admitted.
+        $logged2 = [];
+        $cfgOff = new SipConfig(rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000, callBurst: 0.0);
+        $serverOff = new SipServer($cfgOff, static function (array $e) use (&$logged2): void {
+            $logged2[] = $e;
+        });
+        for ($i = 1; $i <= 20; $i++) {
+            $serverOff->dispatchMessage($makeInvite("off-{$i}", '10.7.7.7'), '10.7.7.7', 5060, 'udp');
+        }
+        $calls = array_filter($logged2, static fn (array $e): bool => ($e['event'] ?? '') === 'call');
+        $floods = array_filter($logged2, static fn (array $e): bool => ($e['event'] ?? '') === 'call_flood');
+        self::assertCount(20, $calls, 'throttle disabled -> all 20 admitted');
+        self::assertEmpty($floods, 'throttle disabled -> no flood rollups');
+    }
+
     public function test_b2_anti_spoofing_abuse_reporting_suppression(): void
     {
         $logged = [];

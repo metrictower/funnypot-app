@@ -78,6 +78,17 @@ final class SipConfig
          *  the SIP directory and those panels describe one company. Private per-deploy value. */
         public int $personaSeed = 0,
         public string $personaDomain = '',
+        /**
+         * Per-source-IP call-admission throttle (adaptive, token-bucket). A flood of INVITE/REGISTER/
+         * OPTIONS from one apparent source is silently dropped once its bucket drains — no session, no
+         * response bytes (reflection-safe over UDP), and per-call logging collapses to a periodic
+         * rollup. $callBurst is how many requests an IP may make before throttling engages (bucket
+         * capacity); $callRatePerSec is the sustained refill (0.5 = ~30/min). Set $callBurst <= 0 to
+         * disable the throttle entirely. Auto-recovers when the source slows, so a spoofed victim is
+         * never permanently blocked.
+         */
+        public float $callBurst = 30.0,
+        public float $callRatePerSec = 0.5,
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -243,6 +254,11 @@ final class SipConfig
         $maxCalls = (int) (getenv('FUNNYPOT_SIP_MAX_CALLS') ?: '10');
         $perIp = (int) (getenv('FUNNYPOT_SIP_PER_IP_CALLS') ?: '5');
         $maxDuration = (int) (getenv('FUNNYPOT_SIP_MAX_DURATION') ?: '300');
+        // Call-admission throttle: burst before throttling, sustained refill per second. Empty = default.
+        $callBurstRaw = getenv('FUNNYPOT_SIP_CALLS_BURST');
+        $callBurst = ($callBurstRaw !== false && $callBurstRaw !== '') ? (float) $callBurstRaw : 30.0;
+        $callRateRaw = getenv('FUNNYPOT_SIP_CALLS_PER_SEC');
+        $callRate = ($callRateRaw !== false && $callRateRaw !== '') ? (float) $callRateRaw : 0.5;
         $idleTimeout = (int) (getenv('FUNNYPOT_SIP_IDLE_TIMEOUT') ?: '30');
         $rtpPort = (int) (getenv('FUNNYPOT_SIP_RTP_PORT') ?: '10000');
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
@@ -311,6 +327,8 @@ final class SipConfig
             extensionMode: $extensionMode,
             personaSeed: $personaSeed,
             personaDomain: $personaDomain,
+            callBurst: max(0.0, $callBurst),
+            callRatePerSec: max(0.0, $callRate),
         );
     }
 }

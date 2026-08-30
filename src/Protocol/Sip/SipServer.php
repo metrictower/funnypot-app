@@ -66,6 +66,30 @@ final class SipServer
     private const UDP_RESP_RATE = 10.0;    // tokens refilled per second
     private const UDP_BUCKET_MAX_IPS = 4096; // cap tracked IPs so the map can't grow unbounded
 
+    /**
+     * Per-apparent-source call-admission throttle. F4 (above) meters the RESPONSE bytes we emit; this
+     * meters the REQUESTS we even process. A sustained INVITE/REGISTER/OPTIONS flood from one source
+     * drains its bucket, after which the request is dropped before a session is built, a byte is sent,
+     * or a per-call row is written — the flood then costs one parse and a bucket check. Capacity +
+     * refill come from SipConfig (callBurst / callRatePerSec); disabled when callBurst <= 0.
+     * @var array<string, array{tokens: float, last: float}>
+     */
+    private array $callBuckets = [];
+
+    /**
+     * Rollup state for suppressed (dropped) flood requests, per apparent source: the running count, the
+     * time of the first drop in the current burst, and when we last emitted a rollup event — so a flood
+     * of thousands becomes ~one 'call_flood' row per minute instead of one row per call.
+     * @var array<string, array{count: int, since: string, lastLog: float}>
+     */
+    private array $floodState = [];
+    private const FLOOD_ROLLUP_SECS = 60.0; // emit at most one flood rollup per source per this window
+    private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (both maps) so they can't grow unbounded
+
+    /** SIP methods that initiate work / draw an unsolicited response and so are worth flood-throttling.
+     *  In-dialog follow-ups (ACK/BYE/CANCEL/INFO) are left alone so an admitted call still tears down. */
+    private const THROTTLED_METHODS = ['INVITE', 'REGISTER', 'OPTIONS', 'MESSAGE'];
+
     /** The request currently being dispatched, so logEvent can attach attacker attribution. */
     private ?SipMessage $currentReq = null;
     private string $currentTransport = 'udp';
@@ -383,6 +407,17 @@ final class SipServer
         $this->currentReq = $req;
         $this->currentTransport = $transport;
         $this->currentPeerPort = $peerPort;
+
+        // Per-source flood throttle: a sustained INVITE/REGISTER/OPTIONS/MESSAGE flood from one apparent
+        // source is dropped here, before any session is built or byte emitted (silent drop = reflection-
+        // safe on UDP), with its per-call logging collapsed to a periodic rollup. Auto-recovers when the
+        // source slows. ACK/BYE/CANCEL/INFO are exempt so an already-admitted call still tears down; a
+        // re-INVITE from a drained source is throttled like any INVITE (a flood has no legitimate ones).
+        if (in_array($req->method, self::THROTTLED_METHODS, true) && !$this->admitRequest($peerIp)) {
+            $this->recordFloodDrop($peerIp, $req->method);
+
+            return;
+        }
 
         switch ($req->method) {
             case 'OPTIONS':
@@ -1174,6 +1209,113 @@ final class SipServer
         $bucket['tokens'] -= 1.0;
 
         return true;
+    }
+
+    /**
+     * Call-admission token bucket for an apparent source $ip. Returns false when the source has drained
+     * its bucket (a sustained flood), so the request is dropped before any session/response/log. Capacity
+     * and refill come from SipConfig; callBurst <= 0 disables the throttle (always admit). Mirrors the F4
+     * response bucket, keyed the same way (apparent source), and bounds the tracked-IP map.
+     */
+    private function admitRequest(string $ip): bool
+    {
+        $burst = $this->config->callBurst;
+        if ($burst <= 0.0) {
+            return true; // throttle disabled
+        }
+        $rate = $this->config->callRatePerSec;
+        $now = microtime(true);
+
+        if (!isset($this->callBuckets[$ip])) {
+            if (count($this->callBuckets) >= self::CALL_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->callBuckets as $k => $b) {
+                    if ($b['last'] < $oldestAt) {
+                        $oldestAt = $b['last'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->callBuckets[$oldestKey]);
+                }
+            }
+            $this->callBuckets[$ip] = ['tokens' => $burst, 'last' => $now];
+        }
+
+        $bucket = &$this->callBuckets[$ip];
+        $elapsed = max(0.0, $now - $bucket['last']);
+        $bucket['tokens'] = min($burst, $bucket['tokens'] + $elapsed * $rate);
+        $bucket['last'] = $now;
+
+        // Fully refilled -> the source has been quiet long enough to have recovered; drop any flood
+        // rollup state so a later flood is reported as a fresh incident rather than continuing the count.
+        if ($bucket['tokens'] >= $burst) {
+            unset($this->floodState[$ip]);
+        }
+
+        if ($bucket['tokens'] < 1.0) {
+            return false;
+        }
+        $bucket['tokens'] -= 1.0;
+
+        return true;
+    }
+
+    /**
+     * Record one dropped (throttled) request for $ip and, at most once per FLOOD_ROLLUP_SECS, emit a
+     * single 'call_flood' rollup event carrying the running suppressed count — so a flood of thousands
+     * costs a handful of rows, not one per call, while the operator still sees the source and volume.
+     */
+    private function recordFloodDrop(string $ip, string $method): void
+    {
+        $now = microtime(true);
+
+        if (!isset($this->floodState[$ip])) {
+            if (count($this->floodState) >= self::CALL_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->floodState as $k => $s) {
+                    if ($s['lastLog'] < $oldestAt) {
+                        $oldestAt = $s['lastLog'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->floodState[$oldestKey]);
+                }
+            }
+            // First drop of a fresh flood: log it immediately so the incident's start is visible.
+            $this->floodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now];
+            $this->emitFloodRollup($ip, $method);
+
+            return;
+        }
+
+        $st = &$this->floodState[$ip];
+        $st['count']++;
+        if (($now - $st['lastLog']) >= self::FLOOD_ROLLUP_SECS) {
+            $st['lastLog'] = $now;
+            $this->emitFloodRollup($ip, $method);
+        }
+    }
+
+    /** Emit one throttle rollup event. Never reportable: a throttled flood is pre-ACK and, over UDP,
+     *  the source is unverifiable (possibly a spoofed victim) — reporting it would blame an innocent IP. */
+    private function emitFloodRollup(string $ip, string $method): void
+    {
+        $st = $this->floodState[$ip];
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'call_flood',
+            'ip' => $ip,
+            'port' => $this->currentPeerPort,
+            'path' => "SIP flood throttled: {$st['count']} {$method} request(s) dropped from {$ip} since {$st['since']}",
+            'matched' => 1,
+            'served' => 0,
+            'reportable' => false,
+        ]);
     }
 
     private function sessionKey(string $callId, string $peerIp, int $peerPort): string
