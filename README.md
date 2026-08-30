@@ -80,6 +80,14 @@ any uncommitted change would otherwise ship to prod silently (that is how an eng
 dark-404'd the whole deception). Commit or stash first; a clean tree guarantees the image equals the
 committed ref. Override for a deliberate throwaway build with `FUNNYPOT_ALLOW_DIRTY=1`.
 
+**Before every deploy, run the suite green** (`composer test`, or `php vendor/bin/phpunit`). Neither the
+unit run nor the Docker build ever executes the front controller, so a broken `demo/index.php` (a stale
+import, a boot fatal, a dead engine) would otherwise ship green and only surface on the first live
+request. Two guards in the suite catch that at build time: `FrontControllerImportsTest` (every `use`
+resolves) and `FrontControllerBootSmokeTest` (index.php actually boots a request under the built-in
+server and serves a fake without a 5xx or a leaked trace). The post-deploy `canary.sh` is the same
+availability check against the deployed container.
+
 > Point it only at your own infrastructure, and expose it on ports you control. It is a decoy for
 > scanners, not a service.
 
