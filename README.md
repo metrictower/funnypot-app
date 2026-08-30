@@ -75,6 +75,11 @@ the decoy/panel/attack surface on the live box and fails if any path 404s, so a 
 regression that silently dark-404s the whole deception is caught immediately (warn-by-default; set
 `FUNNYPOT_CANARY_STRICT=1` to abort the deploy on a miss). Run it standalone with `bash scripts/canary.sh`.
 
+`deploy.sh` builds the image from the working tree, so it first refuses to run against a **dirty tree** —
+any uncommitted change would otherwise ship to prod silently (that is how an engine change once
+dark-404'd the whole deception). Commit or stash first; a clean tree guarantees the image equals the
+committed ref. Override for a deliberate throwaway build with `FUNNYPOT_ALLOW_DIRTY=1`.
+
 > Point it only at your own infrastructure, and expose it on ports you control. It is a decoy for
 > scanners, not a service.
 

@@ -70,6 +70,46 @@ SSH_OPTS=(-i "$KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o Connec
 # demo/Dockerfile and open the matching inbound rules in the EC2 security group (the SG gates reachability).
 PORTS="21 23 25 79 80 81 88 102 110 143 389 443 445 502 554 591 873 1433 1521 1883 20000 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 3389 4243 4433 4443 5000 5060 5432 5555 5601 5900 5984 5985 6379 7001 7070 7080 7474 7547 7548 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9042 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
 
+# --- deploy only a clean, committed state ------------------------------------------------------
+# The build below packages the working tree, so ANY uncommitted change silently ships to prod. A
+# shared checkout worked by several sessions makes stray edits the norm, not the exception, and one
+# such uncommitted change (an engine Config opt-in the live core did not support) once dark-404'd the
+# whole HTTP deception. Refuse a dirty tree: when the tree is clean the built image IS the committed
+# ref (HEAD), so the deployed bytes are always something in git history. Override with
+# FUNNYPOT_ALLOW_DIRTY=1 for a deliberate throwaway/debug build.
+#
+# Fail CLOSED: this app repo is a checkout nested inside the umbrella funnypot-project repo, so a
+# `rev-parse` that walks up (e.g. if this repo's .git is missing) would find the ENCLOSING repo —
+# which gitignores the app dir — and wrongly report a clean tree. Only trust the check when the git
+# toplevel is physically THIS repo; otherwise we cannot verify, so require the explicit override.
+ALLOW_DIRTY="${FUNNYPOT_ALLOW_DIRTY:-0}"
+REPO_CANON="$(cd "$REPO_ROOT" && pwd -P)"
+GIT_TOP="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+GIT_TOP_CANON="$([ -n "$GIT_TOP" ] && cd "$GIT_TOP" 2>/dev/null && pwd -P || true)"
+if command -v git >/dev/null 2>&1 && [ -n "$GIT_TOP_CANON" ] && [ "$GIT_TOP_CANON" = "$REPO_CANON" ]; then
+    DIRTY="$(git -C "$REPO_ROOT" status --porcelain)"
+    if [ -n "$DIRTY" ]; then
+        if [ "$ALLOW_DIRTY" = "1" ]; then
+            echo "==> WARNING: working tree is dirty but FUNNYPOT_ALLOW_DIRTY=1 — shipping uncommitted changes:" >&2
+            printf '%s\n' "$DIRTY" | sed 's/^/      /' >&2
+        else
+            echo "error: refusing to deploy a dirty working tree — uncommitted changes would silently ship to prod." >&2
+            echo "       commit or stash these first, or set FUNNYPOT_ALLOW_DIRTY=1 to override:" >&2
+            printf '%s\n' "$DIRTY" | sed 's/^/      /' >&2
+            exit 1
+        fi
+    else
+        REF="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+        echo "==> deploy source: clean tree at $REF (image == committed ref)"
+    fi
+elif [ "$ALLOW_DIRTY" = "1" ]; then
+    echo "==> WARNING: cannot verify $REPO_ROOT is its own clean git checkout — proceeding on FUNNYPOT_ALLOW_DIRTY=1." >&2
+else
+    echo "error: $REPO_ROOT is not its own git checkout (no .git here, or git found an enclosing repo)." >&2
+    echo "       cannot verify a clean deploy state — set FUNNYPOT_ALLOW_DIRTY=1 to deploy anyway." >&2
+    exit 1
+fi
+
 echo "==> [1/4] build image locally ($PLATFORM)"
 docker build --platform "$PLATFORM" -f "$REPO_ROOT/demo/Dockerfile" -t funnypot "$REPO_ROOT"
 
