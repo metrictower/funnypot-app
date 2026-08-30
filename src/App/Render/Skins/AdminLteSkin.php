@@ -3,10 +3,12 @@ declare(strict_types=1);
 namespace Funnypot\App\Render\Skins;
 
 use Funnypot\Core\Support\Chrome\AbstractSkin;
+use Funnypot\App\Render\Fake\DeviceConsole;
 use Funnypot\App\Render\Fake\ServerProfile;
 use Funnypot\Core\Support\Chrome\PageSlots;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\Support\Chrome\PathSegments;
+use Funnypot\App\Render\Panel\DeviceConsoleSection;
 use Funnypot\App\Render\Panel\FakePersistence;
 use Funnypot\App\Render\Panel\PanelRegistry;
 use Funnypot\Core\Support\VisualPersona;
@@ -60,6 +62,7 @@ final class AdminLteSkin extends AbstractSkin
             ['IT Assets', 'it'],
             ['Network', 'network'],
             ['IT Services', 'helpdesk'],
+            ['Operational Consoles', 'consoles'],
             ['Facilities', 'facilities'],
         ],
         'Building · Smart Office' => [
@@ -112,6 +115,8 @@ final class AdminLteSkin extends AbstractSkin
         'helpdesk' => 'IT Services', 'tickets' => 'Helpdesk Tickets', 'printers' => 'Printers',
         'licenses' => 'Software Licences', 'mdm' => 'Device Management', 'mail' => 'Mail Admin',
         'certificates' => 'Certificates',
+        'consoles' => 'Operational Consoles', 'op-consoles' => 'Operational Consoles',
+        'terminals' => 'Operational Consoles', 'fleet-consoles' => 'Operational Consoles',
         'facilities' => 'Facilities', 'floorplan' => 'Floorplan', 'rooms' => 'Rooms',
         'work-orders' => 'Work Orders', 'workorders' => 'Work Orders',
         'meeting-rooms' => 'Meeting Rooms', 'bookings' => 'Meeting Rooms',
@@ -152,9 +157,16 @@ final class AdminLteSkin extends AbstractSkin
         $mountBase = $this->mountBase($path);
         $module = $route['module'];
 
+        // An unregistered module slug shaped like a device id (pos-dev-ams-08, mainframe07) is an
+        // operational-device console rather than the generic Dashboard fallback. Gated on !has() so a real
+        // registered module is never captured, and on the device-shape test so a plain word stays Dashboard.
+        $isDeviceConsole = !$this->registry->has($module) && DeviceConsole::looksLikeDevice($module);
+
         $company = $this->esc($persona->company());
         $appName = $this->esc($slots->appName() !== '' ? $slots->appName() : 'Corevance');
-        $title = $slots->pageTitle() !== '' ? $slots->pageTitle() : $this->titleFor($module);
+        $title = $slots->pageTitle() !== ''
+            ? $slots->pageTitle()
+            : ($isDeviceConsole ? 'Console · ' . $module : $this->titleFor($module));
 
         $html = '<div class="alte-wrapper">';
 
@@ -181,10 +193,12 @@ final class AdminLteSkin extends AbstractSkin
             $html .= '</div></div>';
         }
 
-        // Dispatch the module to its PanelSection; unknown module -> Dashboard (never a 404 in-panel).
-        // Sections that echo a visitor's stored bait read the optional $persistence facade; the rest
-        // declare three params and ignore the extra arg.
-        $html .= $this->registry->sectionFor($module)->render($route, $persona, $mountBase, $persistence);
+        // Dispatch the module to its PanelSection; unknown module -> Dashboard (never a 404 in-panel),
+        // except a device-shaped slug which renders the operational-device console. Sections that echo a
+        // visitor's stored bait read the optional $persistence facade; the rest declare three params and
+        // ignore the extra arg.
+        $section = $isDeviceConsole ? new DeviceConsoleSection() : $this->registry->sectionFor($module);
+        $html .= $section->render($route, $persona, $mountBase, $persistence);
 
         $html .= '</section></div>'; // alte-content-wrapper
         $html .= '</div>'; // alte-wrapper

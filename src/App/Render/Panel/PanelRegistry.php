@@ -56,6 +56,7 @@ final class PanelRegistry
             'facilities' => new FacilitiesSection(),
             'search' => new SearchSection(),
             'activity' => new ActivitySection(),
+            'consoles' => new DeviceConsoleSection(),
         ];
         $this->aliases = [
             '' => 'dashboard', 'home' => 'dashboard', 'overview' => 'dashboard',
@@ -88,6 +89,7 @@ final class PanelRegistry
             'floorplan' => 'facilities', 'rooms' => 'facilities', 'work-orders' => 'facilities',
             'workorders' => 'facilities', 'meeting-rooms' => 'facilities', 'bookings' => 'facilities',
             'feed' => 'activity',
+            'op-consoles' => 'consoles', 'terminals' => 'consoles', 'fleet-consoles' => 'consoles',
         ];
         $this->fallback = $dashboard;
     }
