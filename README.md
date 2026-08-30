@@ -69,7 +69,11 @@ docker build -f demo/Dockerfile -t funnypot . && docker run --rm \
 
 Open <http://localhost:8080> for the dashboard, then act like an attacker: point a scanner, curl, or an
 `ssh` or `telnet` client at it and watch the hits land. Deployment helpers live in
-[`scripts/deploy.sh`](scripts/deploy.sh); more detail in [`demo/README.md`](demo/README.md).
+[`scripts/deploy.sh`](scripts/deploy.sh); more detail in [`demo/README.md`](demo/README.md). After a
+deploy, `deploy.sh` runs [`scripts/canary.sh`](scripts/canary.sh) — it curls a representative slice of
+the decoy/panel/attack surface on the live box and fails if any path 404s, so a config/wiring
+regression that silently dark-404s the whole deception is caught immediately (warn-by-default; set
+`FUNNYPOT_CANARY_STRICT=1` to abort the deploy on a miss). Run it standalone with `bash scripts/canary.sh`.
 
 > Point it only at your own infrastructure, and expose it on ports you control. It is a decoy for
 > scanners, not a service.
@@ -308,6 +312,10 @@ serial run.
 
 The engine has its own test suite in the [`funnypot-core`](https://github.com/metrictower/funnypot-core) repo,
 including a golden test that runs real nuclei against a live server.
+
+`tests/App/PanelDecoyAvailabilityTest` drives the real front controller for a representative set of
+decoy/panel/attack paths and asserts each serves (non-404) — the build-time twin of the post-deploy
+`scripts/canary.sh`, so a wiring regression that dark-404s the whole deception fails here before it ships.
 
 ## Build-time helpers
 

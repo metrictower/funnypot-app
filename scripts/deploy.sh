@@ -202,5 +202,23 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
     echo \"  logs on host: \$DATA_DIR/hits.log\"
 "
 
+# Post-deploy availability canary: hit a representative slice of the HTTP deception on the live box
+# (real Host header) and confirm nothing dark-404'd. WARN-by-default so a canary miss never wedges a
+# deploy; set FUNNYPOT_CANARY_STRICT=1 to abort on failure instead. Reuses the host/name already
+# sourced above; canary.sh re-sources deploy.env itself, so no secrets are passed on the command line.
+if [ "${FUNNYPOT_CANARY:-1}" != "0" ]; then
+    echo "==> [canary] post-deploy deception availability check"
+    if bash "$SCRIPT_DIR/canary.sh"; then
+        :
+    else
+        if [ "${FUNNYPOT_CANARY_STRICT:-0}" = "1" ]; then
+            echo "!!! canary FAILED and FUNNYPOT_CANARY_STRICT=1 — the deception is not fully serving. Aborting." >&2
+            exit 1
+        fi
+        echo "!!! WARNING: post-deploy canary FAILED — the deception may be dark-404'ing. Investigate now." >&2
+        echo "    (set FUNNYPOT_CANARY_STRICT=1 to make this abort the deploy.)" >&2
+    fi
+fi
+
 echo "==> done. Test:  curl -I http://$HOST/   and   curl -Ik https://$HOST/"
 echo "    Open the security group for the ports you want reachable (at least 80 + 443)."
