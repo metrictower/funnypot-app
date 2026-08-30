@@ -5,25 +5,30 @@ declare(strict_types=1);
 namespace Funnypot\Protocol\Mssql;
 
 /**
- * Zero-dependency, single-process TCP server for the low-interaction MSSQL honeypot (port 1433).
- * Speaks just enough of the Tabular Data Stream protocol (MS-TDS) in pure PHP to fingerprint
- * scanners and harvest the SQL Server credentials they offer, on a non-blocking stream_select loop.
+ * Zero-dependency, single-process TCP server for the MSSQL honeypot (port 1433). Speaks just enough
+ * of the Tabular Data Stream protocol (MS-TDS) in pure PHP to fool scanners and clients (sqlcmd,
+ * Impacket, Metasploit) on a non-blocking stream_select loop.
  *
- * Deliberately inert: it opens no database, runs no query, and never grants a session. The exchange
- * runs PRELOGIN -> answer advertising ENCRYPT_NOT_SUP -> capture LOGIN7 -> deny with an ERROR token,
- * and stops there.
+ * Two interaction modes, chosen by {@see MssqlConfig::$interaction} (env FUNNYPOT_MSSQL_MODE):
+ * - `low`  — PRELOGIN -> capture LOGIN7 credential -> deny with an ERROR token, then close. The
+ *            original credential-harvest path.
+ * - `high` — PRELOGIN -> accept LOGIN7 (mock-auth, never verified) -> serve a fabricated authenticated
+ *            session: recon SELECTs answered with seeded persona result-sets, and the sp_configure ->
+ *            xp_cmdshell exploitation chain trapped (full attacker command captured, plausible inert
+ *            output returned).
  *
- * Captured:
- * - the client's offered encryption + version from the PRELOGIN (recon fingerprint of the tool)
- * - the LOGIN7 credential: username and the de-obfuscated password, plus the hostname, application
- *   name, client library name and database the tool announced
+ * INERT in both modes: no database, no query engine, no filesystem, no registry, no outbound network.
+ * Attacker commands / UNC paths / OLE progids / connection strings are parsed as text and logged only
+ * — never executed, opened, or dialed (no NetNTLM leak-back, no SSRF, no DNS). The classifier
+ * ({@see MssqlQueryEngine}) and the token encoders ({@see MssqlTokens}) are pure and unit-tested.
  *
  * The TDS password is only obfuscated, not encrypted: each byte is swap-nibbles(b) XOR 0xA5, which
  * this engine reverses to recover the cleartext. Advertising ENCRYPT_NOT_SUP is what makes a
  * standard client send that obfuscated-but-cleartext LOGIN7 rather than wrapping it in TLS.
  *
  * Frame: every TDS message carries an 8-byte header { type(1), status(1), length(2 big-endian,
- * counting the header), spid(2), packetId(1), window(1) }.
+ * counting the header), spid(2), packetId(1), window(1) }. A single request message may span several
+ * packets; non-final packets clear the STATUS_EOM bit and are reassembled by type before dispatch.
  */
 final class MssqlServer
 {
@@ -32,15 +37,22 @@ final class MssqlServer
     private const IDLE_TIMEOUT = 120; // seconds
     private const READ_CHUNK = 8192;
     private const TICK_INTERVAL_US = 200000; // 200ms select tick
-    private const INBUF_CAP = 65536; // a PRELOGIN + LOGIN7 exchange is far smaller
+    private const INBUF_CAP = 65536; // per-packet cap; a batch spanning packets is bounded by SESSION_MSG_CAP
+
+    // Cap on a captured attacker command logged in command/body (full-but-bounded).
+    private const CAPTURE_CAP = 4096;
 
     // TDS packet header types (MS-TDS 2.2.3.1.1).
-    private const TDS_LOGIN7 = 0x10;   // client LOGIN7 request
-    private const TDS_PRELOGIN = 0x12; // client PRELOGIN request
-    private const TDS_RESPONSE = 0x04; // server table response (used for our PRELOGIN + login replies)
+    private const TDS_SQLBATCH = 0x01;  // client SQL batch request (SESSION mode)
+    private const TDS_RPC = 0x03;       // client remote-procedure-call request (SESSION mode)
+    private const TDS_RESPONSE = 0x04;  // server token-stream response (PRELOGIN + login + query replies)
+    private const TDS_ATTENTION = 0x06; // client attention / cancel
+    private const TDS_LOGIN7 = 0x10;    // client LOGIN7 request
+    private const TDS_PRELOGIN = 0x12;  // client PRELOGIN request
 
     private const TDS_HEADER_LEN = 8;
-    private const STATUS_EOM = 0x01; // end-of-message
+    private const STATUS_EOM = 0x01;    // end-of-message
+    private const STATUS_ATTN = 0x20;   // DONE_ATTN — attention/cancel acknowledged (0x02 is DONE_ERROR)
 
     // PRELOGIN option tokens (MS-TDS 2.2.6.5).
     private const PL_VERSION = 0x00;
@@ -56,10 +68,10 @@ final class MssqlServer
     private const ENCRYPT_NOT_SUP = 0x02;
     private const ENCRYPT_REQ = 0x03;
 
-    // TDS response tokens (MS-TDS 2.2.7).
-    private const TOKEN_ERROR = 0xAA;
-    private const TOKEN_DONE = 0xFD;
+    // DONE token status flags (MS-TDS 2.2.7.6).
+    private const DONE_FINAL = 0x0000;
     private const DONE_ERROR = 0x0002;
+    private const DONE_COUNT = 0x0010; // DoneRowCount is valid
 
     // Login-failed error number a real SQL Server returns.
     private const ERR_LOGIN_FAILED = 18456;
@@ -74,6 +86,18 @@ final class MssqlServer
     private const OFF_SERVERNAME = 52;
     private const OFF_CLTINTNAME = 60; // client interface / library name
     private const OFF_DATABASE = 68;
+
+    // Well-known RPC ProcIDs (MS-TDS 2.2.6.6) — enough to recognise the sp_executesql path Impacket
+    // and other clients use to run a statement without a SQLBATCH.
+    private const WELL_KNOWN_PROCS = [
+        7 => 'sp_cursorprepare',
+        10 => 'sp_executesql',
+        11 => 'sp_prepare',
+        12 => 'sp_execute',
+        13 => 'sp_prepexec',
+        14 => 'sp_prepexecrpc',
+        15 => 'sp_unprepare',
+    ];
 
     /**
      * @param callable(array<string,mixed>):void $logger
@@ -266,6 +290,7 @@ final class MssqlServer
             }
 
             $type = ord($s->inbuf[0]);
+            $status = ord($s->inbuf[1]);
             $len = (ord($s->inbuf[2]) << 8) | ord($s->inbuf[3]); // big-endian, counts the header
 
             if ($len < self::TDS_HEADER_LEN || $len > self::INBUF_CAP) {
@@ -281,8 +306,33 @@ final class MssqlServer
             $packet = substr($s->inbuf, 0, $len);
             $s->inbuf = substr($s->inbuf, $len);
             $body = substr($packet, self::TDS_HEADER_LEN);
+            $eom = ($status & self::STATUS_EOM) !== 0;
 
-            $this->dispatch($s, $type, $body);
+            // Reassemble a request message that spans several packets (non-final packets clear EOM):
+            // accumulate the body by type until EOM, bounded by SESSION_MSG_CAP.
+            if ($s->msgType === null && $eom) {
+                $this->dispatch($s, $type, $body);
+            } else {
+                if ($s->msgType === null) {
+                    $s->msgType = $type;
+                    $s->msgBuf = '';
+                }
+                $s->msgBuf .= $body;
+                if (strlen($s->msgBuf) > MssqlSession::SESSION_MSG_CAP) {
+                    $this->logUnknown($s, 'reassembly buffer over cap');
+                    $s->close = true;
+
+                    return;
+                }
+                if ($eom) {
+                    $type = $s->msgType;
+                    $body = $s->msgBuf;
+                    $s->msgType = null;
+                    $s->msgBuf = '';
+                    $this->dispatch($s, $type, $body);
+                }
+            }
+
             if ($s->close || $s->state === MssqlSession::STATE_DONE) {
                 return;
             }
@@ -294,18 +344,47 @@ final class MssqlServer
         switch ($type) {
             case self::TDS_PRELOGIN:
                 $this->handlePrelogin($s, $body);
-                break;
+
+                return;
 
             case self::TDS_LOGIN7:
                 $this->handleLogin7($s, $body);
-                break;
 
-            default:
-                // A TLS ClientHello (0x16) from a client that insists on encryption, a SQL batch, or
-                // junk — nothing to model. Record it and drop cleanly, never crash.
-                $this->logUnknown($s, sprintf('unmodelled TDS packet type 0x%02X', $type));
-                $s->close = true;
+                return;
         }
+
+        // In an accepted (high-mode) session, handle batches / RPC / attention.
+        if ($s->state === MssqlSession::STATE_SESSION) {
+            switch ($type) {
+                case self::TDS_SQLBATCH:
+                    $this->handleBatch($s, $body);
+
+                    return;
+
+                case self::TDS_RPC:
+                    $this->handleRpc($s, $body);
+
+                    return;
+
+                case self::TDS_ATTENTION:
+                    // Acknowledge the cancel and stay in session — dropping here would be a tell.
+                    $s->outbuf .= $this->tdsPacket(self::TDS_RESPONSE, MssqlTokens::done(self::STATUS_ATTN, 0));
+
+                    return;
+
+                default:
+                    // An unusual packet mid-session: log and answer benignly, do NOT drop the session.
+                    $this->logUnknown($s, sprintf('unmodelled session packet type 0x%02X', $type));
+                    $s->outbuf .= $this->tdsPacket(self::TDS_RESPONSE, MssqlTokens::done(self::DONE_FINAL, 0));
+
+                    return;
+            }
+        }
+
+        // Pre-session: a TLS ClientHello (0x16) from a client that insists on encryption, or junk —
+        // nothing to model. Record it and drop cleanly, never crash.
+        $this->logUnknown($s, sprintf('unmodelled TDS packet type 0x%02X', $type));
+        $s->close = true;
     }
 
     /**
@@ -441,11 +520,148 @@ final class MssqlServer
             ),
         ]);
 
-        // Deny — a login is never accepted. Queue the ERROR token; the run loop flushes it before
-        // the socket is dropped.
-        $s->outbuf .= $this->buildLoginError($user);
-        $s->state = MssqlSession::STATE_DONE;
-        $s->close = true;
+        if ($this->config->interaction !== 'high') {
+            // low mode: deny — a login is never accepted. Queue the ERROR token; the run loop flushes
+            // it before the socket is dropped.
+            $s->outbuf .= $this->buildLoginError($user);
+            $s->state = MssqlSession::STATE_DONE;
+            $s->close = true;
+
+            return;
+        }
+
+        // high mode: accept-any (the lure). Never verify the password — an SSPI/integrated login with
+        // an empty password field is accepted too. Advance to an authenticated session and stay open.
+        $s->authUser = ($s->username !== null && $s->username !== '') ? $s->username : 'sa';
+        $s->currentDb = 'master';
+        $s->outbuf .= $this->buildLoginSuccess();
+        $s->state = MssqlSession::STATE_SESSION;
+    }
+
+    /**
+     * The login-success token stream: LOGINACK, the ENVCHANGE records (database, language, packet
+     * size), the two INFO messages a real server sends on connect, and a final DONE. This is what
+     * makes sqlcmd / Impacket / Metasploit believe they are authenticated.
+     */
+    public function buildLoginSuccess(): string
+    {
+        $body = MssqlTokens::loginAck($this->config)
+            . MssqlTokens::envChangeLogin('master')
+            . MssqlTokens::info(5701, 2, 0, "Changed database context to 'master'.", $this->config->serverName)
+            . MssqlTokens::info(5703, 1, 0, 'Changed language setting to us_english.', $this->config->serverName)
+            . MssqlTokens::done(self::DONE_FINAL, 0);
+
+        return $this->tdsPacket(self::TDS_RESPONSE, $body);
+    }
+
+    /**
+     * SQLBATCH (SESSION mode): strip the ALL_HEADERS block, decode the UTF-16LE SQL text, classify it
+     * and queue the fabricated token-stream response.
+     */
+    private function handleBatch(MssqlSession $s, string $body): void
+    {
+        $sql = self::decodeUtf16le(self::stripAllHeaders($body));
+        $this->answerQuery($s, $sql);
+    }
+
+    /**
+     * RPC (SESSION mode): best-effort. Strip ALL_HEADERS, resolve the proc (US_VARCHAR name or a
+     * well-known ProcID). For sp_executesql / sp_prepare / sp_prepexec, pull the first NVARCHAR
+     * parameter (the SQL statement) and route it through the same classifier; otherwise log the proc
+     * and answer with an empty DONE.
+     */
+    private function handleRpc(MssqlSession $s, string $body): void
+    {
+        $rpc = substr($body, self::stripAllHeadersLen($body));
+
+        [$proc, $paramsOff] = self::rpcProcName($rpc);
+        $lower = strtolower($proc);
+
+        if (in_array($lower, ['sp_executesql', 'sp_prepare', 'sp_prepexec', 'sp_execute'], true)) {
+            $stmt = self::rpcFirstNVarchar($rpc, $paramsOff);
+            if ($stmt !== null && $stmt !== '') {
+                $this->answerQuery($s, $stmt);
+
+                return;
+            }
+        }
+
+        $this->logEvent([
+            'event' => 'mssql_query',
+            'ip' => $s->ip,
+            'port' => $s->port,
+            'severity' => 'medium',
+            'reportable' => true,
+            'path' => 'MSSQL RPC: ' . self::printable($proc !== '' ? $proc : 'sp#' . dechex(strlen($rpc))),
+        ]);
+        $s->outbuf .= $this->tdsPacket(self::TDS_RESPONSE, MssqlTokens::done(self::DONE_FINAL, 0));
+    }
+
+    /**
+     * Classify a recovered SQL statement, log its intel events, and queue one token-stream response.
+     * The classifier is pure and inert; this method only fabricates bytes and log lines.
+     */
+    private function answerQuery(MssqlSession $s, string $sql): void
+    {
+        $result = (new MssqlQueryEngine($this->config))->classify($sql, $s);
+
+        if ($result->enableXpCmdshell) {
+            $s->xpCmdshellEnabled = true; // intel/story only — nothing is ever executed
+        }
+        if ($result->newDatabase !== null) {
+            $s->currentDb = $result->newDatabase;
+        }
+
+        foreach ($result->events as $ev) {
+            $entry = [
+                'event' => $ev['event'],
+                'ip' => $s->ip,
+                'port' => $s->port,
+                'severity' => $ev['severity'],
+                'reportable' => $ev['reportable'],
+                'path' => 'MSSQL ' . self::printable(self::cap($ev['summary'], 400)),
+            ];
+            if (($ev['command'] ?? null) !== null && $ev['command'] !== '') {
+                $entry['command'] = self::printable(self::cap($ev['command'], self::CAPTURE_CAP));
+                $entry['body'] = $entry['command'];
+            }
+            if (($ev['proc'] ?? null) !== null) {
+                $entry['proc'] = $ev['proc'];
+            }
+            $this->logEvent($entry);
+        }
+
+        $s->outbuf .= $this->tdsPacket(self::TDS_RESPONSE, $this->encodeResult($result));
+    }
+
+    /** Encode a query result into a TDS token stream: info messages, result sets, then one DONE. */
+    private function encodeResult(MssqlQueryResult $result): string
+    {
+        $out = '';
+        foreach ($result->infoMessages as $m) {
+            $out .= MssqlTokens::info($m['number'], $m['state'], $m['class'], $m['text'], $this->config->serverName);
+        }
+
+        $hasRows = false;
+        $totalRows = 0;
+        foreach ($result->resultSets as $rs) {
+            $out .= MssqlTokens::colMetadataNVarchar($rs['columns']);
+            foreach ($rs['rows'] as $row) {
+                $out .= MssqlTokens::row($row);
+                $totalRows++;
+            }
+            $hasRows = true;
+        }
+
+        if ($result->returnStatus !== null) {
+            $out .= MssqlTokens::returnStatus($result->returnStatus);
+        }
+
+        $out .= $hasRows
+            ? MssqlTokens::done(self::DONE_COUNT, $totalRows)
+            : MssqlTokens::done(self::DONE_FINAL, 0);
+
+        return $out;
     }
 
     /**
@@ -490,31 +706,14 @@ final class MssqlServer
 
     /**
      * Builds a TDS ERROR token (login failed for the given user) followed by a DONE token, wrapped in
-     * a server response packet. This is the honeypot's only reply to a login: it never authenticates.
+     * a server response packet. This is low mode's only reply to a login: it never authenticates. The
+     * ERROR + DONE encoders are shared with the high-mode path via {@see MssqlTokens}.
      */
     public function buildLoginError(string $user): string
     {
-        $msg = "Login failed for user '{$user}'.";
-        $msgU = self::utf16le($msg);
-        $serverU = self::utf16le($this->config->serverName);
-
-        // ERROR token data (MS-TDS 2.2.7.10): Number, State, Class, MsgText (US_VARCHAR),
-        // ServerName (B_VARCHAR), ProcName (B_VARCHAR), LineNumber (LONG for TDS 7.2+).
-        $tokenData = pack('V', self::ERR_LOGIN_FAILED)             // Number
-            . chr(1)                                              // State
-            . chr(14)                                             // Class (severity)
-            . pack('v', self::charLen($msg)) . $msgU              // MsgText US_VARCHAR (char count LE)
-            . chr(self::charLen($this->config->serverName)) . $serverU // ServerName B_VARCHAR
-            . chr(0)                                              // ProcName B_VARCHAR (empty)
-            . pack('V', 1);                                       // LineNumber
-
-        $error = chr(self::TOKEN_ERROR) . pack('v', strlen($tokenData)) . $tokenData;
-
-        // DONE token (MS-TDS 2.2.7.6): Status, CurCmd, DoneRowCount (ULONGLONG for TDS 7.2+).
-        $done = chr(self::TOKEN_DONE)
-            . pack('v', self::DONE_ERROR)
-            . pack('v', 0)
-            . pack('P', 0);
+        // ERROR (MS-TDS 2.2.7.10): number 18456, state 1, class 14 (login-failed severity), line 1.
+        $error = MssqlTokens::error(self::ERR_LOGIN_FAILED, 1, 14, "Login failed for user '{$user}'.", $this->config->serverName, 1);
+        $done = MssqlTokens::done(self::DONE_ERROR, 0);
 
         return $this->tdsPacket(self::TDS_RESPONSE, $error . $done);
     }
@@ -550,25 +749,126 @@ final class MssqlServer
         };
     }
 
-    /** UTF-16 character count for an ASCII string (persona/message text is ASCII). */
-    private static function charLen(string $s): int
+    // ---- ALL_HEADERS / RPC parsing (SESSION mode) --------------------------------------------
+
+    /**
+     * The byte length of the ALL_HEADERS block (MS-TDS 2.2.5.2) that prefixes a SQLBATCH/RPC body: a
+     * leading DWORD TotalLength (LE) covering the block. Returns 0 (no headers) when the length is
+     * absent or implausible, so a batch from a client that omits the block still parses.
+     */
+    private static function stripAllHeadersLen(string $body): int
     {
-        return strlen($s);
+        if (strlen($body) < 4) {
+            return 0;
+        }
+        $total = self::le32($body, 0);
+
+        return ($total >= 4 && $total <= strlen($body)) ? $total : 0;
+    }
+
+    /** Returns the SQLBATCH body with its ALL_HEADERS block removed. */
+    private static function stripAllHeaders(string $body): string
+    {
+        return substr($body, self::stripAllHeadersLen($body));
     }
 
     /**
-     * Interleaves an ASCII string to UTF-16LE for our own output. Persona / message text is ASCII,
-     * so a null-interleave is sufficient and keeps the emulator free of an mbstring dependency.
+     * Resolves the RPC proc: either an explicit US_VARCHAR name, or the 0xFFFF sentinel followed by a
+     * well-known ProcID. Returns [procName, offsetOfParams].
+     *
+     * @return array{0:string,1:int}
      */
-    private static function utf16le(string $s): string
+    private static function rpcProcName(string $rpc): array
     {
-        $out = '';
-        $len = strlen($s);
-        for ($i = 0; $i < $len; $i++) {
-            $out .= $s[$i] . "\x00";
+        if (strlen($rpc) < 2) {
+            return ['', strlen($rpc)];
+        }
+        $nameLen = self::le16($rpc, 0);
+        if ($nameLen === 0xFFFF) {
+            if (strlen($rpc) < 4) {
+                return ['', strlen($rpc)];
+            }
+            $procId = self::le16($rpc, 2);
+            $off = 4 + 2; // ProcID USHORT + OptionFlags USHORT
+            return [self::WELL_KNOWN_PROCS[$procId] ?? '', min($off, strlen($rpc))];
         }
 
-        return $out;
+        $bytes = $nameLen * 2;
+        if (2 + $bytes > strlen($rpc)) {
+            return ['', strlen($rpc)];
+        }
+        $name = self::decodeUtf16le(substr($rpc, 2, $bytes));
+        $off = 2 + $bytes + 2; // name + OptionFlags USHORT
+
+        return [$name, min($off, strlen($rpc))];
+    }
+
+    /**
+     * Extract the first NVARCHAR parameter value from an RPC param block (the statement for
+     * sp_executesql). Best-effort: reads the param name (B_VARCHAR), status byte, and an NVARCHAR
+     * (0xE7) type; handles both a USHORT-length value and a PLP (MAX) value. Returns null if the first
+     * parameter is not an NVARCHAR we can read.
+     */
+    private static function rpcFirstNVarchar(string $rpc, int $off): ?string
+    {
+        $len = strlen($rpc);
+        if ($off + 1 > $len) {
+            return null;
+        }
+        $nameLen = ord($rpc[$off]);
+        $off += 1 + $nameLen * 2; // param name B_VARCHAR
+        $off += 1;                // status flags
+        if ($off + 1 > $len) {
+            return null;
+        }
+        $type = ord($rpc[$off]);
+        $off += 1;
+        if ($type !== 0xE7 && $type !== 0xEF) { // NVARCHAR / NCHAR
+            return null;
+        }
+        if ($off + 7 > $len) {
+            return null;
+        }
+        $maxLen = self::le16($rpc, $off);
+        $off += 2 + 5; // maxlen USHORT + 5-byte collation
+
+        if ($maxLen === 0xFFFF) {
+            // PLP: an 8-byte total length (or unknown sentinel) then DWORD-length chunks until a 0 chunk.
+            if ($off + 8 > $len) {
+                return null;
+            }
+            $off += 8;
+            $data = '';
+            while ($off + 4 <= $len) {
+                $chunk = self::le32($rpc, $off);
+                $off += 4;
+                if ($chunk === 0 || $off + $chunk > $len) {
+                    break;
+                }
+                $data .= substr($rpc, $off, $chunk);
+                $off += $chunk;
+            }
+
+            return self::decodeUtf16le($data);
+        }
+
+        if ($off + 2 > $len) {
+            return null;
+        }
+        $byteLen = self::le16($rpc, $off);
+        $off += 2;
+        if ($byteLen === 0xFFFF) {
+            return null; // NULL value
+        }
+        $byteLen = min($byteLen, $len - $off);
+
+        return self::decodeUtf16le(substr($rpc, $off, $byteLen));
+    }
+
+    /** Truncates a string to a byte cap for log lines. */
+    private static function cap(string $s, int $max): string
+    {
+        return strlen($s) > $max ? substr($s, 0, $max) : $s;
     }
 
     /**
@@ -613,6 +913,14 @@ final class MssqlServer
     private static function le16(string $b, int $off): int
     {
         return ord($b[$off]) | (ord($b[$off + 1]) << 8);
+    }
+
+    private static function le32(string $b, int $off): int
+    {
+        return ord($b[$off])
+            | (ord($b[$off + 1]) << 8)
+            | (ord($b[$off + 2]) << 16)
+            | (ord($b[$off + 3]) << 24);
     }
 
     private function logUnknown(MssqlSession $s, string $detail): void

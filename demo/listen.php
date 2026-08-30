@@ -154,8 +154,10 @@ if ($protocol === 'smb') {
     exit(0);
 }
 
-// MSSQL/TDS: captures the SQL login (username, de-obfuscated password, host/app/library), then
-// returns "login failed"; never authenticates.
+// MSSQL/TDS: captures the SQL login (username, de-obfuscated password, host/app/library). In the
+// default high-interaction mode it then accepts the login (mock-auth, never verified), answers recon
+// queries with fabricated persona result-sets, and traps the xp_cmdshell / RCE chain — capturing the
+// full attacker command while staying 100% inert. FUNNYPOT_MSSQL_MODE=low restores the deny path.
 if ($protocol === 'mssql') {
     (new MssqlServer(MssqlConfig::fromEnv(), $log))->run($bind);
     exit(0);

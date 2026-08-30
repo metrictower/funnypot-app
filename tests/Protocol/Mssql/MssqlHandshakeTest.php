@@ -47,7 +47,7 @@ final class MssqlHandshakeTest extends TestCase
 
     public function test_login7_captures_credentials_and_denies(): void
     {
-        $server = $this->newServer(new MssqlConfig(serverName: 'SQL01'));
+        $server = $this->newServer(new MssqlConfig(serverName: 'SQL01', interaction: 'low'));
         $session = new MssqlSession('203.0.113.9', 51000, 1);
 
         // PRELOGIN first.
@@ -99,10 +99,44 @@ final class MssqlHandshakeTest extends TestCase
         self::assertSame(MssqlSession::STATE_DONE, $session->state);
     }
 
+    public function test_high_mode_accepts_login_and_keeps_session_open(): void
+    {
+        // Default (high) mode: the login is accepted (mock-auth) and the session stays open.
+        $server = $this->newServer(new MssqlConfig(serverName: 'SQL01')); // interaction defaults to high
+        $session = new MssqlSession('203.0.113.9', 51000, 1);
+
+        $session->inbuf .= self::preloginRequest();
+        $server->processInbound($session);
+        $session->outbuf = '';
+
+        $session->inbuf .= self::login7Request('ATTACKER-PC', 'sa', 'sa', 'sqlcmd', 'ODBC', 'master');
+        $server->processInbound($session);
+
+        // The credential is still captured.
+        self::assertNotNull($this->eventOfType('mssql_login'));
+        self::assertSame('sa', $session->username);
+
+        // A login-success token stream is queued: LOGINACK (0xAD), not an ERROR (0xAA).
+        $body = self::tdsBody($session->outbuf);
+        self::assertSame(0xAD, ord($body[0]), 'first token must be LOGINACK 0xAD');
+        self::assertNotSame(0xAA, ord($body[0]), 'high mode must not send an ERROR token');
+        // ProgName the client reads back.
+        self::assertStringContainsString(self::u16le('Microsoft SQL Server'), $body);
+        // ENVCHANGE (0xE3) and DONE (0xFD) are present.
+        self::assertStringContainsString(chr(0xE3), $body);
+        self::assertSame(0xFD, ord(substr($body, -13, 1)), 'stream ends with a DONE token');
+
+        // The session is authenticated and NOT closed.
+        self::assertSame(MssqlSession::STATE_SESSION, $session->state);
+        self::assertFalse($session->close);
+        self::assertSame('sa', $session->authUser);
+        self::assertSame('master', $session->currentDb);
+    }
+
     public function test_login7_without_prelogin_is_still_captured(): void
     {
         // A tool that skips PRELOGIN and sends LOGIN7 directly must still have its credential harvested.
-        $server = $this->newServer();
+        $server = $this->newServer(new MssqlConfig(interaction: 'low'));
         $session = new MssqlSession('192.0.2.50', 60000, 1);
 
         $session->inbuf .= self::login7Request('WS1', 'admin', 'hunter2', 'GoSqlClient', 'go-mssqldb', 'tempdb');

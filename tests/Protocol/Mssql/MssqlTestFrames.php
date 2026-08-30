@@ -133,4 +133,52 @@ trait MssqlTestFrames
     {
         return substr($packet, 8);
     }
+
+    /** A TDS packet with an explicit status byte (0x01 = EOM; 0x00 = a non-final continuation packet). */
+    private static function tdsPacketStatus(int $type, string $body, int $status): string
+    {
+        $len = strlen($body) + 8;
+
+        return chr($type) . chr($status) . pack('n', $len) . pack('n', 0) . chr(1) . chr(0) . $body;
+    }
+
+    /**
+     * The ALL_HEADERS block (MS-TDS 2.2.5.2) that prefixes a SQLBATCH/RPC body: a DWORD TotalLength
+     * over a single 18-byte Transaction Descriptor header.
+     */
+    private static function allHeaders(): string
+    {
+        $hdr = pack('V', 18) . pack('v', 0x0002) . pack('P', 0) . pack('V', 1);
+
+        return pack('V', strlen($hdr) + 4) . $hdr;
+    }
+
+    /** A SQLBATCH (0x01) request: ALL_HEADERS + the SQL text as UTF-16LE. */
+    private static function sqlBatch(string $sql, bool $withHeaders = true): string
+    {
+        return self::tdsPacket(0x01, ($withHeaders ? self::allHeaders() : '') . self::u16le($sql));
+    }
+
+    /** An RPC (0x03) request calling sp_executesql (ProcID 10) with the statement as an NVARCHAR param. */
+    private static function rpcExecuteSql(string $sql): string
+    {
+        $body = self::allHeaders()
+            . pack('v', 0xFFFF) . pack('v', 10) . pack('v', 0) // ProcID sentinel, sp_executesql, OptionFlags
+            . self::rpcNVarcharParam('', $sql);
+
+        return self::tdsPacket(0x03, $body);
+    }
+
+    /** One NVARCHAR RPC parameter: name (B_VARCHAR), status, NVARCHAR type + collation, USHORT-length value. */
+    private static function rpcNVarcharParam(string $name, string $value): string
+    {
+        $u = self::u16le($value);
+
+        return chr(strlen($name)) . self::u16le($name)
+            . chr(0)                        // status flags
+            . chr(0xE7)                     // NVARCHARTYPE
+            . pack('v', 8000)               // maxlen
+            . "\x09\x04\xD0\x00\x34"        // collation
+            . pack('v', strlen($u)) . $u;   // actual byte length + UTF-16LE value
+    }
 }

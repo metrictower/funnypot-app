@@ -53,6 +53,8 @@ final class AbuseIpdb
                 return '18';           // brute-force
             case 'sip':
                 return '8,18';         // Fraud VoIP + brute-force (REGISTER spray -> toll-fraud calls)
+            case 'mssql':
+                return '15,18';        // hacking + brute-force (sa spray -> xp_cmdshell RCE)
             default:
                 return '14,15';        // port scan, hacking
         }
