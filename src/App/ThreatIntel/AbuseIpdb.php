@@ -55,6 +55,9 @@ final class AbuseIpdb
                 return '8,18';         // Fraud VoIP + brute-force (REGISTER spray -> toll-fraud calls)
             case 'mssql':
                 return '15,18';        // hacking + brute-force (sa spray -> xp_cmdshell RCE)
+            case 'cwmp':
+            case 'tr069':
+                return '15,23,21';     // hacking + IoT-targeted + web-app-attack (TR-069 router worm)
             default:
                 return '14,15';        // port scan, hacking
         }

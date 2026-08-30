@@ -65,6 +65,8 @@ use Funnypot\Protocol\Winrm\WinrmConfig;
 use Funnypot\Protocol\Winrm\WinrmServer;
 use Funnypot\Protocol\Oracle\OracleConfig;
 use Funnypot\Protocol\Oracle\OracleServer;
+use Funnypot\Protocol\Tr069\Tr069Config;
+use Funnypot\Protocol\Tr069\Tr069Server;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -272,6 +274,15 @@ if ($protocol === 'winrm') {
 // descriptor; returns a plausible refuse/redirect, exposes no database.
 if ($protocol === 'oracle') {
     (new OracleServer(OracleConfig::fromEnv(), $log))->run($bind);
+    exit(0);
+}
+
+// TR-069 / CWMP (HTTP 7547/7548): poses as a vulnerable broadband gateway (CPE) exposing its TR-064 /
+// CWMP config service on the WAN port. Accepts the router worm's SOAP command-injection, returns a
+// plausible success frame so the worm believes it succeeded, and captures the injected shell command +
+// malware C2 download URL as intel. Never runs a command, never fetches a captured URL, never an ACS.
+if ($protocol === 'cwmp' || $protocol === 'tr069') {
+    (new Tr069Server(Tr069Config::fromEnv(), $log))->run($bind);
     exit(0);
 }
 

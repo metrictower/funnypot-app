@@ -120,6 +120,9 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn kerberos    0.0.0.0:88
     spawn ntp         0.0.0.0:123
     spawn winrm       0.0.0.0:5985
+    # TR-069 / CWMP router-worm trap on both ports (two cheap select loops so 7548 hits log as 7548).
+    spawn cwmp        0.0.0.0:7547
+    spawn cwmp        0.0.0.0:7548
     spawn rsync       0.0.0.0:873
     spawn clamav      0.0.0.0:3310
     spawn zookeeper   0.0.0.0:2181
