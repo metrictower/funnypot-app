@@ -226,6 +226,101 @@ final class RollupTest extends TestCase
         self::assertSame($baseN + 1, $this->sumN($db, 'total', 'm'));
     }
 
+    /**
+     * Two folds racing over the same freshly-seeded batch (e.g. an operator running
+     * `php demo/rollup.php` by hand while the entrypoint timer loop also runs) must NOT double-count.
+     * A real second process folds the same DB in lockstep with an in-process fold, gated on a
+     * filesystem barrier so they start together. With foldRollups taking the write lock (BEGIN
+     * IMMEDIATE) before reading the watermark, the two serialize and the loser reads the advanced
+     * watermark → no rows to re-fold; the final totals equal the raw COUNT. (Without that fix both
+     * read last_id=0 outside any transaction and both commit n=n+delta → a permanent 2x double
+     * count — this test then fails.)
+     */
+    public function test_v3_concurrent_folds_do_not_double_count(): void
+    {
+        if (!function_exists('proc_open')) {
+            self::markTestSkipped('proc_open unavailable');
+        }
+        $path = $this->dbPath();
+        $store = $this->newStore($path);           // creates the schema
+        $n = 8000;                                  // big enough that a fold's window overlaps a racer,
+        $this->fastSeed($path, $n);                 // small enough to finish well under busy_timeout
+
+        $autoload = dirname(__DIR__, 2) . '/vendor/autoload.php';
+        $child = $path . '.child.php';
+        $ready = $path . '.ready';
+        $go = $path . '.go';
+        $this->tmp[] = $child;
+        $this->tmp[] = $ready;
+        $this->tmp[] = $go;
+        file_put_contents($child, "<?php\n"
+            . "require " . var_export($autoload, true) . ";\n"
+            . "use Funnypot\\App\\Storage\\SqliteHitStore;\n"
+            . "\$s = new SqliteHitStore(" . var_export($path, true) . ");\n"
+            . "touch(" . var_export($ready, true) . ");\n"
+            . "while (!file_exists(" . var_export($go, true) . ")) { usleep(200); }\n"
+            . "try { while (\$s->foldRollups(100000) > 0) {} } catch (\\Throwable \$e) { fwrite(STDERR, \$e->getMessage()); }\n");
+
+        $proc = proc_open([PHP_BINARY, $child], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($proc);
+        // Wait for the child to boot and reach the barrier, then release both at once.
+        $deadline = microtime(true) + 10;
+        while (!file_exists($ready) && microtime(true) < $deadline) {
+            usleep(500);
+        }
+        self::assertFileExists($ready, 'child fold process failed to start');
+        touch($go);
+        try {
+            while ($store->foldRollups(100000) > 0) {
+                // drain
+            }
+        } catch (\Throwable $e) {
+            // a busy-timeout on the loser is acceptable; the guarantee under test is "no double count"
+        }
+        foreach ($pipes as $p) {
+            @stream_get_contents($p);
+            @fclose($p);
+        }
+        proc_close($proc); // blocks until the child exits
+
+        $db = $this->pdo($path);
+        self::assertSame($n, (int) $db->query('SELECT COUNT(*) FROM hits')->fetchColumn());
+        self::assertSame($n, $this->sumN($db, 'total', 'm'), 'concurrent folds must not double-count (minute)');
+        self::assertSame($n, $this->sumN($db, 'total', 'd'), 'concurrent folds must not double-count (day)');
+        self::assertSame((string) $n, (string) $db->query("SELECT v FROM rollup_state WHERE k='last_id'")->fetchColumn());
+    }
+
+    /** Fast batched raw insert of $n synthetic hits over ~1440 recent minute buckets (no per-row
+     *  append()); used to seed a fold batch without folding it. */
+    private function fastSeed(string $path, int $n): void
+    {
+        $db = $this->pdo($path);
+        $protocols = ['HTTP', 'SSH', 'SIP', 'RDP', 'TELNET'];
+        $now = time();
+        $span = 1440;
+        $start = $now - $span * 60;
+        $cols = '(ts,ip,method,path,matched,severity,served,templates,body,event,cc,tool)';
+        $rowsql = '(?,?,?,?,?,?,?,?,?,?,?,?)';
+        $chunk = 200;
+        $wide = $db->prepare("INSERT INTO hits $cols VALUES " . implode(',', array_fill(0, $chunk, $rowsql)));
+        $db->beginTransaction();
+        $buf = [];
+        $c = 0;
+        for ($i = 0; $i < $n; $i++) {
+            $ts = gmdate('c', $start + ($i % $span) * 60);
+            array_push($buf, $ts, '1.2.3.' . ($i % 254), $protocols[$i % 5], '/p' . ($i % 50), 0, 'low', 0, '[]', '', 'connect', 'US', '');
+            if (++$c === $chunk) {
+                $wide->execute($buf);
+                $buf = [];
+                $c = 0;
+            }
+        }
+        if ($c > 0) {
+            $db->prepare("INSERT INTO hits $cols VALUES " . implode(',', array_fill(0, $c, $rowsql)))->execute($buf);
+        }
+        $db->commit();
+    }
+
     // --- V4: minute -> hour -> day downsampling is loss/dupe free ---
 
     public function test_v4_downsampling_totals_agree_across_granularities(): void
@@ -296,6 +391,18 @@ final class RollupTest extends TestCase
 
         // But the day rollup still holds all 9 events — downsampling kept the history retention dropped.
         self::assertSame(9, $this->sumN($db, 'total', 'd'), 'the day rollup must preserve pruned minute history');
+
+        // Prove the day total is folded INCREMENTALLY, not recomputed from the (now-pruned) minute
+        // rows: append one more recent hit, re-fold, and the day total must tick 9 -> 10. If the
+        // fold recomputed the day bucket by re-reading minute rows, the pruned 5 old events would be
+        // lost and the day total would come back wrong (6, not 10).
+        $store->append($this->hit(gmdate('c', $now - 60)));
+        $store->foldRollups(1000);
+        // Fresh read connection: the $db handle above holds an open WAL read snapshot (a fully-read
+        // but unfinalised statement), so it would not see this new commit. A real reader opens fresh.
+        $db2 = $this->pdo($path);
+        self::assertSame(10, $this->sumN($db2, 'total', 'd'), 'day total must increment incrementally, not recompute from pruned minutes');
+        self::assertSame(5, $this->sumN($db2, 'total', 'm'), 'the recent minute buckets carry the 4 + 1 recent events');
     }
 
     // --- V6: cardinality cap bounds a sprayed dimension ---
@@ -453,8 +560,9 @@ final class RollupTest extends TestCase
 
         // (c) TOLERANT absolute budget (skippable on a slow box): one fold batch and one rollup read
         // are each quick. Bounds are deliberately loose so they pass on modest CI, per suite
-        // conventions; the flat-vs-growth checks above are the machine-independent proof.
-        if (getenv('FUNNYPOT_SKIP_PERF_BUDGET') === false) {
+        // conventions; the flat-vs-growth checks above are the machine-independent proof. Set
+        // FUNNYPOT_SKIP_PERF_BUDGET to a truthy value to skip these (a bare/"0"/"" value does NOT skip).
+        if (!filter_var(getenv('FUNNYPOT_SKIP_PERF_BUDGET'), FILTER_VALIDATE_BOOLEAN)) {
             self::assertLessThan(0.25, $bdLarge['breakdown'], 'a single rollup breakdown read should be well under a loose 250ms budget');
             self::assertLessThan(2.0, $rLarge['batchTime'], 'a single fold batch should be well under a loose 2s budget');
         }

@@ -358,6 +358,39 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
     public function foldRollups(int $batch): int
     {
         $batch = max(1, $batch);
+
+        // Take the write lock FIRST (BEGIN IMMEDIATE), THEN read the watermark and the batch inside
+        // that transaction. Otherwise two folds running at once (an operator running
+        // `php demo/rollup.php` by hand while the entrypoint timer loop also runs) would both read
+        // the same `last_id`, aggregate the same rows, and both commit `n=n+delta` → a permanent
+        // double count. With the lock held up front a second concurrent fold serializes behind this
+        // one (or errors past busy_timeout and the worker retries next tick) and then reads the
+        // advanced watermark, so it sees no rows to re-fold. Managed by hand because PDO's
+        // inTransaction() only tracks beginTransaction(), not a manual BEGIN.
+        $this->db->exec('BEGIN IMMEDIATE');
+        try {
+            $result = $this->foldLocked($batch);
+            $this->db->exec('COMMIT');
+
+            return $result;
+        } catch (Throwable $e) {
+            try {
+                $this->db->exec('ROLLBACK');
+            } catch (Throwable $ignore) {
+                // no active transaction to roll back (e.g. the BEGIN itself failed) — nothing to undo
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * The body of one fold pass, run with the write lock already held by {@see foldRollups()}. Reads
+     * the watermark + batch, aggregates, UPSERTs, prunes and advances the watermark — but does NOT
+     * begin/commit; the caller owns the transaction so the watermark read and the writes are one
+     * atomic, serialized unit. Returns the number of raw hit rows folded (0 when drained).
+     */
+    private function foldLocked(int $batch): int
+    {
         $last = (int) ($this->stateGet('last_id') ?? 0);
 
         $sel = $this->db->prepare(
@@ -422,43 +455,46 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
             }
         }
 
-        // One transaction: all UPSERTs + prune + watermark advance commit together, so a crash
-        // before commit rolls the whole pass back and the next pass reprocesses with no double count.
-        $this->db->beginTransaction();
-        try {
-            $up = $this->db->prepare(
-                'INSERT INTO rollup (gran, bucket, dim, val, n, matched, served)
-                 VALUES (:g, :b, :d, :v, :n, :m, :s)
-                 ON CONFLICT(gran, bucket, dim, val) DO UPDATE SET
-                    n       = n + excluded.n,
-                    matched = matched + excluded.matched,
-                    served  = served + excluded.served'
-            );
-            foreach ($agg as $g => $byBucket) {
-                foreach ($byBucket as $b => $byDim) {
-                    foreach ($byDim as $dim => $byVal) {
-                        foreach ($this->capTopK($byVal) as $val => $c) {
-                            $up->execute([
-                                ':g' => $g, ':b' => $b, ':d' => $dim, ':v' => $val,
-                                ':n' => $c['n'], ':m' => $c['matched'], ':s' => $c['served'],
-                            ]);
-                        }
+        // All UPSERTs + prune + watermark advance happen inside the caller's single transaction, so
+        // a crash before commit rolls the whole pass back and the next pass reprocesses with no
+        // double count. The watermark was read above under the same lock, so a concurrent fold
+        // cannot have read a stale value.
+        $up = $this->db->prepare(
+            'INSERT INTO rollup (gran, bucket, dim, val, n, matched, served)
+             VALUES (:g, :b, :d, :v, :n, :m, :s)
+             ON CONFLICT(gran, bucket, dim, val) DO UPDATE SET
+                n       = n + excluded.n,
+                matched = matched + excluded.matched,
+                served  = served + excluded.served'
+        );
+        foreach ($agg as $g => $byBucket) {
+            foreach ($byBucket as $b => $byDim) {
+                foreach ($byDim as $dim => $byVal) {
+                    foreach ($this->capTopK($byVal) as $val => $c) {
+                        $up->execute([
+                            ':g' => $g, ':b' => $b, ':d' => $dim, ':v' => $val,
+                            ':n' => $c['n'], ':m' => $c['matched'], ':s' => $c['served'],
+                        ]);
                     }
                 }
             }
-            $this->pruneRollups();
-            $this->stateSet('last_id', (string) $maxId);
-            $this->db->commit();
-        } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
         }
+        $this->pruneRollups();
+        $this->stateSet('last_id', (string) $maxId);
 
         return count($rows);
     }
 
+    /**
+     * NOTE on capped dimensions: the top-K cap (see {@see capTopK()}) is applied per fold-batch, so
+     * for a high-cardinality dim whose values change across batches the stored rows per
+     * (gran,bucket,dim) can exceed K+1 cumulatively and a per-value count here is APPROXIMATE (a
+     * value can be split between its own row and '(other)'). `dim='total'` and the SUM of all rows
+     * stay exact, and storage stays bounded. All rollup dims today are app/classifier-bounded
+     * (protocol/event/severity/status/country, and `tool` from the fixed FP-0213 attributor), so no
+     * attacker input reaches the cap in practice; a full per-cumulative compaction pass is deferred
+     * as YAGNI.
+     */
     public function breakdown(string $dim, int $sinceEpoch, string $gran = 'h'): array
     {
         $st = $this->db->prepare(
@@ -567,6 +603,17 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
      * so bounded dims (protocol/status/severity) are untouched. Total n across the group is
      * preserved — the tail is summed, never dropped — so a sprayed dimension cannot both inflate
      * storage and skew the totals.
+     *
+     * APPROXIMATION (per-batch): the cap is applied to THIS fold-batch's deltas, not to the
+     * cumulative stored row. So if the top-K set for a (gran,bucket,dim) differs across the batches
+     * that touch it, a value promoted in one batch and demoted in another ends up split between its
+     * own row and '(other)', the stored distinct-row count for that group can drift above K+1 over
+     * many folds, and a per-value {@see breakdown()} count for a capped dim is therefore
+     * approximate. What stays exact regardless: `dim='total'`, the SUM of n across the group, and
+     * the matched/served counters — and storage stays bounded per batch-touch. All current rollup
+     * dims are app/classifier-bounded (well under K), so this only bites a hypothetical future
+     * high-cardinality dim, never attacker input today; a per-cumulative compaction pass is deferred
+     * as YAGNI.
      *
      * @param array<string,array{n:int,matched:int,served:int}> $byVal
      * @return array<string,array{n:int,matched:int,served:int}>
