@@ -132,6 +132,13 @@ max-days AND max-GB; a known_attacker flag.
   at heavy noise is ~1-3M rows, where these scans are still sub-second), and a
   small hourly rollup table plus maintained counters makes the widget tick
   O(1) regardless of history. Do the rollup; it is a day of work.
+  > **Built — FP-0243a.** The rollup shipped, at a finer (per-minute) grain so
+  > events-over-time is meaningful, folded up to hour + day for history. A
+  > background worker (`demo/rollup.php`, on a ~15s entrypoint timer) reads new
+  > `hits` since a watermark and UPSERTs a `rollup` table in `hits.db`
+  > (`Storage\AnalyticsStore`); the analytics reads (`breakdown`/`series`) are
+  > O(buckets), flat in event volume. Ingest (`append()`) is untouched — the
+  > worker, not the hot path, pays for analytics.
 - **CIDR blocklist:** SQLite has no `inet` type. Store ranges as integer
   `(lo, hi)` pairs with an index, exactly the trick `geo.php` already uses in
   production in this repo. Exact-IP sources are a PK lookup. IPv6 needs the

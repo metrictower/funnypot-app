@@ -48,6 +48,15 @@ and the TCP protocol emulators — persisted on the data volume and enforced wit
 
 ![funnypot dashboard](docs/img/dashboard.png)
 
+**Aggregate analytics scale to high volume.** A background rollup worker (`demo/rollup.php`, on a
+~15 s timer) folds new hits into a small per-minute rollup table (downsampled to hour and day, with
+a top-K cap so a scanner spraying fake dimension values can't inflate storage), so operator
+breakdowns and events-over-time read in O(buckets) — flat no matter how many millions of hits are
+behind them — instead of re-scanning the whole table. The hot logging path (`append()`) is
+untouched; the worker, not ingestion, pays for analytics. It is on by default and tunable with
+`FUNNYPOT_ROLLUP*` (off with `FUNNYPOT_ROLLUP=0`; `_INTERVAL`, `_BATCH`, `_TOPK`,
+`_RETAIN_MIN_H`/`_HOUR_D`/`_DAY_D`). Rollups are derived data, kept off the attacker surface.
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 

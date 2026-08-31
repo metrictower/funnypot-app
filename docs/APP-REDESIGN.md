@@ -130,6 +130,16 @@ file-split half of `docs/DEMO-DASHBOARD-PLAN.md` Phase 1 that never landed.
 > there is a second honeypot node (kept cheap by the `HitStore` interface). Full reasoning +
 > load numbers: docs/DATA-LAYER-DECISION.md.
 
+> BUILT (FP-0243a): the rollup layer landed as an incremental background worker rather than
+> per-ingest counters (an APCu-counters design is unsafe here — the ~40 CLI protocol listeners
+> do not share the php-fpm APCu segment, so it would undercount protocol traffic; SQLite/WAL is
+> the only cross-process source of truth). `demo/rollup.php` folds new `hits` since a watermark
+> into a `rollup` table in `hits.db` on a ~15s timer, at per-minute grain downsampled to hour +
+> day, with a top-K cardinality cap so a sprayed dimension can't inflate storage. Reads go
+> through a new `Storage\AnalyticsStore` (`breakdown`/`series`/`topN`/`ataglance`), O(buckets)
+> and flat in event volume; `append()` is unchanged. The operator analytics **views** over this
+> API are FP-0243b.
+
 Today: JSON-lines file is canonical, SQLite is a best-effort mirror that silently no-ops on
 any failure (Scout A section 2, `store.php:16-25`). Three divergent row shapes (HTTP hit,
 decoy-archive, TCP protocol) all land in one loose `hits` table and consumers `??`-coalesce
