@@ -1597,6 +1597,8 @@ final class SipServer
             'iwar'             => 'iwar-wardialer',
             'warvox'           => 'warvox',
             'sipp'             => 'sipp',
+            'nmap nse'         => 'nmap-sip',
+            'nmap'             => 'nmap-sip',
             'zoiper'           => 'zoiper-softphone',
             'x-lite'           => 'softphone',
             'eyebeam'          => 'softphone',
@@ -1615,33 +1617,52 @@ final class SipServer
             }
         }
 
-        // No usable User-Agent match. Fall back to a wire signature: sippts (Pepelux) — whose default UA
-        // is 'pplsip' but which operators routinely change — stamps a hard RFC-3261 violation on every
-        // request via its shared create_message(): a long lowercase-alnum Via branch with NO z9hG4bK
-        // cookie, plus a bare 32-hex Call-ID (no @host). That combination catches sippts even with a
-        // spoofed/blank UA, so its probes still classify (and stand out on the dashboard) as the scanner.
-        if ($this->looksLikeSippts($req)) {
-            return 'pplsip-scanner';
+        // No usable User-Agent match — fall back to a wire signature. Major SIP scanners either omit the
+        // UA (SIPVicious PRO) or let the operator change it, but their shared request builders stamp fixed
+        // structural tells that survive a UA swap. Catch those so the probes still classify + stand out.
+        $wire = $this->classifyByWireSignature($req);
+        if ($wire !== null) {
+            return $wire;
         }
 
         return $ua === '' ? 'unknown' : 'other';
     }
 
-    /** Wire-signature match for the sippts SIP audit suite, independent of the (spoofable) User-Agent. */
-    private function looksLikeSippts(SipMessage $req): bool
+    /**
+     * UA-independent SIP-scanner classification from fixed structural signatures. Each check is a
+     * high-confidence literal a real client never emits, so false positives are negligible:
+     *  - Metasploit SIP mixin: a hardcoded From-tag `70c00e8c` on every probe.
+     *  - SIPVicious family (OSS + PRO): From/To domain 1.1.1.1 (To echoes From), a `"sipvicious"` display
+     *    name, or a Via branch `z9hG4bK-` followed by pure decimals (random.getrandbits(32)).
+     *  - sippts (Pepelux): a long lowercase-alnum Via branch with NO z9hG4bK cookie + a bare 32-hex Call-ID.
+     */
+    private function classifyByWireSignature(SipMessage $req): ?string
     {
         $via = (string) ($req->getHeader('via') ?? '');
-        // A real client's branch begins with the RFC-3261 magic cookie; sippts's never does.
-        if ($via === '' || stripos($via, 'z9hG4bK') !== false) {
-            return false;
-        }
-        if (preg_match('/branch=([a-z0-9]{40,})/', $via) !== 1) {
-            return false;
-        }
-        // sippts Call-ID is a bare 32-hex token; real UAs append @host.
-        $callId = trim((string) ($req->getHeader('call-id') ?? ''));
+        $from = strtolower((string) ($req->getHeader('from') ?? ''));
+        $to = strtolower((string) ($req->getHeader('to') ?? ''));
 
-        return preg_match('/^[a-f0-9]{32}$/', $callId) === 1;
+        // Metasploit: fixed From-tag literal (1-in-4-billion by chance) present on every SIP module probe.
+        if (strpos($from, 'tag=70c00e8c') !== false) {
+            return 'metasploit-sip';
+        }
+
+        // SIPVicious OSS/PRO: distinctive From identity or the pure-decimal branch suffix.
+        if (strpos($from, '"sipvicious"') !== false
+            || (strpos($from, '@1.1.1.1') !== false && strpos($to, '@1.1.1.1') !== false)
+            || preg_match('/branch=z9hG4bK-\d{6,}(?:[;>\s]|$)/i', $via) === 1) {
+            return 'sipvicious';
+        }
+
+        // sippts: a hard RFC-3261 violation — no z9hG4bK cookie, a long lowercase-alnum branch, and a bare
+        // 32-hex Call-ID (no @host).
+        if ($via !== '' && stripos($via, 'z9hG4bK') === false
+            && preg_match('/branch=[a-z0-9]{40,}/', $via) === 1
+            && preg_match('/^[a-f0-9]{32}$/', trim((string) ($req->getHeader('call-id') ?? ''))) === 1) {
+            return 'pplsip-scanner';
+        }
+
+        return null;
     }
 
     /**

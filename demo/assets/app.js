@@ -4,7 +4,7 @@ let cursor=0, older=0, started=false, filter='', scannersOnly=false;
 // Classified reconnaissance tools (scanners / wardialers) — mirrors SipServer::classifyTool. These are
 // the high-intel probes: we lure them in and want them to STAND OUT on the dashboard. Softphones and
 // PBX relays are deliberately excluded (they are not scanners).
-const SCANNERS=new Set(['sipvicious','sipcli','sip-scan','pplsip-scanner','vaxsip-masscaller','sipsak','warvox','iwar-wardialer','sundayddr-wardialer','sipp']);
+const SCANNERS=new Set(['sipvicious','sipcli','sip-scan','pplsip-scanner','vaxsip-masscaller','sipsak','warvox','iwar-wardialer','sundayddr-wardialer','sipp','metasploit-sip','nmap-sip']);
 const isScanner=r=>!!(r&&r.tool&&SCANNERS.has(r.tool));
 let serverFilter={};  // active quick-view (e.g. {method:'SSH',event:'command'}); sent to the feed
 const fq=()=>Object.entries(serverFilter).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');

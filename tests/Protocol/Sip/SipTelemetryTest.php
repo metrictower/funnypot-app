@@ -67,6 +67,35 @@ final class SipTelemetryTest extends TestCase
         $this->assertSame('other', end($logged2)['tool'], 'an RFC-compliant client is not mislabelled sippts');
     }
 
+    public function test_metasploit_sip_is_classified_by_its_fixed_from_tag(): void
+    {
+        // Every Metasploit SIP module stamps a hardcoded From-tag literal 70c00e8c via its shared mixin.
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $raw = "OPTIONS sip:nobody@target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK.deadbeef;rport;alias\r\n"
+            . "From: <sip:aBc@9.9.9.9>;tag=70c00e8c\r\nTo: <sip:nobody@target>\r\n"
+            . "Call-ID: 123456@9.9.9.9\r\nCSeq: 1 OPTIONS\r\nMax-Forwards: 20\r\nUser-Agent: aBc\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+        $this->assertSame('metasploit-sip', end($logged)['tool']);
+    }
+
+    public function test_sipvicious_is_classified_by_wire_signature_when_ua_is_stripped(): void
+    {
+        // SIPVicious PRO sends no User-Agent; OSS uses a z9hG4bK- + pure-decimal branch and the "sipvicious"
+        // From display-name / 1.1.1.1 domain. Any one is a high-confidence family tell without the UA.
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $raw = "OPTIONS sip:100@target SIP/2.0\r\nVia: SIP/2.0/UDP 1.1.1.1:5060;branch=z9hG4bK-3843029821;rport\r\n"
+            . "From: \"sipvicious\"<sip:100@1.1.1.1>;tag=abcd1234\r\nTo: \"sipvicious\"<sip:100@1.1.1.1>\r\n"
+            . "Call-ID: 1234@1.1.1.1\r\nCSeq: 1 OPTIONS\r\n\r\n";  // no User-Agent header at all
+        $server->dispatchMessage(SipMessage::parse($raw), '1.1.1.1', 5060, 'udp');
+        $this->assertSame('sipvicious', end($logged)['tool']);
+    }
+
     public function test_transport_tells_flag_spoofable_and_automated_traffic(): void
     {
         $logged = [];
