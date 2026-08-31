@@ -8,6 +8,7 @@ use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\Protocol\Sip\SipConfig;
 use Funnypot\Protocol\Sip\SipMessage;
 use Funnypot\Protocol\Sip\SipServer;
+use Funnypot\Protocol\Sip\SipSession;
 use PHPUnit\Framework\TestCase;
 
 final class SipServerSecurityTest extends TestCase
@@ -180,6 +181,84 @@ final class SipServerSecurityTest extends TestCase
         self::assertNotEmpty($floods, 'calls beyond the ceiling collapse to the flood rollup');
         self::assertLessThanOrEqual(1, count($floods), 'strict drops within the window collapse to one rollup');
         self::assertSame(3, $server->getActiveSessionCount(), 'only the answered 3 became sessions');
+    }
+
+    public function test_in_dialog_dtmf_is_capped_per_dialog(): void
+    {
+        // FP-0218 (reconciled with FP-0247): a bare/off-dialog INFO is still logged as intel — FP-0247's
+        // reportable gate keeps a spoofable one from blaming a forged source (covered by the two bare-INFO
+        // tests below). What FP-0218 adds is a per-dialog cap: a post-call INFO burst on ONE admitted
+        // dialog must not write an unbounded run of 'dtmf' rows / grow the digit buffer forever.
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        // Off-dialog INFO is logged (intel) — documents the reconciliation, not a suppression.
+        $ghost = SipMessage::parse(
+            "INFO sip:100@target SIP/2.0\r\nVia: SIP/2.0/UDP 7.7.7.7:5060;branch=z9hG4bK-g\r\n"
+            . "From: <sip:a@7.7.7.7>;tag=g\r\nTo: <sip:100@target>\r\nCall-ID: ghost\r\nCSeq: 1 INFO\r\n"
+            . "Content-Type: application/dtmf-relay\r\nContent-Length: 10\r\n\r\nSignal=5\r\n"
+        );
+        $server->dispatchMessage($ghost, '7.7.7.7', 5060, 'udp');
+        self::assertCount(1, array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf'));
+
+        // An admitted dialog flooded with INFO past the cap logs at most DTMF_MAX_DIGITS rows.
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+        $s = new SipSession('live1', '8.8.8.8', 5060);
+        $s->state = SipSession::STATE_STREAMING;
+        $sessProp->setValue($server, ['live1@8.8.8.8:5060' => $s]);
+
+        $capProp = new \ReflectionClassConstant(SipServer::class, 'DTMF_MAX_DIGITS');
+        $cap = (int) $capProp->getValue();
+
+        $before = count(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf'));
+        for ($i = 0; $i < $cap + 10; $i++) {
+            $info = SipMessage::parse(
+                "INFO sip:100@target SIP/2.0\r\nVia: SIP/2.0/UDP 8.8.8.8:5060;branch=z9hG4bK-l{$i}\r\n"
+                . "From: <sip:a@8.8.8.8>;tag=l\r\nTo: <sip:100@target>\r\nCall-ID: live1\r\nCSeq: {$i} INFO\r\n"
+                . "Content-Type: application/dtmf-relay\r\nContent-Length: 10\r\n\r\nSignal=7\r\n"
+            );
+            $server->dispatchMessage($info, '8.8.8.8', 5060, 'udp');
+        }
+        $inDialog = count(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf')) - $before;
+        self::assertSame($cap, $inDialog, 'in-dialog DTMF logging is capped per dialog');
+        self::assertSame($cap, strlen($s->dtmfDigits), 'the captured buffer is capped, not unbounded');
+    }
+
+    public function test_flood_rollup_flushes_the_residual_count_on_recovery(): void
+    {
+        // recordFloodDrop only emits once per window, so the final window's drops are lost when the flood
+        // stops. On recovery (bucket refill) the residual must be flushed so the total is exact.
+        $logged = [];
+        $cfg = new SipConfig(
+            rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000,
+            callBurst: 2.0, callRatePerSec: 0.0, callCeiling: 0
+        );
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $makeInvite = $this->inviteMaker();
+
+        for ($i = 1; $i <= 5; $i++) {
+            $server->dispatchMessage($makeInvite("fl-{$i}", '5.5.5.5'), '5.5.5.5', 5060, 'udp');
+        }
+        // 2 admitted, 3 dropped; only the first drop was rolled up (count=1), residual is 3.
+
+        // Simulate the source going quiet: refill its bucket, then one more request triggers the flush.
+        $bp = new \ReflectionProperty($server, 'callBuckets');
+        $bp->setAccessible(true);
+        $buckets = $bp->getValue($server);
+        $buckets['5.5.5.5'] = ['tokens' => 2.0, 'last' => microtime(true)];
+        $bp->setValue($server, $buckets);
+
+        $server->dispatchMessage($makeInvite('fl-recover', '5.5.5.5'), '5.5.5.5', 5060, 'udp');
+
+        $floods = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_flood'));
+        self::assertNotEmpty($floods, 'flood rollups were emitted');
+        $last = end($floods);
+        self::assertStringContainsString('3 INVITE', (string) $last['path'], 'the final flush reports the exact residual count');
     }
 
     public function test_call_ceiling_also_catches_register_enumeration_floods(): void
