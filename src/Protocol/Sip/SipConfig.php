@@ -108,13 +108,20 @@ final class SipConfig
      * PBX that answers every extension. Cosmetic response shaping only; every probe is still logged.
      */
     /**
-     * Whether REGISTER/OPTIONS to an unknown AOR is 404-shaped (a bounded, realistic extension map
-     * for dictionary scanners). Only the credential-guarding modes shape; the permissive/open modes
-     * exist to be trivially easy to reach, so they engage every probe instead of turning it away.
+     * Whether REGISTER/OPTIONS to an unknown AOR is 404-shaped (a bounded, realistic extension map for
+     * dictionary scanners). Shapes whenever there is a DEFINITE roster to shape against — 'org' mode,
+     * whose validity is the seeded company directory — so a scan sees a real, bounded dialplan (a subset
+     * of extensions exist, the rest 404) rather than a PBX that answers every extension, which is the
+     * clearest honeypot tell to a human reading sipexten/svwar output. This holds even under the
+     * permissive/open auth modes: those still ACCEPT on the roster (and on the by-name allowlist), so the
+     * "trivially easy to reach + brute-forceable" lure is preserved on the extensions that DO exist —
+     * only off-roster probes are turned away. In 'pattern' mode the validity test is a loose numeric
+     * heuristic (any plausible number is "valid"), so shaping there is gated to the credential-guarding
+     * modes to avoid 404-ing extensions a real dialplan might plausibly host.
      */
     public function shapesExtensionEnumeration(): bool
     {
-        return in_array($this->authMode, ['weak', 'strict'], true);
+        return $this->extensionMode === 'org' || in_array($this->authMode, ['weak', 'strict'], true);
     }
 
     public function isValidExtension(string $ext): bool

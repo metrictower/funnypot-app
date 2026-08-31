@@ -121,6 +121,24 @@ final class SipEnumerationTest extends TestCase
         $this->assertEmpty($ref->getValue($server));
     }
 
+    public function test_permissive_org_shapes_enumeration_offroster_404_onroster_challenged(): void
+    {
+        // FP-0223: even under permissive (easy-connect) + an org roster, an off-roster extension is 404'd
+        // so a scan (sipexten/svwar) does not see EVERY extension answer — the clearest honeypot tell.
+        // A roster/allowlist extension still 401-challenges (permissive then accepts), preserving the
+        // brute-force lure on the extensions that actually exist.
+        $cfg = new SipConfig(bind: '127.0.0.1:0', rtpPort: 0, authMode: 'permissive', extensionMode: 'org', personaSeed: 12345);
+        self::assertTrue($cfg->shapesExtensionEnumeration(), 'org mode shapes enumeration regardless of auth mode');
+        $server = new SipServer($cfg, null);
+
+        $resp404 = $this->roundTrip($server, $this->register('zzq9x7wv3n', 'perm-org-junk'));
+        self::assertStringContainsString('SIP/2.0 404 Not Found', $resp404, 'off-roster extension must 404 even under permissive');
+        self::assertStringNotContainsString('401 Unauthorized', $resp404);
+
+        $resp401 = $this->roundTrip($server, $this->register('root', 'perm-org-root'));
+        self::assertStringContainsString('SIP/2.0 401 Unauthorized', $resp401, 'an existing (allowlisted) account still challenges + lures');
+    }
+
     // --- OPTIONS shaping ---
 
     public function test_options_to_invalid_ext_returns_404_and_logs_probe(): void
