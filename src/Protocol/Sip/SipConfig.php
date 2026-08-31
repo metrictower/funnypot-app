@@ -89,6 +89,16 @@ final class SipConfig
          */
         public float $callBurst = 30.0,
         public float $callRatePerSec = 0.5,
+        /**
+         * Credential-crack resistance for the permissive/accept-any auth modes: a real weak PBX does not
+         * accept the FIRST password guess (svcrack/rcrack would flag "cracked on attempt #1" as a honeypot
+         * tell). Reject the first N guesses per (IP, extension) with 403, then latch + accept — the crack
+         * "succeeds" after a believable few tries and the brute-forcer burns more time, while the
+         * toll-fraud lure (eventual accept) is preserved. N is seeded per (IP, ext) in [crackMin,crackMax]
+         * for a realistic spread. crackMin <= 0 disables it (accept the first guess, the old behaviour).
+         */
+        public int $crackMin = 2,
+        public int $crackMax = 4,
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -266,6 +276,11 @@ final class SipConfig
         $callBurst = ($callBurstRaw !== false && $callBurstRaw !== '') ? (float) $callBurstRaw : 30.0;
         $callRateRaw = getenv('FUNNYPOT_SIP_CALLS_PER_SEC');
         $callRate = ($callRateRaw !== false && $callRateRaw !== '') ? (float) $callRateRaw : 0.5;
+        // Credential-crack resistance (permissive): reject the first N guesses per (IP,ext) before accept.
+        $crackMinRaw = getenv('FUNNYPOT_SIP_CRACK_MIN');
+        $crackMin = ($crackMinRaw !== false && $crackMinRaw !== '') ? (int) $crackMinRaw : 2;
+        $crackMaxRaw = getenv('FUNNYPOT_SIP_CRACK_MAX');
+        $crackMax = ($crackMaxRaw !== false && $crackMaxRaw !== '') ? (int) $crackMaxRaw : 4;
         $idleTimeout = (int) (getenv('FUNNYPOT_SIP_IDLE_TIMEOUT') ?: '30');
         $rtpPort = (int) (getenv('FUNNYPOT_SIP_RTP_PORT') ?: '10000');
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
@@ -336,6 +351,8 @@ final class SipConfig
             personaDomain: $personaDomain,
             callBurst: max(0.0, $callBurst),
             callRatePerSec: max(0.0, $callRate),
+            crackMin: $crackMin,
+            crackMax: max($crackMin, $crackMax),
         );
     }
 }

@@ -47,7 +47,9 @@ final class CredentialStoreTest extends TestCase
     public function test_sip_server_smart_credential_latching(): void
     {
         $logged = [];
-        $cfg = new SipConfig(authMode: 'permissive', latchPasswords: true, latchedCredentialsFile: $this->tempFile, rtpPort: 0);
+        // crackMin:0 disables crack-resistance so this test isolates the latching behaviour (accept-first);
+        // FP-0225's reject-first-then-accept is covered by its own test in SipWeakSecurityTest.
+        $cfg = new SipConfig(authMode: 'permissive', latchPasswords: true, latchedCredentialsFile: $this->tempFile, rtpPort: 0, crackMin: 0);
         $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });

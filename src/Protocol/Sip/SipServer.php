@@ -762,19 +762,25 @@ final class SipServer
         $matchedPass = '';
 
         if ($this->config->authMode === 'permissive' || $this->config->authMode === 'accept_all') {
-            $accepted = true;
-            // Check if it matched a known default for richer logging
+            // A CORRECT weak password (username-as-password or a seeded default) is accepted immediately,
+            // exactly as a real weak PBX would. An ARBITRARY password (which only permissive accepts) is
+            // gated behind crack resistance: reject the first N guesses per (IP, ext) so a random-password
+            // spray does not "crack" on guess #1 — the honeypot tell svcrack/rcrack look for — then accept
+            // + latch, keeping the toll-fraud lure while burning the brute-forcer's time.
             if (SipMessage::verifyDigest($auth, $user, $req->method)) {
+                $accepted = true;
                 $matchedPass = $user;
             } else {
                 foreach ($this->config->defaultPasswords as $cand) {
                     if (SipMessage::verifyDigest($auth, $cand, $req->method)) {
+                        $accepted = true;
                         $matchedPass = $cand;
                         break;
                     }
                 }
             }
-            if ($matchedPass === '') {
+            if (!$accepted && $this->crackResistancePassed($peerIp, $user)) {
+                $accepted = true;
                 $matchedPass = 'cracked_hash:' . substr($responseHash, 0, 8);
             }
         } elseif ($this->config->authMode === 'weak') {
@@ -840,6 +846,33 @@ final class SipServer
         // Return 403 Forbidden
         $res = $req->buildForbidden($toTag, $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+    }
+
+    /**
+     * Permissive-mode crack resistance: whether an arbitrary password should now be accepted for
+     * (IP, ext). Rejects the first (seeded) threshold guesses so the crack "succeeds" after a believable
+     * few tries, not on guess #1. crackMin <= 0 disables it (accept the first guess).
+     */
+    private function crackResistancePassed(string $peerIp, string $user): bool
+    {
+        if ($this->config->crackMin <= 0) {
+            return true;
+        }
+        $n = $this->credStore->incrementCrackAttempt($peerIp, $user);
+
+        return $n > $this->crackThreshold($peerIp, $user);
+    }
+
+    /** A stable per-(IP, ext) guess threshold in [crackMin, crackMax], so different accounts "crack"
+     *  after a different, realistic number of tries rather than a uniform constant. */
+    private function crackThreshold(string $peerIp, string $user): int
+    {
+        $min = max(1, $this->config->crackMin);
+        $max = max($min, $this->config->crackMax);
+        $span = ($max - $min) + 1;
+        $h = (int) hexdec(substr(hash('sha256', $peerIp . '|' . $user . '|crack'), 0, 8));
+
+        return $min + ($h % $span);
     }
 
     /**

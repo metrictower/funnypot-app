@@ -6,10 +6,12 @@ namespace Funnypot\Protocol\Sip;
 
 /**
  * Smart Credential Latching Cache (APCu + File/Memory).
- * Once an attacker IP tests a password for an extension, it latches success for that single credential,
- * rejecting all subsequent conflicting password attempts with 403 Forbidden.
- * This fools automated scanners (svcrack) into believing the PBX has a single vulnerable secret,
- * avoiding the telltale honeypot signature of accepting all passwords indiscriminately.
+ * Once an IP has "cracked" a password for an extension (immediately for a correct weak password, or —
+ * under permissive crack resistance, FP-0225 — after the first few guesses are 403'd), that credential
+ * is latched and subsequent REGISTERs on the AOR are accepted + captured as intel. This fools automated
+ * scanners (svcrack) into a believable weak-PBX story instead of the telltale honeypot signature of
+ * accepting the very first password guess. Also holds the per-(IP,ext) pre-latch guess counter that
+ * drives that crack resistance, and a per-IP call-sequence counter for persona cycling.
  */
 final class CredentialStore
 {
@@ -21,6 +23,9 @@ final class CredentialStore
 
     /** @var array<string, int> In-memory cache: ip => callCount */
     private array $callCounts = [];
+
+    /** @var array<string, int> In-memory: "ip\0user" => credential-guess count before latch (crack resistance) */
+    private array $crackAttempts = [];
 
     public function __construct(
         private readonly string $storagePath = '',
@@ -65,6 +70,24 @@ final class CredentialStore
         // spoofed packet is a self-DoS. Call counts stay in memory/APCu — they only pick the persona,
         // so losing them on restart is harmless. Credentials still persist on latch().
         return $count;
+    }
+
+    /**
+     * Increment + return the count of credential guesses seen for (IP, extension) before it latches.
+     * Drives permissive-mode crack resistance: the first few guesses are rejected so the "crack" takes a
+     * believable few tries instead of succeeding on guess #1. In-memory only (a crack sequence is short;
+     * losing it on restart is harmless), bounded like callCounts.
+     */
+    public function incrementCrackAttempt(string $ip, string $user): int
+    {
+        $k = $ip . "\0" . $user;
+        $n = ($this->crackAttempts[$k] ?? 0) + 1;
+        $this->crackAttempts[$k] = $n;
+        if (count($this->crackAttempts) > self::MAX_TRACKED) {
+            array_shift($this->crackAttempts); // evict oldest-seen (IP,ext)
+        }
+
+        return $n;
     }
 
     /**
@@ -136,6 +159,7 @@ final class CredentialStore
     {
         $this->memoryCache = [];
         $this->callCounts = [];
+        $this->crackAttempts = [];
         if ($this->storagePath !== '' && is_file($this->storagePath)) {
             @unlink($this->storagePath);
         }

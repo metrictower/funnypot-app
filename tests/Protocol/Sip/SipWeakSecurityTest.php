@@ -98,6 +98,42 @@ final class SipWeakSecurityTest extends TestCase
         $this->assertStringContainsString("ACCEPTED & LATCHED password '101'", end($logged)['path']);
     }
 
+    public function test_permissive_crack_resistance_rejects_first_guesses_then_accepts(): void
+    {
+        // FP-0225: under permissive, an ARBITRARY password must not "crack" on guess #1 (the svcrack
+        // honeypot tell). Fixed threshold 3 -> the first 3 arbitrary guesses are 403'd, then the 4th is
+        // accepted + latched: the toll-fraud lure is kept, just not first-guess.
+        $logged = [];
+        $cfg = new SipConfig(authMode: 'permissive', crackMin: 3, crackMax: 3, latchedCredentialsFile: $this->latchedFile, rtpPort: 0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $server->dispatchMessage(SipMessage::parse("REGISTER sip:pbx SIP/2.0\r\nCall-ID: cr-0\r\nCSeq: 1 REGISTER\r\n\r\n"), '10.9.9.9', 5060, 'udp');
+        $ref = new \ReflectionProperty($server, 'activeNonces');
+        $ref->setAccessible(true);
+        $nonce = array_key_last($ref->getValue($server));
+        $ha2 = md5('REGISTER:sip:pbx');
+
+        $guess = function (string $pass, string $cid) use ($server, $nonce, $ha2, &$logged): array {
+            $ha1 = md5("100:asterisk:{$pass}");
+            $resp = md5("{$ha1}:{$nonce}:{$ha2}");
+            $raw = "REGISTER sip:pbx SIP/2.0\r\nVia: SIP/2.0/UDP 10.9.9.9:5060;branch=z9hG4bK-{$cid}\r\n"
+                . "From: <sip:100@pbx>;tag={$cid}\r\nTo: <sip:100@pbx>\r\nCall-ID: {$cid}\r\nCSeq: 2 REGISTER\r\n"
+                . "Authorization: Digest username=\"100\", realm=\"asterisk\", nonce=\"{$nonce}\", uri=\"sip:pbx\", response=\"{$resp}\"\r\n\r\n";
+            $server->dispatchMessage(SipMessage::parse($raw), '10.9.9.9', 5060, 'udp');
+
+            return end($logged);
+        };
+
+        foreach (['aaa', 'bbb', 'ccc'] as $i => $p) {
+            $log = $guess($p, "cr-g{$i}");
+            self::assertStringNotContainsString('ACCEPTED', (string) $log['path'], 'guess ' . ($i + 1) . ' must not crack on an arbitrary password');
+        }
+        $log4 = $guess('ddd', 'cr-g9');
+        self::assertStringContainsString('ACCEPTED & LATCHED', (string) $log4['path'], 'the crack succeeds only after the threshold of guesses');
+    }
+
     public function test_weak_security_accepts_common_default_passwords(): void
     {
         $logged = [];
