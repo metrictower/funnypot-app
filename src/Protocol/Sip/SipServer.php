@@ -82,7 +82,7 @@ final class SipServer
      * Rollup state for suppressed (dropped) flood requests, per apparent source: the running count, the
      * time of the first drop in the current burst, and when we last emitted a rollup event — so a flood
      * of thousands becomes ~one 'call_flood' row per minute instead of one row per call.
-     * @var array<string, array{count: int, since: string, lastLog: float}>
+     * @var array<string, array{count: int, since: string, lastLog: float, method: string, lastLoggedCount: int}>
      */
     private array $floodState = [];
     private const FLOOD_ROLLUP_SECS = 60.0; // emit at most one flood rollup per source per this window
@@ -103,6 +103,7 @@ final class SipServer
     /** SIP methods that initiate work / draw an unsolicited response and so are worth flood-throttling.
      *  In-dialog follow-ups (ACK/BYE/CANCEL/INFO) are left alone so an admitted call still tears down. */
     private const THROTTLED_METHODS = ['INVITE', 'REGISTER', 'OPTIONS', 'MESSAGE'];
+    private const DTMF_MAX_DIGITS = 64; // cap captured DTMF per dialog; a real sequence is far shorter
 
     /** The request currently being dispatched, so logEvent can attach attacker attribution. */
     private ?SipMessage $currentReq = null;
@@ -1338,9 +1339,11 @@ final class SipServer
         $bucket['tokens'] = min($burst, $bucket['tokens'] + $elapsed * $rate);
         $bucket['last'] = $now;
 
-        // Fully refilled -> the source has been quiet long enough to have recovered; drop any flood
-        // rollup state so a later flood is reported as a fresh incident rather than continuing the count.
+        // Fully refilled -> the source has been quiet long enough to have recovered; flush the residual
+        // drop count (so the total is exact, not undercounted by the last window) then drop the rollup
+        // state so a later flood is reported as a fresh incident rather than continuing the count.
         if ($bucket['tokens'] >= $burst) {
+            $this->flushFloodRollup($ip);
             unset($this->floodState[$ip]);
         }
 
@@ -1387,10 +1390,14 @@ final class SipServer
 
         $st = &$this->ceilingState[$ip];
         // A source that has been silent longer than the reset window is forgiven: start a fresh run so a
-        // bot that gives up and returns hours later is re-characterized rather than dropped on sight.
+        // bot that gives up and returns hours later is re-characterized rather than dropped on sight. A
+        // strict source is dropped before the rate bucket runs, so its flood state is cleared here (with a
+        // final flush) rather than in admitRequest.
         if (($now - $st['last']) > $this->config->callCeilingIdleReset) {
             $st['count'] = 0;
             $st['strict'] = false;
+            $this->flushFloodRollup($ip);
+            unset($this->floodState[$ip]);
         }
         $st['last'] = $now;
 
@@ -1437,32 +1444,46 @@ final class SipServer
                 }
             }
             // First drop of a fresh flood: log it immediately so the incident's start is visible.
-            $this->floodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now];
-            $this->emitFloodRollup($ip, $method);
+            $this->floodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now, 'method' => $method, 'lastLoggedCount' => 0];
+            $this->emitFloodRollup($ip);
 
             return;
         }
 
         $st = &$this->floodState[$ip];
         $st['count']++;
+        $st['method'] = $method;
         if (($now - $st['lastLog']) >= self::FLOOD_ROLLUP_SECS) {
             $st['lastLog'] = $now;
-            $this->emitFloodRollup($ip, $method);
+            $this->emitFloodRollup($ip);
+        }
+    }
+
+    /**
+     * Emit the residual (not-yet-rolled-up) drops for $ip before its flood state is cleared. Without this
+     * the last <FLOOD_ROLLUP_SECS window of a flood is never logged, so the recorded suppressed-count
+     * permanently undercounts by up to one rollup window. Call right before dropping the flood state.
+     */
+    private function flushFloodRollup(string $ip): void
+    {
+        if (isset($this->floodState[$ip]) && $this->floodState[$ip]['count'] > $this->floodState[$ip]['lastLoggedCount']) {
+            $this->emitFloodRollup($ip);
         }
     }
 
     /** Emit one throttle rollup event. Never reportable: a throttled flood is pre-ACK and, over UDP,
      *  the source is unverifiable (possibly a spoofed victim) — reporting it would blame an innocent IP. */
-    private function emitFloodRollup(string $ip, string $method): void
+    private function emitFloodRollup(string $ip): void
     {
-        $st = $this->floodState[$ip];
+        $st = &$this->floodState[$ip];
+        $st['lastLoggedCount'] = $st['count'];
         $this->logEvent([
             'proto' => 'sip',
             'method' => 'SIP',
             'event' => 'call_flood',
             'ip' => $ip,
             'port' => $this->currentPeerPort,
-            'path' => "SIP flood throttled: {$st['count']} {$method} request(s) dropped from {$ip} since {$st['since']}",
+            'path' => "SIP flood throttled: {$st['count']} {$st['method']} request(s) dropped from {$ip} since {$st['since']}",
             'matched' => 1,
             'served' => 0,
             'reportable' => false,
@@ -1769,7 +1790,9 @@ final class SipServer
      *  - Metasploit SIP mixin: a hardcoded From-tag `70c00e8c` on every probe.
      *  - SIPVicious family (OSS + PRO): From/To domain 1.1.1.1 (To echoes From), a `"sipvicious"` display
      *    name, or a Via branch `z9hG4bK-` followed by pure decimals (random.getrandbits(32)).
-     *  - sippts (Pepelux): a long lowercase-alnum Via branch with NO z9hG4bK cookie + a bare 32-hex Call-ID.
+     *  - sippts (Pepelux): a long lowercase-alnum Via branch with NO z9hG4bK cookie + a bare 32-hex Call-ID;
+     *    OR the fixed 13-method Allow list; OR the SDP session name s=SIPPTS (the latter two survive both a
+     *    -ua override and a fuzzed branch).
      */
     private function classifyByWireSignature(SipMessage $req): ?string
     {
@@ -1794,6 +1817,17 @@ final class SipServer
         if ($via !== '' && stripos($via, 'z9hG4bK') === false
             && preg_match('/branch=[a-z0-9]{40,}/', $via) === 1
             && preg_match('/^[a-f0-9]{32}$/', trim((string) ($req->getHeader('call-id') ?? ''))) === 1) {
+            return 'pplsip-scanner';
+        }
+
+        // sippts, UA- and branch-independent: its shared builder stamps two fixed constants a real client
+        // never emits — the exact 13-method Allow list (this order) and the SDP session name s=SIPPTS.
+        // These survive both a -ua override and a fuzzed branch, so they catch runs the checks above miss.
+        $allowNorm = strtolower((string) preg_replace('/\s+/', '', (string) ($req->getHeader('allow') ?? '')));
+        if ($allowNorm === 'invite,register,ack,cancel,bye,notify,refer,options,info,subscribe,update,prack,message') {
+            return 'pplsip-scanner';
+        }
+        if (stripos($req->body, 's=SIPPTS') !== false) {
             return 'pplsip-scanner';
         }
 
@@ -1885,11 +1919,19 @@ final class SipServer
             return;
         }
 
+        // Off-dialog INFO carries no legitimate DTMF: a bare or looping INFO flood (INFO is exempt from
+        // the admission throttle so an admitted call can still signal) would otherwise write one 'dtmf'
+        // row per packet. Only capture for an admitted call (a matching session), and cap per dialog so a
+        // burst of INFO on one admitted dialog cannot grow the log or the digit buffer without bound.
         $match = $this->findSessionByCallId($req->getCallId() ?? '', $peerIp);
-        if ($match) {
-            [, $s] = $match;
-            $s->dtmfDigits .= $digit;
+        if (!$match) {
+            return;
         }
+        [, $s] = $match;
+        if (strlen($s->dtmfDigits) >= self::DTMF_MAX_DIGITS) {
+            return; // full sequence already captured; ignore the flood tail silently
+        }
+        $s->dtmfDigits .= $digit;
 
         $this->logEvent([
             'proto' => 'sip',

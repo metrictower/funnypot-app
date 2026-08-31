@@ -67,6 +67,42 @@ final class SipTelemetryTest extends TestCase
         $this->assertSame('other', end($logged2)['tool'], 'an RFC-compliant client is not mislabelled sippts');
     }
 
+    public function test_sippts_is_caught_by_allow_list_and_sdp_name_even_with_compliant_branch(): void
+    {
+        // Beyond the branch/Call-ID shape, sippts stamps two fixed constants that survive BOTH a -ua
+        // override and a fuzzed/compliant branch: the exact 13-method Allow list and the SDP name s=SIPPTS.
+        // A run with a spoofed UA and an RFC-compliant-looking branch must still classify on either.
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (): void {});
+        $ref = new \ReflectionMethod($server, 'classifyByWireSignature');
+        $ref->setAccessible(true);
+
+        $allowMsg = SipMessage::parse(
+            "OPTIONS sip:target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-legit;rport\r\n"
+            . "From: <sip:100@target>;tag=abcd\r\nTo: <sip:100@target>\r\nCall-ID: normal@9.9.9.9\r\n"
+            . "CSeq: 1 OPTIONS\r\nUser-Agent: Grandstream GXP\r\n"
+            . "Allow: INVITE, REGISTER, ACK, CANCEL, BYE, NOTIFY, REFER, OPTIONS, INFO, SUBSCRIBE, UPDATE, PRACK, MESSAGE\r\n"
+            . "Content-Length: 0\r\n\r\n"
+        );
+        self::assertSame('pplsip-scanner', $ref->invoke($server, $allowMsg), 'the fixed Allow list is a sippts tell');
+
+        $sdpMsg = SipMessage::parse(
+            "INVITE sip:100@target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-legit2;rport\r\n"
+            . "From: <sip:100@target>;tag=abcd\r\nTo: <sip:100@target>\r\nCall-ID: normal2@9.9.9.9\r\n"
+            . "CSeq: 1 INVITE\r\nUser-Agent: Grandstream GXP\r\nContent-Type: application/sdp\r\nContent-Length: 60\r\n\r\n"
+            . "v=0\r\no=- 8000 8000 IN IP4 9.9.9.9\r\ns=SIPPTS\r\nc=IN IP4 9.9.9.9\r\n"
+        );
+        self::assertSame('pplsip-scanner', $ref->invoke($server, $sdpMsg), 's=SIPPTS in the SDP is a sippts tell');
+
+        // A real client with a normal Allow set + benign SDP is not mislabelled.
+        $ok = SipMessage::parse(
+            "INVITE sip:100@target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-ok;rport\r\n"
+            . "From: <sip:100@target>;tag=abcd\r\nTo: <sip:100@target>\r\nCall-ID: ok@9.9.9.9\r\n"
+            . "CSeq: 1 INVITE\r\nAllow: INVITE, ACK, CANCEL, BYE\r\nContent-Type: application/sdp\r\n"
+            . "Content-Length: 40\r\n\r\nv=0\r\no=- 1 1 IN IP4 9.9.9.9\r\ns=call\r\n"
+        );
+        self::assertNull($ref->invoke($server, $ok), 'a benign client is not mislabelled sippts');
+    }
+
     public function test_metasploit_sip_is_classified_by_its_fixed_from_tag(): void
     {
         // Every Metasploit SIP module stamps a hardcoded From-tag literal 70c00e8c via its shared mixin.
@@ -174,12 +210,25 @@ final class SipTelemetryTest extends TestCase
         $this->assertTrue($dtmfEvents[0]['reportable']);
     }
 
+    /** Inject an admitted dialog so in-dialog INFO/DTMF is captured (off-dialog INFO is suppressed). */
+    private function injectDialog(SipServer $server, string $callId, string $ip): void
+    {
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+        $sessions = $sessProp->getValue($server);
+        $s = new SipSession($callId, $ip, 5060);
+        $s->state = SipSession::STATE_STREAMING;
+        $sessions[$callId . '@' . $ip . ':5060'] = $s;
+        $sessProp->setValue($server, $sessions);
+    }
+
     public function test_info_dtmf_relay_is_captured(): void
     {
         $logged = [];
         $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
+        $this->injectDialog($server, 'info-1', '6.6.6.6');
 
         $body = "Signal=7\r\nDuration=250\r\n";
         $raw = "INFO sip:1@t SIP/2.0\r\nCall-ID: info-1\r\nCSeq: 3 INFO\r\n"
@@ -198,6 +247,7 @@ final class SipTelemetryTest extends TestCase
         $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
             $logged[] = $e;
         });
+        $this->injectDialog($server, 'info-2', '6.6.6.7');
 
         $raw = "INFO sip:1@t SIP/2.0\r\nCall-ID: info-2\r\nCSeq: 3 INFO\r\n"
             . "Content-Type: application/dtmf\r\nContent-Length: 1\r\n\r\n9";
