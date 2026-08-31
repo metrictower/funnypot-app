@@ -16,6 +16,7 @@ use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
 use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
+use Funnypot\Core\OastProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\RequestContext;
@@ -174,6 +175,13 @@ final class HoneypotController
             return;
         }
 
+        // Out-of-band / SSRF probe detection (detect-only, any request field). Scanners plant a
+        // collaborator zone or a cloud-metadata URL that the engine and the fall-through classifier both
+        // miss (it is not a path they template, and it hides in headers). Compute once, before the panel
+        // branch, so an OOB spray at a root-mounted panel path is still reported. Never changes the served
+        // response — flagging must be invisible to the prober.
+        $oast = OastProbe::detect($context);
+
         // The emulation catalog's on/off choices become the engine's deny-set + corpus flag.
         $policy = EmulationPolicy::fromPackage(is_file($this->config->vulnsPath) ? $this->config->vulnsPath : null);
         $funnypot = Honeypot::default(new Config(
@@ -212,6 +220,11 @@ final class HoneypotController
             && !in_array('attack', $detection->tags(), true)) {
             $panel = $this->llmFakes->respond($context, $clientIp);   // writes its own 'panel' hit
             if ($panel !== null) {
+                // The panel writes + serves its own hit row, so only report here — an OOB payload sprayed
+                // at a panel path (e.g. a redirect param) would otherwise serve and go unreported.
+                if ($oast !== null) {
+                    $this->maybeReport(true, $clientIp, $context, null, $oast);
+                }
                 $this->serveDelay();
                 ResponseEmitter::emit($panel);
 
@@ -231,15 +244,25 @@ final class HoneypotController
             ? $this->attackClassifier?->classify($context)
             : null;
 
+        // An OOB/SSRF probe that neither the engine nor the classifier caught is still a real attack
+        // signal: flag the row and force a report. When it is the ONLY signal, label it like a fall-through
+        // payload class so the dashboard + reporter treat it the same.
+        $oastOnly = $oast !== null && !$logged->matched && $payloadClass === null;
+
         $this->store->append([
             'ts' => gmdate('c'),
             'ip' => $clientIp,
             'method' => $context->method,
             'path' => substr($context->path, 0, 200),
             'ua' => substr($context->headers['User-Agent'] ?? '', 0, 160),
-            'matched' => $logged->matched || $payloadClass !== null,
-            'severity' => $payloadClass !== null ? AttackClassifier::severityFor($payloadClass) : $logged->highestSeverity,
-            'templates' => $payloadClass !== null ? ['payload-' . $payloadClass] : array_slice($logged->templateIds(), 0, 8),
+            'matched' => $logged->matched || $payloadClass !== null || $oast !== null,
+            'severity' => $payloadClass !== null
+                ? AttackClassifier::severityFor($payloadClass)
+                : ($oastOnly ? 'high' : $logged->highestSeverity),
+            'templates' => $payloadClass !== null
+                ? ['payload-' . $payloadClass]
+                : ($oastOnly ? ['payload-oast'] : array_slice($logged->templateIds(), 0, 8)),
+            'oast' => $oast,
             'served' => $response !== null,
             'style' => $this->config->style,
             'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
@@ -271,14 +294,14 @@ final class HoneypotController
 
         // Queue an AbuseIPDB report for the attacker (a fast local write; the drain worker sends it):
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.
-        $this->maybeReport($logged->matched || $payloadClass !== null, $clientIp, $context, $payloadClass);
+        $this->maybeReport($logged->matched || $payloadClass !== null || $oast !== null, $clientIp, $context, $payloadClass, $oast);
     }
 
     /** Queue a web attacker for the reporters (AbuseIPDB and/or our Threat Intel service), with the
      *  port + URL (and the detected class, if any) in the comment. Reports both engine-matched attacks
      *  and classifier-caught payloads on unmatched paths. Each reporter is independent; both enqueues
      *  are fast local writes that never touch the network on the request path. */
-    private function maybeReport(bool $report, string $clientIp, RequestContext $context, ?string $payloadClass = null): void
+    private function maybeReport(bool $report, string $clientIp, RequestContext $context, ?string $payloadClass = null, ?string $oast = null): void
     {
         if (!$report || ($this->abuse === null && $this->threatIntel === null)) {
             return;
@@ -289,6 +312,7 @@ final class HoneypotController
         $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
         $url = ($host !== '' ? ($https ? 'https' : 'http') . '://' . $host : '') . $context->path;
         $class = $payloadClass !== null ? ' [' . $payloadClass . ']' : '';
+        $class .= $oast !== null ? ' [oast:' . $oast . ']' : '';
         $comment = sprintf('funnypot web honeypot, port %d:%s %s %s', $port, $class, $context->method, substr($url, 0, 180));
         $this->abuse?->enqueue($clientIp, $comment, '21');         // web app attack
         $this->threatIntel?->enqueue($clientIp, $comment, '21');

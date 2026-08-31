@@ -370,7 +370,8 @@ final class SqliteHitStore implements HitStore
                 known_attacker INTEGER DEFAULT 0,
                 recording TEXT,
                 ua TEXT,
-                tool TEXT
+                tool TEXT,
+                oast TEXT
             )'
         );
         // Add columns introduced after a db was first created (idempotent migration for old files).
@@ -386,6 +387,9 @@ final class SqliteHitStore implements HitStore
         }
         if (!in_array('tool', $cols, true)) {
             $db->exec('ALTER TABLE hits ADD COLUMN tool TEXT');
+        }
+        if (!in_array('oast', $cols, true)) {
+            $db->exec('ALTER TABLE hits ADD COLUMN oast TEXT');
         }
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ip ON hits(ip)');
         $db->exec('CREATE INDEX IF NOT EXISTS idx_hits_ts ON hits(ts)');
@@ -411,8 +415,8 @@ final class SqliteHitStore implements HitStore
     {
         if ($this->insertStmt === null) {
             $this->insertStmt = $this->db->prepare(
-                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker,recording,ua,tool)
-                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker,:recording,:ua,:tool)'
+                'INSERT INTO hits (ts,ip,method,path,matched,severity,served,templates,body,event,log4shell,honeytoken,cc,city,lat,lon,asn,known_attacker,recording,ua,tool,oast)
+                 VALUES (:ts,:ip,:method,:path,:matched,:severity,:served,:templates,:body,:event,:log4shell,:honeytoken,:cc,:city,:lat,:lon,:asn,:known_attacker,:recording,:ua,:tool,:oast)'
             );
         }
         $st = $this->insertStmt;
@@ -441,6 +445,7 @@ final class SqliteHitStore implements HitStore
             ':recording' => (string) ($e['recording'] ?? ''),
             ':ua' => self::clean($ua, 250),
             ':tool' => self::clean($tool, 64),
+            ':oast' => self::clean((string) ($e['oast'] ?? ''), 32),
         ]);
     }
 
