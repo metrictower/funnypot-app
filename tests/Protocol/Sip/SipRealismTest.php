@@ -25,6 +25,18 @@ final class SipRealismTest extends TestCase
         $this->assertStringNotContainsString("User-Agent:", $res, 'a response emitting both Server and User-Agent is a stack-fingerprint tell');
     }
 
+    public function test_local_tags_use_the_asterisk_as_hex_fingerprint_shape(): void
+    {
+        // The dominant field a SIP scanner (sippts/svmap) keys on to fingerprint the box as Asterisk is
+        // the local To-tag shape ^as[0-9a-f]{8}$. A differently-shaped tag reads as a non-Asterisk stack
+        // and contradicts our 'Asterisk PBX' Server banner, so every response must use this shape.
+        self::assertMatchesRegularExpression('/^as[0-9a-f]{8}$/', SipMessage::asteriskTag());
+        self::assertNotSame(SipMessage::asteriskTag(), SipMessage::asteriskTag(), 'freshly random per transaction');
+        $req = SipMessage::parse("OPTIONS sip:pbx SIP/2.0\r\nVia: SIP/2.0/UDP 1.1.1.1:5060;branch=z9hG4bK-o\r\nCall-ID: c\r\nCSeq: 1 OPTIONS\r\n\r\n");
+        $res = $req->buildOk(SipMessage::asteriskTag(), '<sip:10.0.0.1:5060>', '', [], 'Asterisk PBX 20.5.0');
+        self::assertMatchesRegularExpression('/;tag=as[0-9a-f]{8}/', $res, 'the wire To-tag must be the Asterisk as+8hex shape');
+    }
+
     public function test_options_ok_advertises_a_full_pjsip_capability_set(): void
     {
         // The OPTIONS reply is the scanner's first-contact fingerprint: it must read as a complete

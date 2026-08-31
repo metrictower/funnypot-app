@@ -177,7 +177,7 @@ final class SipMessage
         $from = preg_match('/^(?:From|f):[ \t]*(.+)$/im', $raw, $m) ? rtrim($m[1]) : '<sip:anonymous@invalid>';
         $to = preg_match('/^(?:To|t):[ \t]*(.+)$/im', $raw, $m) ? rtrim($m[1]) : '<sip:anonymous@invalid>';
         if (stripos($to, 'tag=') === false) {
-            $to .= ';tag=tag-' . bin2hex(random_bytes(3));
+            $to .= ';tag=' . self::asteriskTag();
         }
 
         return "SIP/2.0 400 Bad Request\r\n"
@@ -296,6 +296,17 @@ final class SipMessage
      * Response Builder: Generates a SIP response string matching this request.
      * @param array<string, string> $extraHeaders
      */
+    /**
+     * A local (To-)tag in Asterisk's `as` + 8-hex shape (`^as[0-9a-f]{8}$`). This is the dominant field
+     * a SIP scanner keys on to fingerprint the box as Asterisk (sippts/svmap match this exact pattern);
+     * a differently-shaped tag reads as a non-Asterisk stack and contradicts our Server banner. Freshly
+     * random per transaction.
+     */
+    public static function asteriskTag(): string
+    {
+        return 'as' . bin2hex(random_bytes(4));
+    }
+
     public function buildResponse(int $code, string $reason, string $toTag = '', array $extraHeaders = [], string $body = '', string $userAgent = 'Asterisk PBX 20.5.0'): string
     {
         $res = "SIP/2.0 {$code} {$reason}\r\n";

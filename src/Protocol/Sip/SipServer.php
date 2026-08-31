@@ -478,7 +478,7 @@ final class SipServer
             case 'INFO':
                 // Capture any out-of-band DTMF (application/dtmf-relay or application/dtmf), then ack.
                 $this->captureInfoDtmf($req, $peerIp, $peerPort);
-                $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+                $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 
@@ -496,7 +496,7 @@ final class SipServer
             case 'UPDATE':
             case 'PRACK':
                 // Known SIP methods we don't fully model: acknowledge so a client stays engaged.
-                $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+                $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 
@@ -529,7 +529,7 @@ final class SipServer
         // keep-alive (no user part in the Request-URI) keeps the normal 200 OK. Probe still logged.
         $ext = $this->addressedExtension($req);
         if ($this->config->shapesExtensionEnumeration() && $ext !== null && !$this->config->isValidExtension($ext)) {
-            $res = $req->buildNotFound('tag-' . bin2hex(random_bytes(3)), $this->config->userAgent);
+            $res = $req->buildNotFound(SipMessage::asteriskTag(), $this->config->userAgent);
             $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
             $this->logEvent([
@@ -551,7 +551,7 @@ final class SipServer
         // svmap/sipvicious mark the box live and escalate to REGISTER/INVITE. Accept + Allow-Events
         // advertise a complete pjsip stack (SDP negotiation + event subscriptions); Allow/Supported
         // stay Asterisk-20-faithful (no REGISTER-only 'path' extension, which would be a tell here).
-        $res = $req->buildOk('tag-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [
+        $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [
             'Accept' => 'application/sdp',
             'Allow-Events' => 'message-summary, presence, dialog, refer, cc',
         ], $this->config->userAgent);
@@ -630,7 +630,7 @@ final class SipServer
     private function handleRegister(SipMessage $req, string $peerIp, int $peerPort, string $transport, $tcpSock): void
     {
         $auth = $req->getDigestAuth();
-        $toTag = 'tag-' . bin2hex(random_bytes(3));
+        $toTag = SipMessage::asteriskTag();
         $contact = $req->getHeader('contact') ?? "<sip:{$peerIp}:{$peerPort}>";
 
         // Extension-enumeration shaping: a REGISTER for an AOR this PBX does not host answers 404,
@@ -881,7 +881,7 @@ final class SipServer
 
         if ($activeCount >= $this->config->maxActiveCalls || $perIpCount >= $this->config->perIpCalls) {
             // Reject call with 486 Busy Here
-            $res = $req->buildBusy('busy-' . bin2hex(random_bytes(3)), $this->config->userAgent);
+            $res = $req->buildBusy(SipMessage::asteriskTag(), $this->config->userAgent);
             $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
             $this->logEvent([
@@ -1002,7 +1002,7 @@ final class SipServer
         $callId = $req->getCallId() ?? '';
         $match = $this->findSessionByCallId($callId, $peerIp);
 
-        $res = $req->buildOk('bye-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+        $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
         if ($match) {
@@ -1020,11 +1020,11 @@ final class SipServer
         $match = $this->findSessionByCallId($callId, $peerIp);
 
         // 1. 200 OK for CANCEL
-        $ok = $req->buildOk('cancel-' . bin2hex(random_bytes(3)), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+        $ok = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
         $this->sendResponse($ok, $peerIp, $peerPort, $transport, $tcpSock);
 
         // 2. 487 Request Terminated for the INVITE
-        $term = $req->buildResponse(487, 'Request Terminated', 'term-' . bin2hex(random_bytes(3)), [], '', $this->config->userAgent);
+        $term = $req->buildResponse(487, 'Request Terminated', SipMessage::asteriskTag(), [], '', $this->config->userAgent);
         $this->sendResponse($term, $peerIp, $peerPort, $transport, $tcpSock);
 
         if ($match) {
@@ -1046,7 +1046,7 @@ final class SipServer
         // Collapse + cap the body: it is intel, and a flood must not bloat the log.
         $snippet = substr((string) preg_replace('/\s+/', ' ', $body), 0, 400);
 
-        $res = $req->buildResponse(200, 'OK', 'tag-' . bin2hex(random_bytes(3)), [], '', $this->config->userAgent);
+        $res = $req->buildResponse(200, 'OK', SipMessage::asteriskTag(), [], '', $this->config->userAgent);
         $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
 
         $this->logEvent([
@@ -1582,9 +1582,6 @@ final class SipServer
     private function classifyTool(SipMessage $req): string
     {
         $ua = strtolower($this->requestUserAgent($req));
-        if ($ua === '') {
-            return 'unknown'; // Many scanners send no User-Agent at all.
-        }
 
         $map = [
             'friendly-scanner' => 'sipvicious',
@@ -1613,12 +1610,38 @@ final class SipServer
             'opensips'         => 'opensips-relay',
         ];
         foreach ($map as $needle => $tool) {
-            if (strpos($ua, $needle) !== false) {
+            if ($ua !== '' && strpos($ua, $needle) !== false) {
                 return $tool;
             }
         }
 
-        return 'other';
+        // No usable User-Agent match. Fall back to a wire signature: sippts (Pepelux) — whose default UA
+        // is 'pplsip' but which operators routinely change — stamps a hard RFC-3261 violation on every
+        // request via its shared create_message(): a long lowercase-alnum Via branch with NO z9hG4bK
+        // cookie, plus a bare 32-hex Call-ID (no @host). That combination catches sippts even with a
+        // spoofed/blank UA, so its probes still classify (and stand out on the dashboard) as the scanner.
+        if ($this->looksLikeSippts($req)) {
+            return 'pplsip-scanner';
+        }
+
+        return $ua === '' ? 'unknown' : 'other';
+    }
+
+    /** Wire-signature match for the sippts SIP audit suite, independent of the (spoofable) User-Agent. */
+    private function looksLikeSippts(SipMessage $req): bool
+    {
+        $via = (string) ($req->getHeader('via') ?? '');
+        // A real client's branch begins with the RFC-3261 magic cookie; sippts's never does.
+        if ($via === '' || stripos($via, 'z9hG4bK') !== false) {
+            return false;
+        }
+        if (preg_match('/branch=([a-z0-9]{40,})/', $via) !== 1) {
+            return false;
+        }
+        // sippts Call-ID is a bare 32-hex token; real UAs append @host.
+        $callId = trim((string) ($req->getHeader('call-id') ?? ''));
+
+        return preg_match('/^[a-f0-9]{32}$/', $callId) === 1;
     }
 
     /**

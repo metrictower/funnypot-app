@@ -86,7 +86,7 @@ final class SipSession
         // Strictly pin the RTP destination IP to the incoming signaling source IP (Anti-Reflection Invariant B1)
         $this->remoteRtpIp = $peerIp;
 
-        $this->toTag = bin2hex(random_bytes(4));
+        $this->toTag = SipMessage::asteriskTag();
         $this->rtpSeq = random_int(1000, 50000);
         $this->rtpTimestamp = random_int(10000, 500000);
         $this->rtpSsrc = random_int(100000, 9999999);

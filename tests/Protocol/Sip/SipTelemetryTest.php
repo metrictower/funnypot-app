@@ -34,6 +34,39 @@ final class SipTelemetryTest extends TestCase
         $this->assertSame('sipvicious', $ev['tool']);
     }
 
+    public function test_sippts_is_classified_by_wire_signature_despite_a_changed_user_agent(): void
+    {
+        // sippts (Pepelux) defaults its UA to 'pplsip' but operators routinely change it. Its shared
+        // message builder still stamps a hard RFC-3261 violation: a long lowercase-alnum Via branch with
+        // NO z9hG4bK cookie + a bare 32-hex Call-ID (no @host). Classify on that even with a spoofed UA.
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $branch = str_repeat('a', 71);           // sippts: generate_random_string(71,71,'ascii'), no z9hG4bK
+        $callId = str_repeat('b', 32);           // sippts: bare 32-hex Call-ID, no @host
+        $raw = "OPTIONS sip:target SIP/2.0\r\n"
+            . "Via: SIP/2.0/UDP 9.9.9.9:5060;branch={$branch};rport\r\n"
+            . "From: <sip:100@target>;tag=deadbeef\r\nTo: <sip:100@target>\r\n"
+            . "Call-ID: {$callId}\r\nCSeq: 1 OPTIONS\r\n"
+            . "User-Agent: Totally Legit Phone 5.0\r\nContent-Length: 0\r\n\r\n";
+        $server->dispatchMessage(SipMessage::parse($raw), '9.9.9.9', 5060, 'udp');
+
+        $ev = end($logged);
+        $this->assertSame('pplsip-scanner', $ev['tool'], 'sippts must be caught by its wire signature, not just the default UA');
+        // A genuine client (RFC-compliant z9hG4bK branch) with the same custom UA stays unclassified.
+        $logged2 = [];
+        $server2 = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged2): void {
+            $logged2[] = $e;
+        });
+        $ok = "OPTIONS sip:target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-real;rport\r\n"
+            . "From: <sip:100@target>;tag=deadbeef\r\nTo: <sip:100@target>\r\n"
+            . "Call-ID: abc@9.9.9.9\r\nCSeq: 1 OPTIONS\r\nUser-Agent: Totally Legit Phone 5.0\r\n\r\n";
+        $server2->dispatchMessage(SipMessage::parse($ok), '9.9.9.9', 5060, 'udp');
+        $this->assertSame('other', end($logged2)['tool'], 'an RFC-compliant client is not mislabelled sippts');
+    }
+
     public function test_transport_tells_flag_spoofable_and_automated_traffic(): void
     {
         $logged = [];
