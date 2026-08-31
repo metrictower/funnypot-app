@@ -95,3 +95,29 @@ footer{color:var(--muted);margin-top:18px;font-size:12px}
 .sw i:before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:var(--muted);border-radius:50%;transition:.15s}
 .sw input:checked + i{background:rgba(240,180,0,.35)}
 .sw input:checked + i:before{transform:translateX(18px);background:var(--amber)}
+/* --- operator analytics view (FP-0243b) --- */
+.amodal .modal-box{width:min(1060px,96vw)}
+.amodal .modal-head select{padding:5px 8px}
+.abody{overflow:auto;padding:6px 16px 16px}
+.atiles{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 4px}
+.atile{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 14px;min-width:104px}
+.atile b{display:block;font-size:22px;color:var(--amber);font-variant-numeric:tabular-nums}
+.atile span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.asec{margin:14px 0 4px}
+.asec h4,.acard h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.achart{width:100%;height:260px}
+.agrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:12px 0}
+.acard{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.abars .abar{position:relative;background:var(--line);border-radius:4px;height:17px;overflow:hidden;margin:3px 0}
+.abars .abar>i{position:absolute;left:0;top:0;bottom:0;background:rgba(240,180,0,.30)}
+.abars .abar>label{position:relative;display:flex;justify-content:space-between;padding:0 7px;font-size:11px;line-height:17px}
+.abars.adrill .abar{cursor:pointer}.abars.adrill .abar:hover>i{background:rgba(240,180,0,.5)}
+.atop .arow{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--line);font-size:12px}
+.atop .arow:last-child{border:0}.atop .arow .av{word-break:break-all;min-width:0}
+.atop .arow .n{color:var(--amber);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.atop .arow.adrill{cursor:pointer}.atop .arow.adrill:hover .av{color:var(--amber)}
+.aempty{color:var(--muted);font-size:12px;padding:8px 0}
+/* uPlot dark theme fit (vendored uplot.min.css handles layout) */
+.uplot,.uplot *{color:var(--muted)}
+.u-legend{font-size:11px;color:var(--muted)}
+.u-legend .u-marker{width:9px;height:9px}

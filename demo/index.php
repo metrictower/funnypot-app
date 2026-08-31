@@ -234,7 +234,9 @@ if ($config->aiApiEnabled) {
 }
 
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock);
-$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock);
+// $store is a SqliteHitStore, which implements both HitStore and AnalyticsStore — the analytics
+// view (FP-0243b) reads the rollup tables through the SAME instance (last arg).
+$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath.
 $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist);

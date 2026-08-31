@@ -57,6 +57,20 @@ untouched; the worker, not ingestion, pays for analytics. It is on by default an
 `FUNNYPOT_ROLLUP*` (off with `FUNNYPOT_ROLLUP=0`; `_INTERVAL`, `_BATCH`, `_TOPK`,
 `_RETAIN_MIN_H`/`_HOUR_D`/`_DAY_D`). Rollups are derived data, kept off the attacker surface.
 
+An **operator analytics view** reads that rollup: an `analytics` panel on the dashboard —
+**auth-gated** behind the same admin password (`FUNNYPOT_ADMIN_PASSWORD`, sent as the
+`X-Admin-Token` header) that every other admin action uses, so it is no more reachable than the rest
+of the admin surface and, in stealth mode, rides the hidden dashboard path — never the deception
+surface. It shows protocol/status/severity/event breakdowns (house-style bars), an events-over-time
+multi-series chart (per protocol; charting is [uPlot](https://github.com/leeoniya/uPlot), MIT,
+**vendored same-origin** — no CDN, so it adds no external fetch to the served page), top-N tables
+(source IP, ASN, country, tool, path) and at-a-glance tiles (events/sec, unique IPs,
+new-vs-returning). Clicking a breakdown bar or a top-N row drills the raw-log feed on that field, and
+brushing a range on the time-series filters the feed to that window (a bound `ts_from`/`ts_to` range,
+never interpolated). The whole view is **operator-only**: it exposes no new attacker-facing surface,
+top-N source-IP/ASN intel stays behind auth, and any query fault degrades to empty widgets, never a
+`500` tell.
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 

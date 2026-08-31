@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\App\Http;
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Storage\AnalyticsStore;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
@@ -27,6 +28,12 @@ final class DashboardController
         private string $assetsDir,
         private ?LlmFakeCache $llmCache = null,
         private ?OperatorBlocklist $operatorBlock = null,
+        // The read-side analytics API (FP-0243). In production this is the SAME SqliteHitStore
+        // instance passed as $store (it implements both HitStore and AnalyticsStore); it is a
+        // separate constructor param so the interface, not the concrete store, is the dependency and
+        // so a HitStore test double without rollups can still construct the controller (analytics
+        // then degrades to empty widgets, never a 500 — the operator-only view just shows nothing).
+        private ?AnalyticsStore $analytics = null,
     ) {
     }
 
@@ -66,7 +73,7 @@ final class DashboardController
     private function filters(): array
     {
         $f = [];
-        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording', 'tool'] as $k) {
+        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording', 'tool', 'ts_from', 'ts_to'] as $k) {
             if (isset($_GET[$k]) && $_GET[$k] !== '') {
                 $f[$k] = (string) $_GET[$k];
             }
@@ -98,6 +105,56 @@ final class DashboardController
         if ($pass === '' || !hash_equals($pass, $given)) {
             http_response_code(403);
             echo json_encode(['error' => $pass === '' ? 'admin disabled (set FUNNYPOT_ADMIN_PASSWORD)' : 'forbidden']);
+
+            return;
+        }
+
+        // Operator-only analytics (FP-0243b). Reads the O(buckets) rollup API + retention-bounded
+        // top-N. Runs ONLY behind the admin auth above (same adminPassword/X-Admin-Token gate as
+        // every other action), so it is no more reachable than the rest of the admin surface and, in
+        // stealth mode, rides the hidden dashboard path — never the deception surface (spec §9).
+        // Every store call is wrapped so any query fault degrades to an empty widget and a 200, never
+        // a 500 tell (spec §9; mirrors demo/index.php's "only ever a 404, never a 500" invariant).
+        if ($action === 'analytics') {
+            $flags = JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+            $win = min(31536000, max(60, (int) ($_GET['win'] ?? 86400)));       // breakdown/series window
+            $agWin = min($win, max(30, (int) ($_GET['ag_win'] ?? 300)));        // at-a-glance rate window
+            $gran = in_array($_GET['gran'] ?? '', ['m', 'h', 'd'], true) ? (string) $_GET['gran'] : 'h';
+            $since = time() - $win;
+
+            // Each widget computed independently: one failing dimension yields its own empty slot,
+            // never a blank page or a 500. $this->analytics may be null (a HitStore-only wiring) — the
+            // method call then throws and is caught here, same as any query fault.
+            $safe = function (callable $fn, $default) {
+                try {
+                    return $this->analytics !== null ? $fn() : $default;
+                } catch (\Throwable $e) {
+                    error_log('funnypot analytics: ' . $e->getMessage());
+
+                    return $default;
+                }
+            };
+
+            $breakdown = [];
+            foreach (['protocol', 'event', 'severity', 'status', 'country', 'tool'] as $dim) {
+                $breakdown[$dim] = $safe(fn () => $this->analytics->breakdown($dim, $since, $gran), []);
+            }
+            // The busiest protocols drive the events-over-time multi-series (one line each).
+            $topProto = array_slice(array_column($breakdown['protocol'], 'val'), 0, 6);
+            $series = $topProto === [] ? [] : $safe(fn () => $this->analytics->series('protocol', $topProto, $since, $gran), []);
+
+            $topN = [];
+            foreach (['ip', 'asn', 'path', 'tool', 'cc'] as $dim) {
+                $topN[$dim] = $safe(fn () => $this->analytics->topN($dim, 15, $since), []);
+            }
+            $ataglance = $safe(fn () => $this->analytics->ataglance($agWin), [
+                'window_s' => $agWin, 'events' => 0, 'rate' => 0.0, 'unique_ips' => 0, 'new' => 0, 'returning' => 0,
+            ]);
+
+            echo json_encode([
+                'ok' => true, 'win' => $win, 'gran' => $gran,
+                'breakdown' => $breakdown, 'series' => $series, 'topN' => $topN, 'ataglance' => $ataglance,
+            ], $flags);
 
             return;
         }
@@ -247,11 +304,16 @@ final class DashboardController
 
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $js = (string) @file_get_contents($this->assetsDir . '/app.js');
+        // Operator analytics view (FP-0243b): uPlot is vendored + served same-origin (no CDN), and
+        // both it and analytics.js are inlined like app.css/app.js so the shell is one response.
+        $uplotCss = (string) @file_get_contents($this->assetsDir . '/uplot.min.css');
+        $uplotJs = (string) @file_get_contents($this->assetsDir . '/uplot.min.js');
+        $analyticsJs = (string) @file_get_contents($this->assetsDir . '/analytics.js');
 
         echo "<!doctype html><html lang=en><head><meta charset=utf-8>";
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
         echo "<link rel=stylesheet href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' crossorigin>";
-        echo "<title>funnypot</title><style>{$css}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style>{$css}{$uplotCss}</style></head><body><div class=wrap>";
         echo "<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>";
         echo "<span id=live class=live><span class=dot></span> live</span></div>";
         echo "<p class=lead>This host is a honeypot. Each row is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted. Updates live.</p>";
@@ -313,7 +375,7 @@ final class DashboardController
         echo "<table><thead><tr><th>time</th><th>ip</th><th>request</th><th>verdict</th><th>fake?</th></tr></thead>";
         echo "<tbody id=rows><tr><td colspan=5 class=empty>connecting&hellip;</td></tr></tbody></table>";
         echo "<div class=controls><button id=older class=btn>load older</button>";
-        echo "<span class=admin><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=blocked class=btn title='view + manage manually blocked IPs'>blocked</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button></span></div>";
+        echo "<span class=admin><button id=analytics class=btn title='operator analytics — protocol breakdown, events over time, top-N (auth-gated)'>analytics</button><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=blocked class=btn title='view + manage manually blocked IPs'>blocked</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button></span></div>";
         echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map &copy; OpenStreetMap, CARTO</footer>";
         echo "<div id=vmodal class=modal hidden><div class=modal-box>";
         echo "<div class=modal-head><b>Emulations</b><input id=vsearch class=filter placeholder='search&hellip;'><span class=grow></span><button id=vclose class=x title=close>&times;</button></div>";
@@ -330,9 +392,35 @@ final class DashboardController
         echo "<div id=blist class=vlist></div>";
         echo "<div class=modal-foot><input id=bip class=filter placeholder='ip or a.b.c.d/24&hellip;'><button id=badd class=btn>Block</button></div>";
         echo "</div></div>";
+        // Operator analytics panel (FP-0243b). Opened behind the admin token via analytics.js; renders
+        // rollup-backed breakdowns, the uPlot events-over-time series, top-N tables and at-a-glance
+        // tiles. Bars/rows drill the raw feed; the series can be brushed to a ts range.
+        echo "<div id=amodal class='modal amodal' hidden><div class=modal-box>";
+        echo "<div class=modal-head><b>Analytics</b><span class=note style='margin:0'>operator-only &middot; auth-gated</span><span class=grow></span>";
+        echo "<select id=awin class=filter title='time window'><option value=3600>1h</option><option value=21600>6h</option><option value=86400 selected>24h</option><option value=604800>7d</option><option value=2592000>30d</option></select>";
+        echo "<select id=agran class=filter title='granularity'><option value=m>minute</option><option value=h selected>hour</option><option value=d>day</option></select>";
+        echo "<button id=arefresh class=btn>refresh</button><button id=aclose class=x title=close>&times;</button></div>";
+        echo "<div class=abody>";
+        echo "<div id=atiles class=atiles></div>";
+        echo "<div class=asec><h4>events over time (per protocol)</h4><div id=achart class=achart></div><span class=note style='margin:2px 0 0'>drag across the chart to brush a time range &rarr; filters the raw feed below</span></div>";
+        echo "<div class=agrid>";
+        echo "<div class=acard><h4>protocol</h4><div id=a_protocol class=abars></div></div>";
+        echo "<div class=acard><h4>status</h4><div id=a_status class=abars></div></div>";
+        echo "<div class=acard><h4>severity</h4><div id=a_severity class=abars></div></div>";
+        echo "<div class=acard><h4>event</h4><div id=a_event class=abars></div></div>";
+        echo "</div>";
+        echo "<div class=agrid>";
+        echo "<div class=acard><h4>top source IPs</h4><div id=t_ip class=atop></div></div>";
+        echo "<div class=acard><h4>top ASNs</h4><div id=t_asn class=atop></div></div>";
+        echo "<div class=acard><h4>top countries</h4><div id=t_cc class=atop></div></div>";
+        echo "<div class=acard><h4>top tools</h4><div id=t_tool class=atop></div></div>";
+        echo "<div class=acard><h4>top paths</h4><div id=t_path class=atop></div></div>";
+        echo "</div></div></div></div>";
         echo "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' crossorigin></script>";
         echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
+        echo "<script>{$uplotJs}</script>";
         echo "<script>{$js}</script>";
+        echo "<script>{$analyticsJs}</script>";
         echo "</div></body></html>";
     }
 

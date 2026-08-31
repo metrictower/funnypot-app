@@ -171,6 +171,17 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         if (!empty($f['recording']) || !empty($f['has_recording'])) {
             $clauses[] = "(recording IS NOT NULL AND recording <> '')";
         }
+        // Time-series drill-down (FP-0243b): brushing a range on the analytics series adds a ts
+        // window. `ts` is ISO-8601 TEXT and compares lexicographically (see append()), so an
+        // ISO-8601 bound orders correctly. Both bounds are BOUND, never interpolated — no injection.
+        if (isset($f['ts_from']) && $f['ts_from'] !== '') {
+            $clauses[] = 'ts >= :ts_from';
+            $params[':ts_from'] = (string) $f['ts_from'];
+        }
+        if (isset($f['ts_to']) && $f['ts_to'] !== '') {
+            $clauses[] = 'ts <= :ts_to';
+            $params[':ts_to'] = (string) $f['ts_to'];
+        }
 
         return [implode(' AND ', $clauses), $params];
     }
