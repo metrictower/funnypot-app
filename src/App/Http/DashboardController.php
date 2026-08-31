@@ -92,8 +92,9 @@ final class DashboardController
     }
 
     /**
-     * Password-gated admin actions. The VIEW stays public; only mutating actions (retention prune,
-     * clear, DB backfill, catalog edits) need FUNNYPOT_ADMIN_PASSWORD. Disabled if that env is unset.
+     * Password-gated admin actions. The VIEW stays public; the mutating actions (retention prune,
+     * clear, DB backfill, catalog edits) AND the operator-only analytics read (FP-0243b) all require
+     * FUNNYPOT_ADMIN_PASSWORD. Disabled if that env is unset.
      */
     public function admin(string $action): void
     {
@@ -124,7 +125,8 @@ final class DashboardController
 
             // Each widget computed independently: one failing dimension yields its own empty slot,
             // never a blank page or a 500. $this->analytics may be null (a HitStore-only wiring) — the
-            // method call then throws and is caught here, same as any query fault.
+            // wrapper then returns the empty default without calling the store, same net result as a
+            // caught query fault.
             $safe = function (callable $fn, $default) {
                 try {
                     return $this->analytics !== null ? $fn() : $default;
