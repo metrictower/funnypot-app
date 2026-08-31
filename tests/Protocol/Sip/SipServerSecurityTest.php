@@ -182,6 +182,39 @@ final class SipServerSecurityTest extends TestCase
         self::assertSame(3, $server->getActiveSessionCount(), 'only the answered 3 became sessions');
     }
 
+    public function test_call_ceiling_also_catches_register_enumeration_floods(): void
+    {
+        // The ceiling counts ALL throttled methods, not just INVITE — so a REGISTER-based extension
+        // enumerator / credential brute-forcer (sipexten, siprcrack) that never dials a call is still
+        // flipped to strict once it exceeds the ceiling. ceiling=3, rate bucket disabled.
+        $logged = [];
+        $cfg = new SipConfig(
+            rtpPort: 0, maxActiveCalls: 1000, perIpCalls: 1000,
+            callBurst: 100000.0, callRatePerSec: 0.0, callCeiling: 3
+        );
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $makeRegister = static function (string $id): SipMessage {
+            $raw = "REGISTER sip:target SIP/2.0\r\n"
+                . "Via: SIP/2.0/UDP 45.9.9.9:5060;branch=z9hG4bK-{$id}\r\n"
+                . "From: <sip:1{$id}@target>;tag=tag-{$id}\r\n"
+                . "To: <sip:1{$id}@target>\r\n"
+                . "Call-ID: reg-{$id}\r\nCSeq: 1 REGISTER\r\nContent-Length: 0\r\n\r\n";
+
+            return SipMessage::parse($raw);
+        };
+
+        for ($i = 1; $i <= 7; $i++) {
+            $server->dispatchMessage($makeRegister((string) $i), '45.9.9.9', 5060, 'udp');
+        }
+
+        $floods = array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_flood');
+        self::assertNotEmpty($floods, 'a REGISTER enumeration flood must trip the ceiling into strict');
+        $flood = array_values($floods)[0];
+        self::assertStringContainsString('REGISTER', (string) $flood['path'], 'the rollup names the flooding method');
+    }
+
     public function test_call_ceiling_auto_recovers_after_the_source_goes_quiet(): void
     {
         // A strict source that stays silent past callCeilingIdleReset is forgiven and re-characterized.

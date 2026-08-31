@@ -97,11 +97,12 @@ final class SipServer
 
     /**
      * Cumulative per-source call ceiling (distinct from the per-second rate bucket): counts a source's
-     * calls across an active run. Once it exceeds callCeiling the source is a confirmed flooder we've
-     * already characterized, so it flips to 'strict' — every subsequent request is dropped (logging
-     * collapsed to the flood rollup) until it stays quiet for callCeilingIdleReset and is forgotten.
-     * The rate bucket catches only FAST floods; this catches a slow, relentless dialer that never drains
-     * the per-second bucket yet still buries the log in per-call rows.
+     * throttled requests (calls, extension-enum REGISTERs, OPTIONS sweeps) across an active run. Once it
+     * exceeds callCeiling the source is a confirmed flooder we've already characterized, so it flips to
+     * 'strict' — every subsequent request is dropped (logging collapsed to the flood rollup) until it
+     * stays quiet for callCeilingIdleReset and is forgotten. The rate bucket catches only FAST floods;
+     * this catches a slow, relentless source that never drains the per-second bucket yet still buries the
+     * log in per-request rows.
      * @var array<string, array{count: int, last: float, strict: bool}>
      */
     private array $ceilingState = [];
@@ -1373,11 +1374,11 @@ final class SipServer
 
     /**
      * Cumulative per-source ceiling gate. Returns true when the request should be dropped because the
-     * source is a confirmed flooder. A source accumulates one count per call (INVITE) across an active
-     * run; once the count exceeds callCeiling it flips to 'strict' and every throttled request from it is
-     * dropped — we have already learned all we can, so there is nothing left to gain by answering. The
-     * source is forgotten (and thus forgiven) after callCeilingIdleReset seconds of silence. Only calls
-     * accumulate; non-call throttled methods pass while under the ceiling but are dropped once strict.
+     * source is a confirmed flooder. A source accumulates one count per throttled request (INVITE calls,
+     * REGISTER enumeration/brute-force, OPTIONS sweeps) across an active run; once the count exceeds
+     * callCeiling it flips to 'strict' and every throttled request from it is dropped — we have already
+     * learned all we can, so there is nothing left to gain by answering. The source is forgotten (and thus
+     * forgiven) after callCeilingIdleReset seconds of silence.
      */
     private function overCallCeiling(string $ip, string $method): bool
     {
@@ -1417,13 +1418,16 @@ final class SipServer
             return true;
         }
 
-        if ($method === 'INVITE') {
-            $st['count']++;
-            if ($st['count'] > $ceiling) {
-                $st['strict'] = true;
+        // Count every throttled request toward the ceiling, not just calls. A tool floods us with
+        // whatever method it uses: INVITE (toll-fraud dial), REGISTER (extension enumeration / credential
+        // brute-force), OPTIONS (liveness sweep). A call-only counter would let the REGISTER/OPTIONS
+        // scanners run forever. This method is only ever invoked for THROTTLED_METHODS, so any call here
+        // is a floodable request.
+        $st['count']++;
+        if ($st['count'] > $ceiling) {
+            $st['strict'] = true;
 
-                return true;
-            }
+            return true;
         }
 
         return false;

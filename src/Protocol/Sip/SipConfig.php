@@ -116,12 +116,13 @@ final class SipConfig
          */
         public int $callNoAudioTimeout = 10,
         /**
-         * Cumulative per-source call ceiling: how many calls one apparent source may make in an active run
-         * before it is treated as a confirmed flooder and every further request from it is dropped
-         * (silently — reflection-safe — with logging collapsed to the flood rollup). The honeypot has no
-         * legitimate callers, so a source past this ceiling has been fully characterized and there is
-         * nothing more to learn by answering. Distinct from callBurst/callRatePerSec, which is a per-second
-         * bucket that only catches FAST floods; this catches a slow, relentless dialer. 0 disables.
+         * Cumulative per-source call ceiling: how many throttled requests (INVITE calls, REGISTER
+         * enumeration/brute-force, OPTIONS sweeps) one apparent source may make in an active run before it
+         * is treated as a confirmed flooder and every further request from it is dropped (silently —
+         * reflection-safe — with logging collapsed to the flood rollup). The honeypot has no legitimate
+         * callers, so a source past this ceiling has been fully characterized and there is nothing more to
+         * learn by answering. Distinct from callBurst/callRatePerSec, which is a per-second bucket that only
+         * catches FAST floods; this catches a slow, relentless source. 0 disables.
          */
         public int $callCeiling = 20,
         /**
