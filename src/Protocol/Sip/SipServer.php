@@ -489,14 +489,23 @@ final class SipServer
                 $this->handleMessage($req, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 
-            case 'NOTIFY':
             case 'SUBSCRIBE':
             case 'PUBLISH':
             case 'REFER':
+                // Auth-requiring methods: a real Asterisk challenges these with 401 (same as REGISTER),
+                // not a bare 200 — an unauthenticated 200 to SUBSCRIBE/PUBLISH is a stack tell. The
+                // challenge nonce is fresh but not stored (we do not validate a re-auth for these), so a
+                // SUBSCRIBE/PUBLISH flood cannot grow the nonce table; the scanner just re-challenges (tarpit).
+                $res = $req->buildUnauthorized(SipMessage::asteriskTag(), $this->config->realm, bin2hex(random_bytes(16)), $this->config->userAgent);
+                $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
+                break;
+
+            case 'NOTIFY':
             case 'UPDATE':
             case 'PRACK':
-                // Known SIP methods we don't fully model: acknowledge so a client stays engaged.
-                $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
+                // In-dialog methods with no matching dialog: a real stack answers 481, not 200 (a bare 200
+                // to an out-of-dialog NOTIFY/UPDATE/PRACK is a tell).
+                $res = $req->buildResponse(481, 'Call/Transaction Does Not Exist', SipMessage::asteriskTag(), [], '', $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
 

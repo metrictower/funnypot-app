@@ -427,6 +427,29 @@ final class SipEnumerationTest extends TestCase
         $this->assertFalse($pattern->isValidExtension('asdf9zqxwer'));
     }
 
+    // --- per-method response fidelity (FP-0224): match a real Asterisk, not a bare 200 to everything ---
+
+    public function test_subscribe_and_publish_are_challenged_401_like_real_asterisk(): void
+    {
+        foreach (['SUBSCRIBE', 'PUBLISH', 'REFER'] as $method) {
+            $server = new SipServer(new SipConfig(bind: '127.0.0.1:0', rtpPort: 0), null);
+            $raw = "{$method} sip:target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-m\r\n"
+                . "From: <sip:x@t>;tag=a\r\nTo: <sip:x@t>\r\nCall-ID: m-{$method}\r\nCSeq: 1 {$method}\r\nEvent: message-summary\r\n\r\n";
+            $resp = $this->roundTrip($server, $raw);
+            $this->assertStringContainsString('SIP/2.0 401 Unauthorized', $resp, "{$method} should be challenged, not 200'd");
+            $this->assertStringContainsString('realm="asterisk"', $resp);
+        }
+    }
+
+    public function test_out_of_dialog_notify_gets_481(): void
+    {
+        $server = new SipServer(new SipConfig(bind: '127.0.0.1:0', rtpPort: 0), null);
+        $raw = "NOTIFY sip:target SIP/2.0\r\nVia: SIP/2.0/UDP 9.9.9.9:5060;branch=z9hG4bK-n\r\n"
+            . "From: <sip:x@t>;tag=a\r\nTo: <sip:x@t>\r\nCall-ID: n-1\r\nCSeq: 1 NOTIFY\r\n\r\n";
+        $resp = $this->roundTrip($server, $raw);
+        $this->assertStringContainsString('SIP/2.0 481', $resp, 'an out-of-dialog NOTIFY should be 481, not 200');
+    }
+
     // --- helpers ---
 
     /**
