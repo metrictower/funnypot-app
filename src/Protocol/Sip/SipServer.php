@@ -1419,21 +1419,27 @@ final class SipServer
         // Save the call audio as gzip'd 8kHz mu-law: mu-law is already half a PCM WAV, gzip then
         // collapses the long silence gaps (a scanner call shrinks to a few KB). The dashboard route
         // decompresses + expands to a playable WAV on request. Prune the dir so it can't fill disk.
+        // Require CALLER-side audio before writing anything: scanners answer the handshake but send no
+        // RTP, so a recording of only our persona + silence is zero intel and pure storage waste. Keep the
+        // file only when the caller sent enough inbound audio (recordMinInboundBytes; 0 disables the gate).
+        $inboundBytes = strlen($s->recordedInbound);
+        $callerAudio = $this->config->recordMinInboundBytes <= 0
+            ? ($inboundBytes > 0)
+            : ($inboundBytes >= $this->config->recordMinInboundBytes);
+
         $recUrl = '';
-        if ($this->config->recordCalls && strlen($s->recordedUlaw) > 0) {
+        if ($this->config->recordCalls && $callerAudio && strlen($s->recordedUlaw) > 0) {
             // Cap the sanitized id length so an over-long attacker Call-ID can't exceed NAME_MAX.
             $recId = substr((string) preg_replace('/[^a-zA-Z0-9_-]/', '_', $s->callId), 0, 64);
             $filePath = $this->config->recordingsDir . '/' . $recId . '.ulaw.gz';
             @mkdir(dirname($filePath), 0777, true);
             if (@file_put_contents($filePath, (string) gzencode($s->recordedUlaw, 6)) !== false) {
                 $recUrl = '/funnypot/recording?id=' . urlencode($recId);
-                // Caller's channel (if they sent any audio) — makes the served recording stereo.
-                if ($s->recordedInbound !== '') {
-                    @file_put_contents(
-                        $this->config->recordingsDir . '/' . $recId . '.rx.ulaw.gz',
-                        (string) gzencode($s->recordedInbound, 6)
-                    );
-                }
+                // Caller's channel — makes the served recording stereo (guaranteed non-empty here).
+                @file_put_contents(
+                    $this->config->recordingsDir . '/' . $recId . '.rx.ulaw.gz',
+                    (string) gzencode($s->recordedInbound, 6)
+                );
                 $this->pruneRecordings();
             }
         }
@@ -1447,6 +1453,7 @@ final class SipServer
             'ip' => $s->peerIp,
             'port' => $s->peerPort,
             'path' => "SIP call ended: {$s->dialedNumber} ({$duration}s, {$pkts} pkts, persona: {$s->persona})"
+                . ($this->config->recordCalls && !$callerAudio ? ', no caller audio (recording dropped)' : '')
                 . ($s->dtmfDigits !== '' ? ", dtmf: {$s->dtmfDigits}" : ''),
             'matched' => 1,
             'served' => 1,

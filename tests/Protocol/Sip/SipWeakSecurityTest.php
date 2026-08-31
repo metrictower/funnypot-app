@@ -214,7 +214,13 @@ final class SipWeakSecurityTest extends TestCase
         $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nTo: <sip:101@target>;tag={$toTag}\r\nCSeq: 1 ACK\r\n\r\n");
         $server->dispatchMessage($ack, '10.0.0.9', 5060, 'udp');
 
-        // 3. Wait 25ms and simulate RTP audio transmission ticks
+        // 3. Simulate the CALLER sending audio (the intel a real call carries) — required now for a
+        //    recording to be kept — plus an outbound persona tick.
+        $refS = new \ReflectionProperty($server, 'sessions');
+        $refS->setAccessible(true);
+        foreach ($refS->getValue($server) as $sess) {
+            $sess->recordedInbound .= str_repeat("\x7f", 800); // ~0.1s of inbound mu-law
+        }
         usleep(25000);
         $server->tickRtpStreams();
 
@@ -233,6 +239,31 @@ final class SipWeakSecurityTest extends TestCase
         $this->assertGreaterThan(0, filesize($expectedRec));
         // And it round-trips back to mu-law bytes.
         $this->assertNotFalse(gzdecode((string) file_get_contents($expectedRec)));
+    }
+
+    public function test_call_with_no_caller_audio_writes_no_recording(): void
+    {
+        // A scanner answers the handshake but sends NO RTP — we must NOT keep a one-sided recording
+        // (zero intel, pure storage waste). The call is still logged, flagged "no caller audio".
+        $logged = [];
+        $cfg = new SipConfig(recordCalls: true, recordingsDir: $this->recordingsDir, rtpPort: 0);
+        $server = new SipServer($cfg, static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $callId = 'test-noaudio-1';
+
+        $server->dispatchMessage(SipMessage::parse("INVITE sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nCSeq: 1 INVITE\r\n\r\n"), '10.0.0.9', 5060, 'udp');
+        $toTag = $server->dialogToTag($callId, '10.0.0.9');
+        $server->dispatchMessage(SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nTo: <sip:101@target>;tag={$toTag}\r\nCSeq: 1 ACK\r\n\r\n"), '10.0.0.9', 5060, 'udp');
+        usleep(25000);
+        $server->tickRtpStreams();               // our persona streams; caller stays silent (no inbound RTP)
+        $server->dispatchMessage(SipMessage::parse("BYE sip:101@target SIP/2.0\r\nCall-ID: {$callId}\r\nCSeq: 2 BYE\r\n\r\n"), '10.0.0.9', 5060, 'udp');
+
+        $lastLog = end($logged);
+        $this->assertSame('call_end', $lastLog['event']);
+        $this->assertSame('', (string) $lastLog['recording'], 'no recording URL when the caller sent no audio');
+        $this->assertStringContainsString('no caller audio (recording dropped)', $lastLog['path']);
+        $this->assertFileDoesNotExist($this->recordingsDir . '/test-noaudio-1.ulaw.gz');
     }
 
     /**

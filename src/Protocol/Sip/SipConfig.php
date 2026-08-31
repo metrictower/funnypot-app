@@ -57,6 +57,14 @@ final class SipConfig
         public string $recordingsDir = '',
         /** Total on-disk cap for the recordings dir; oldest are pruned past it (disk-exhaustion guard). */
         public int $recordingsMaxBytes = 268435456,
+        /**
+         * Minimum bytes of CALLER-side audio (inbound 8kHz mu-law) required to keep a recording. Scanners
+         * complete the SIP handshake but send NO RTP — a recording of only our persona + silence is zero
+         * intel and pure storage waste. Require some real inbound audio (default ~60ms = 3 RTP packets)
+         * before writing the .wav; below it, the call is still logged (as "no caller audio") but no file is
+         * written. 0 disables the check (record every answered call, the old behaviour).
+         */
+        public int $recordMinInboundBytes = 480,
         public string $latchedCredentialsFile = '',
         public bool $latchPasswords = true,
         /**
@@ -286,6 +294,8 @@ final class SipConfig
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
         $recordingsDir = getenv('FUNNYPOT_SIP_RECORDINGS_DIR') ?: '';
         $recMaxBytes = (int) (getenv('FUNNYPOT_SIP_REC_MAX_BYTES') ?: '268435456');
+        $recMinInRaw = getenv('FUNNYPOT_SIP_REC_MIN_INBOUND_BYTES');
+        $recMinInbound = ($recMinInRaw !== false && $recMinInRaw !== '') ? (int) $recMinInRaw : 480;
         $latchedFile = getenv('FUNNYPOT_SIP_LATCHED_FILE') ?: '';
         $latchPasswords = getenv('FUNNYPOT_SIP_LATCH_PASSWORDS') !== '0';
 
@@ -343,6 +353,7 @@ final class SipConfig
             audioDir: $audioDir,
             recordingsDir: $recordingsDir,
             recordingsMaxBytes: max(0, $recMaxBytes),
+            recordMinInboundBytes: max(0, $recMinInbound),
             latchedCredentialsFile: $latchedFile,
             latchPasswords: $latchPasswords,
             validExtensionRules: $validExtRules,
