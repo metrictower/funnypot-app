@@ -93,7 +93,18 @@ final class SipServer
      */
     private array $floodState = [];
     private const FLOOD_ROLLUP_SECS = 60.0; // emit at most one flood rollup per source per this window
-    private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (both maps) so they can't grow unbounded
+    private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (all maps) so they can't grow unbounded
+
+    /**
+     * Cumulative per-source call ceiling (distinct from the per-second rate bucket): counts a source's
+     * calls across an active run. Once it exceeds callCeiling the source is a confirmed flooder we've
+     * already characterized, so it flips to 'strict' — every subsequent request is dropped (logging
+     * collapsed to the flood rollup) until it stays quiet for callCeilingIdleReset and is forgotten.
+     * The rate bucket catches only FAST floods; this catches a slow, relentless dialer that never drains
+     * the per-second bucket yet still buries the log in per-call rows.
+     * @var array<string, array{count: int, last: float, strict: bool}>
+     */
+    private array $ceilingState = [];
 
     /** SIP methods that initiate work / draw an unsolicited response and so are worth flood-throttling.
      *  In-dialog follow-ups (ACK/BYE/CANCEL/INFO) are left alone so an admitted call still tears down. */
@@ -451,10 +462,15 @@ final class SipServer
         // safe on UDP), with its per-call logging collapsed to a periodic rollup. Auto-recovers when the
         // source slows. ACK/BYE/CANCEL/INFO are exempt so an already-admitted call still tears down; a
         // re-INVITE from a drained source is throttled like any INVITE (a flood has no legitimate ones).
-        if (in_array($req->method, self::THROTTLED_METHODS, true) && !$this->admitRequest($peerIp)) {
-            $this->recordFloodDrop($peerIp, $req->method);
+        if (in_array($req->method, self::THROTTLED_METHODS, true)) {
+            // Cumulative ceiling first (a slow, relentless dialer the rate bucket never catches), then the
+            // per-second rate bucket (a fast flood). Either dropping routes to the same rollup so a buried
+            // log collapses to ~one 'call_flood' row per source per minute.
+            if ($this->overCallCeiling($peerIp, $req->method) || !$this->admitRequest($peerIp)) {
+                $this->recordFloodDrop($peerIp, $req->method);
 
-            return;
+                return;
+            }
         }
 
         switch ($req->method) {
@@ -1353,6 +1369,64 @@ final class SipServer
         $bucket['tokens'] -= 1.0;
 
         return true;
+    }
+
+    /**
+     * Cumulative per-source ceiling gate. Returns true when the request should be dropped because the
+     * source is a confirmed flooder. A source accumulates one count per call (INVITE) across an active
+     * run; once the count exceeds callCeiling it flips to 'strict' and every throttled request from it is
+     * dropped — we have already learned all we can, so there is nothing left to gain by answering. The
+     * source is forgotten (and thus forgiven) after callCeilingIdleReset seconds of silence. Only calls
+     * accumulate; non-call throttled methods pass while under the ceiling but are dropped once strict.
+     */
+    private function overCallCeiling(string $ip, string $method): bool
+    {
+        $ceiling = $this->config->callCeiling;
+        if ($ceiling <= 0) {
+            return false; // disabled
+        }
+        $now = microtime(true);
+
+        if (!isset($this->ceilingState[$ip])) {
+            if (count($this->ceilingState) >= self::CALL_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->ceilingState as $k => $s) {
+                    if ($s['last'] < $oldestAt) {
+                        $oldestAt = $s['last'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->ceilingState[$oldestKey]);
+                }
+            }
+            $this->ceilingState[$ip] = ['count' => 0, 'last' => $now, 'strict' => false];
+        }
+
+        $st = &$this->ceilingState[$ip];
+        // A source that has been silent longer than the reset window is forgiven: start a fresh run so a
+        // bot that gives up and returns hours later is re-characterized rather than dropped on sight.
+        if (($now - $st['last']) > $this->config->callCeilingIdleReset) {
+            $st['count'] = 0;
+            $st['strict'] = false;
+        }
+        $st['last'] = $now;
+
+        if ($st['strict']) {
+            return true;
+        }
+
+        if ($method === 'INVITE') {
+            $st['count']++;
+            if ($st['count'] > $ceiling) {
+                $st['strict'] = true;
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
