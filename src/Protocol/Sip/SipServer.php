@@ -1582,11 +1582,19 @@ final class SipServer
             // to the max-duration cap and recording minutes of silence.
             $baseline = $s->lastInboundTime > 0.0 ? $s->lastInboundTime : $s->startTime;
             $idle = $now - $baseline;
+            // A streaming call that has received ZERO caller RTP is a scanner that completed the
+            // handshake but never spoke: we would otherwise stream a persona to no one until the full
+            // idle cap. Drop it on a shorter clock so we free the slot + stop wasting CPU fast. A call
+            // that DID send some audio then went quiet still uses the normal idle cap. 0 disables.
+            $noAudio = $s->isStreaming() && $s->recordedInbound === '';
+            $idleCap = ($noAudio && $this->config->callNoAudioTimeout > 0)
+                ? $this->config->callNoAudioTimeout
+                : $this->config->callIdleTimeout;
             // A never-ACKed INVITE never becomes "streaming", so the idle clause below can't reap it.
             // Evict it at the setup timeout so scan INVITEs can't exhaust the call table.
             $setupStalled = !$s->isStreaming() && ($now - $s->startTime) > self::INVITE_SETUP_TIMEOUT;
             if ($s->getDuration() > $this->config->maxCallDuration
-                || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)
+                || ($s->isStreaming() && $idle > $idleCap)
                 || $setupStalled) {
                 try {
                     $this->endSession($s, $key);
