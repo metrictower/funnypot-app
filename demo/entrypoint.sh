@@ -141,6 +141,13 @@ fi
 # / FUNNYPOT_RETAIN_GB are set. Interval seconds via FUNNYPOT_RETAIN_INTERVAL (default hourly).
 ( while true; do php /app/demo/retention.php || true; sleep "${FUNNYPOT_RETAIN_INTERVAL:-3600}"; done ) &
 
+# Analytics rollup: fold new hits into the small rollup table so the analytics view reads O(buckets)
+# instead of scanning the whole hits table. Runs regardless of FUNNYPOT_PROTOCOLS (HTTP hits alone
+# need rolling up). No-op unless FUNNYPOT_ROLLUP is on (default). Interval via FUNNYPOT_ROLLUP_INTERVAL
+# (default 15s) -- much tighter than retention's hourly cadence, so retention rarely prunes a hit the
+# worker has not yet folded.
+( while true; do php /app/demo/rollup.php || true; sleep "${FUNNYPOT_ROLLUP_INTERVAL:-15}"; done ) &
+
 # Threat-intel blocklist refresh: fetch attacker feeds into intel.db so hits from known attackers
 # are flagged. No-op unless FUNNYPOT_BLOCKLIST=on. Refresh at boot, then every FUNNYPOT_BLOCKLIST_INTERVAL
 # seconds (default 6h).

@@ -116,6 +116,21 @@ final class AppConfig
         /** FULL-request capture (opt-in) — store every header + full query + full body of every request in
          *  a separate raw-capture.sqlite, for analysing a vuln scan. Off in normal operation. */
         public bool $captureRaw,
+        // Aggregate-analytics rollup worker (FP-0243, demo/rollup.php). Folds the raw hits table into
+        // a small rollup table on a timer so the analytics reads stay O(buckets), flat in event volume.
+        /** On unless FUNNYPOT_ROLLUP=0. Off = the worker is a no-op (no rollups maintained). */
+        public bool $rollupEnabled,
+        /** Seconds between worker passes (entrypoint timer). */
+        public int $rollupIntervalS,
+        /** Raw hit rows folded per pass; the worker loops until the backlog drains. */
+        public int $rollupBatch,
+        /** Distinct values kept per (gran,bucket,dim) before the tail folds into '(other)'
+         *  — the cardinality guard that keeps a sprayed dimension from inflating rollup storage. */
+        public int $rollupTopK,
+        /** Retention for minute / hour / day rollup buckets (hours, days, days). */
+        public int $rollupRetainMinH,
+        public int $rollupRetainHourD,
+        public int $rollupRetainDayD,
     ) {
     }
 
@@ -245,6 +260,16 @@ final class AppConfig
             dlVaryPct: max(0, min(95, (int) $str('FUNNYPOT_DL_VARY_PCT', '50'))),
             dlEasePeriodS: max(1, min(600, (int) $str('FUNNYPOT_DL_EASE_PERIOD_S', '20'))),
             dlFallbackCapMb: max(1, min(500, (int) $str('FUNNYPOT_DL_FALLBACK_CAP_MB', '50'))),
+            // Rollup worker: on unless explicitly "0", like the other on-by-default flags. The
+            // interval/batch/top-K/retention knobs are clamped to sane floors so a bad env value
+            // can't stall the worker or unbound the rollup table.
+            rollupEnabled: $onUnless0('FUNNYPOT_ROLLUP'),
+            rollupIntervalS: max(1, (int) $str('FUNNYPOT_ROLLUP_INTERVAL', '15')),
+            rollupBatch: max(1, (int) $str('FUNNYPOT_ROLLUP_BATCH', '5000')),
+            rollupTopK: max(1, (int) $str('FUNNYPOT_ROLLUP_TOPK', '20')),
+            rollupRetainMinH: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_MIN_H', '48')),
+            rollupRetainHourD: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_HOUR_D', '30')),
+            rollupRetainDayD: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_DAY_D', '365')),
         );
     }
 }

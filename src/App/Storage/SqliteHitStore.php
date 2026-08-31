@@ -20,17 +20,29 @@ use Throwable;
  * canonical. On first boot against an empty database, an existing export log is imported once so
  * upgrading from the old file-canonical store loses no history.
  */
-final class SqliteHitStore implements HitStore
+final class SqliteHitStore implements HitStore, AnalyticsStore
 {
     private PDO $db;
     private ?PDOStatement $insertStmt = null;
 
     /**
-     * @param string      $dbPath    path to the SQLite file (its dir is created if missing)
-     * @param string|null $exportLog optional JSON-lines file to also append to (not canonical)
+     * @param string      $dbPath            path to the SQLite file (its dir is created if missing)
+     * @param string|null $exportLog         optional JSON-lines file to also append to (not canonical)
+     * @param int         $rollupTopK        cap on distinct values kept per (gran,bucket,dim); the
+     *                                       tail folds into a single '(other)' row so a sprayed
+     *                                       dimension cannot inflate rollup storage (spec §4)
+     * @param int         $rollupRetainMinH  keep minute rollup buckets this many hours
+     * @param int         $rollupRetainHourD keep hour rollup buckets this many days
+     * @param int         $rollupRetainDayD  keep day rollup buckets this many days
      */
-    public function __construct(string $dbPath, private ?string $exportLog = null)
-    {
+    public function __construct(
+        string $dbPath,
+        private ?string $exportLog = null,
+        private int $rollupTopK = 20,
+        private int $rollupRetainMinH = 48,
+        private int $rollupRetainHourD = 30,
+        private int $rollupRetainDayD = 365,
+    ) {
         if (!extension_loaded('pdo_sqlite')) {
             throw new \RuntimeException('SqliteHitStore needs ext-pdo_sqlite');
         }
@@ -337,28 +349,287 @@ final class SqliteHitStore implements HitStore
         return $until !== false && (strtotime((string) $until) ?: 0) > time();
     }
 
+    // --- AnalyticsStore: the rollup worker + O(buckets) read API (FP-0243) ---
+
+    /** High-cardinality dims topN() serves from the raw table. The value maps to a fixed column
+     *  name here and NOWHERE else, so the column can never be driven by caller input. */
+    private const TOPN_COLS = ['ip' => 'ip', 'asn' => 'asn', 'path' => 'path', 'tool' => 'tool', 'cc' => 'cc'];
+
+    public function foldRollups(int $batch): int
+    {
+        $batch = max(1, $batch);
+        $last = (int) ($this->stateGet('last_id') ?? 0);
+
+        $sel = $this->db->prepare(
+            'SELECT id, ts, method, event, severity, matched, served, known_attacker, cc, tool
+             FROM hits WHERE id > :last ORDER BY id ASC LIMIT :lim'
+        );
+        $sel->bindValue(':last', $last, PDO::PARAM_INT);
+        $sel->bindValue(':lim', $batch, PDO::PARAM_INT);
+        $sel->execute();
+        $rows = $sel->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows === []) {
+            return 0;
+        }
+
+        // Aggregate the batch in PHP into per-(gran,bucket,dim,val) deltas. Every event contributes
+        // to its minute, hour AND day bucket for each dim — the coarser granularities are folded
+        // straight from this batch, never by re-reading (retention-prunable) minute rows.
+        // $agg[$gran][$bucket][$dim][$val] = ['n'=>,'matched'=>,'served'=>]
+        $agg = ['m' => [], 'h' => [], 'd' => []];
+        $maxId = $last;
+        foreach ($rows as $r) {
+            $maxId = max($maxId, (int) $r['id']);
+            $epoch = strtotime((string) ($r['ts'] ?? ''));
+            if ($epoch === false) {
+                continue; // no usable timestamp: cannot bucket it (the watermark still moves past it)
+            }
+            $matched = !empty($r['matched']) ? 1 : 0;
+            $served = !empty($r['served']) ? 1 : 0;
+            // Mutually-exclusive status so SUM(n) over dim='status' equals COUNT(*): a known
+            // attacker beats a detection beats a served decoy beats a plain hit. The additive
+            // matched/served flag totals live in every row's matched/served columns besides this.
+            $status = !empty($r['known_attacker']) ? 'known_attacker'
+                : ($matched ? 'matched' : ($served ? 'served' : 'none'));
+            $dims = [
+                'total' => '',
+                'protocol' => (string) ($r['method'] ?? ''),
+                'event' => (string) ($r['event'] ?? ''),
+                'severity' => (string) ($r['severity'] ?? ''),
+                'status' => $status,
+                'country' => (string) ($r['cc'] ?? ''),
+                'tool' => (string) ($r['tool'] ?? ''),
+            ];
+            $buckets = [
+                'm' => $epoch - ($epoch % 60),
+                'h' => $epoch - ($epoch % 3600),
+                'd' => $epoch - ($epoch % 86400),
+            ];
+            foreach ($dims as $dim => $val) {
+                // 'total' and 'status' are always present; a column-backed dim with an empty value
+                // is not a bucket (mirrors the widgets() WHERE cc<>'' style).
+                if ($val === '' && $dim !== 'total') {
+                    continue;
+                }
+                foreach ($buckets as $g => $b) {
+                    if (!isset($agg[$g][$b][$dim][$val])) {
+                        $agg[$g][$b][$dim][$val] = ['n' => 0, 'matched' => 0, 'served' => 0];
+                    }
+                    $agg[$g][$b][$dim][$val]['n']++;
+                    $agg[$g][$b][$dim][$val]['matched'] += $matched;
+                    $agg[$g][$b][$dim][$val]['served'] += $served;
+                }
+            }
+        }
+
+        // One transaction: all UPSERTs + prune + watermark advance commit together, so a crash
+        // before commit rolls the whole pass back and the next pass reprocesses with no double count.
+        $this->db->beginTransaction();
+        try {
+            $up = $this->db->prepare(
+                'INSERT INTO rollup (gran, bucket, dim, val, n, matched, served)
+                 VALUES (:g, :b, :d, :v, :n, :m, :s)
+                 ON CONFLICT(gran, bucket, dim, val) DO UPDATE SET
+                    n       = n + excluded.n,
+                    matched = matched + excluded.matched,
+                    served  = served + excluded.served'
+            );
+            foreach ($agg as $g => $byBucket) {
+                foreach ($byBucket as $b => $byDim) {
+                    foreach ($byDim as $dim => $byVal) {
+                        foreach ($this->capTopK($byVal) as $val => $c) {
+                            $up->execute([
+                                ':g' => $g, ':b' => $b, ':d' => $dim, ':v' => $val,
+                                ':n' => $c['n'], ':m' => $c['matched'], ':s' => $c['served'],
+                            ]);
+                        }
+                    }
+                }
+            }
+            $this->pruneRollups();
+            $this->stateSet('last_id', (string) $maxId);
+            $this->db->commit();
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+
+        return count($rows);
+    }
+
+    public function breakdown(string $dim, int $sinceEpoch, string $gran = 'h'): array
+    {
+        $st = $this->db->prepare(
+            'SELECT val, SUM(n) n, SUM(matched) matched, SUM(served) served
+             FROM rollup WHERE dim = :d AND gran = :g AND bucket >= :b
+             GROUP BY val ORDER BY n DESC, val ASC'
+        );
+        $st->execute([':d' => $dim, ':g' => $this->normGran($gran), ':b' => $sinceEpoch]);
+
+        return array_map(static fn (array $r): array => [
+            'val' => (string) $r['val'],
+            'n' => (int) $r['n'],
+            'matched' => (int) $r['matched'],
+            'served' => (int) $r['served'],
+        ], $st->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    public function series(string $dim, array $vals, int $sinceEpoch, string $gran = 'm'): array
+    {
+        $vals = array_values(array_unique(array_map('strval', $vals)));
+        if ($vals === []) {
+            return [];
+        }
+        $ph = [];
+        $params = [':d' => $dim, ':g' => $this->normGran($gran), ':b' => $sinceEpoch];
+        foreach ($vals as $i => $v) {
+            $ph[] = ":v$i";
+            $params[":v$i"] = $v;
+        }
+        $st = $this->db->prepare(
+            'SELECT bucket, val, SUM(n) n FROM rollup
+             WHERE dim = :d AND gran = :g AND bucket >= :b AND val IN (' . implode(',', $ph) . ')
+             GROUP BY bucket, val ORDER BY bucket ASC'
+        );
+        $st->execute($params);
+
+        $out = array_fill_keys($vals, []);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(string) $r['val']][] = ['bucket' => (int) $r['bucket'], 'n' => (int) $r['n']];
+        }
+
+        return $out;
+    }
+
+    public function topN(string $dim, int $limit, int $sinceEpoch): array
+    {
+        $col = self::TOPN_COLS[$dim] ?? null;
+        if ($col === null) {
+            return []; // not a whitelisted high-cardinality dimension
+        }
+        // $col is a whitelisted literal, never caller input; $since/$limit are bound. No injection.
+        $st = $this->db->prepare(
+            "SELECT $col val, COUNT(*) n FROM hits
+             WHERE $col <> '' AND ts >= :since GROUP BY $col ORDER BY n DESC LIMIT :lim"
+        );
+        $st->bindValue(':since', gmdate('c', $sinceEpoch));
+        $st->bindValue(':lim', max(1, $limit), PDO::PARAM_INT);
+        $st->execute();
+
+        return array_map(static fn (array $r): array => [
+            'val' => (string) $r['val'], 'n' => (int) $r['n'],
+        ], $st->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    public function ataglance(int $windowS): array
+    {
+        $windowS = max(1, $windowS);
+        $now = time();
+        $sinceEpoch = $now - $windowS;
+        $sinceTs = gmdate('c', $sinceEpoch);
+
+        // Event count + rate over the window from the minute rollups (dim='total').
+        $st = $this->db->prepare(
+            "SELECT COALESCE(SUM(n),0) n FROM rollup WHERE dim = 'total' AND gran = 'm' AND bucket >= :b"
+        );
+        $st->execute([':b' => $sinceEpoch - ($sinceEpoch % 60)]);
+        $events = (int) $st->fetchColumn();
+
+        // Unique IPs + new-vs-returning are raw and windowed: a union of per-bucket IP sets is not
+        // a sum, so these cannot be read off the rollups. Retention-bounded, analytics-only.
+        $u = $this->db->prepare("SELECT COUNT(DISTINCT ip) FROM hits WHERE ip <> '' AND ts >= :s");
+        $u->execute([':s' => $sinceTs]);
+        $unique = (int) $u->fetchColumn();
+
+        $ret = $this->db->prepare(
+            "SELECT COUNT(DISTINCT h.ip) FROM hits h
+             WHERE h.ip <> '' AND h.ts >= :s
+               AND EXISTS (SELECT 1 FROM hits p WHERE p.ip = h.ip AND p.ts < :s2)"
+        );
+        $ret->execute([':s' => $sinceTs, ':s2' => $sinceTs]);
+        $returning = (int) $ret->fetchColumn();
+
+        return [
+            'window_s' => $windowS,
+            'events' => $events,
+            'rate' => round($events / $windowS, 4),
+            'unique_ips' => $unique,
+            'new' => max(0, $unique - $returning),
+            'returning' => $returning,
+        ];
+    }
+
+    /**
+     * Bound one (gran,bucket,dim) group to the top-K values by count, folding the rest into a
+     * single '(other)' row (spec §4 cardinality guard). A group already within K is returned as-is,
+     * so bounded dims (protocol/status/severity) are untouched. Total n across the group is
+     * preserved — the tail is summed, never dropped — so a sprayed dimension cannot both inflate
+     * storage and skew the totals.
+     *
+     * @param array<string,array{n:int,matched:int,served:int}> $byVal
+     * @return array<string,array{n:int,matched:int,served:int}>
+     */
+    private function capTopK(array $byVal): array
+    {
+        if (count($byVal) <= $this->rollupTopK) {
+            return $byVal;
+        }
+        uasort($byVal, static fn (array $a, array $b): int => $b['n'] <=> $a['n']);
+        $kept = array_slice($byVal, 0, $this->rollupTopK, true);
+        $other = $kept['(other)'] ?? ['n' => 0, 'matched' => 0, 'served' => 0];
+        foreach (array_slice($byVal, $this->rollupTopK, null, true) as $c) {
+            $other['n'] += $c['n'];
+            $other['matched'] += $c['matched'];
+            $other['served'] += $c['served'];
+        }
+        $kept['(other)'] = $other;
+
+        return $kept;
+    }
+
+    private function pruneRollups(): void
+    {
+        $now = time();
+        $cut = [
+            'm' => $now - $this->rollupRetainMinH * 3600,
+            'h' => $now - $this->rollupRetainHourD * 86400,
+            'd' => $now - $this->rollupRetainDayD * 86400,
+        ];
+        $del = $this->db->prepare('DELETE FROM rollup WHERE gran = :g AND bucket < :c');
+        foreach ($cut as $g => $c) {
+            $del->execute([':g' => $g, ':c' => $c]);
+        }
+    }
+
+    private function normGran(string $gran): string
+    {
+        return in_array($gran, ['m', 'h', 'd'], true) ? $gran : 'm';
+    }
+
+    private function stateGet(string $k): ?string
+    {
+        $st = $this->db->prepare('SELECT v FROM rollup_state WHERE k = :k');
+        $st->execute([':k' => $k]);
+        $v = $st->fetchColumn();
+
+        return $v === false ? null : (string) $v;
+    }
+
+    private function stateSet(string $k, string $v): void
+    {
+        $this->db->prepare('INSERT INTO rollup_state (k, v) VALUES (:k, :v)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v')->execute([':k' => $k, ':v' => $v]);
+    }
+
     // --- SQLite plumbing ---
 
     private function open(string $path): PDO
     {
-        $dir = dirname($path);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0777, true);
-        }
-        $db = new PDO('sqlite:' . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-        // SQLite creates the file 0644 no matter the umask. Force 0666 so the php-fpm workers
-        // (www-data) and the root protocol listeners can share this one file. Do it BEFORE enabling
-        // WAL: sqlite creates the -wal/-shm sidecars copying the db file's mode, and WAL needs the
-        // -shm writable even for readers. A root listener opens the db every boot, so a stale
-        // root-owned db from a prior run is re-chmodded here too.
-        @chmod($path, 0666);
-        $db->exec('PRAGMA busy_timeout=3000');
-        $db->exec('PRAGMA journal_mode=WAL');
-        $db->exec('PRAGMA synchronous=NORMAL');
-        // Incremental auto-vacuum so GB-based retention can hand freed pages back to disk without a
-        // full VACUUM. Must be set before the table exists to take on a fresh db; a legacy db
-        // (auto_vacuum=NONE) is converted once below.
-        $db->exec('PRAGMA auto_vacuum=INCREMENTAL');
+        // Shared open/pragma seam (WAL, busy_timeout, synchronous=NORMAL, auto_vacuum=INCREMENTAL,
+        // dir mkdir, chmod 0666). Schema-agnostic — this store creates its own tables below.
+        $db = Sqlite::open($path);
         $db->exec(
             'CREATE TABLE IF NOT EXISTS hits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -394,6 +665,32 @@ final class SqliteHitStore implements HitStore
         // Persistent bulk-scan pin: an IP that trips the velocity gate stays pinned to plain-404 for a
         // cooldown even after it goes quiet, so it cannot burst then slow-probe for fakes.
         $db->exec('CREATE TABLE IF NOT EXISTS bulk_scan (ip TEXT PRIMARY KEY, until TEXT NOT NULL)');
+
+        // Aggregate analytics rollups (FP-0243, spec §5.1). Derived from `hits`, so co-located in
+        // this same file to keep the worker's read+write in one transaction. A background worker
+        // (demo/rollup.php) folds `hits` into these on a timer; the analytics reads are O(buckets),
+        // flat in total event volume, instead of full-table GROUP BYs on every dashboard tick.
+        //   gran    'm' minute | 'h' hour | 'd' day
+        //   bucket  unix epoch (UTC) of the bucket start, floored to gran
+        //   dim     'total'|'protocol'|'event'|'severity'|'status'|'country'|'tool'
+        //   val     e.g. 'SIP','sipvicious','critical','' (total) or '(other)' (capped tail)
+        // Bounded size: #gran × #dim × top-K values × #retained buckets — tens of thousands of rows,
+        // independent of how many events are behind them.
+        $db->exec(
+            'CREATE TABLE IF NOT EXISTS rollup (
+                gran    TEXT    NOT NULL,
+                bucket  INTEGER NOT NULL,
+                dim     TEXT    NOT NULL,
+                val     TEXT    NOT NULL,
+                n       INTEGER NOT NULL DEFAULT 0,
+                matched INTEGER NOT NULL DEFAULT 0,
+                served  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (gran, bucket, dim, val)
+            ) WITHOUT ROWID'
+        );
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_rollup_read ON rollup(dim, gran, bucket)');
+        // rollup_state['last_id'] = highest hits.id folded into rollup (the exactly-once watermark).
+        $db->exec('CREATE TABLE IF NOT EXISTS rollup_state (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
 
         // One-time conversion of a legacy db created before incremental auto-vacuum so size-based
         // retention can reclaim disk on it too. Cheap and self-limiting: once converted, auto_vacuum
