@@ -325,6 +325,53 @@ final class SipEnumerationTest extends TestCase
         $this->assertSame(0, $server->getActiveSessionCount(), 'stalled no-ACK INVITE must be evicted');
     }
 
+    public function test_streaming_call_with_no_caller_audio_is_dropped_on_the_short_clock(): void
+    {
+        // A scanner that ACKs but never sends RTP would otherwise stream our persona to no one until the
+        // full idle cap. With callNoAudioTimeout set, a zero-inbound-audio streaming call must be reaped
+        // on the shorter clock (idle 12s > 10s no-audio cap, but < the 30s normal idle cap).
+        $server = new SipServer(new SipConfig(rtpPort: 0, callNoAudioTimeout: 10, callIdleTimeout: 30), null);
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+
+        $s = new SipSession("k", "9.9.9.9", 5060);
+        $s->state = SipSession::STATE_STREAMING;
+        $s->remoteRtpPort = 10000;
+        $s->startTime = microtime(true) - 12.0;
+        $s->lastInboundTime = microtime(true) - 12.0; // caller went silent right after ACK
+        $s->recordedInbound = '';                     // never sent a single RTP packet
+        $sessProp->setValue($server, ['k' => $s]);
+
+        $cleanup = new \ReflectionMethod($server, 'cleanupExpiredSessions');
+        $cleanup->setAccessible(true);
+        $cleanup->invoke($server);
+
+        $this->assertSame(0, $server->getActiveSessionCount(), 'silent streaming bot must be dropped fast');
+    }
+
+    public function test_streaming_call_that_sent_audio_keeps_the_normal_idle_cap(): void
+    {
+        // A real caller who spoke then paused must NOT be cut on the short no-audio clock — once any
+        // inbound audio exists, the call falls back to the (longer) normal idle timeout.
+        $server = new SipServer(new SipConfig(rtpPort: 0, callNoAudioTimeout: 10, callIdleTimeout: 30), null);
+        $sessProp = new \ReflectionProperty($server, 'sessions');
+        $sessProp->setAccessible(true);
+
+        $s = new SipSession("k", "9.9.9.9", 5060);
+        $s->state = SipSession::STATE_STREAMING;
+        $s->remoteRtpPort = 10000;
+        $s->startTime = microtime(true) - 12.0;
+        $s->lastInboundTime = microtime(true) - 12.0;
+        $s->recordedInbound = str_repeat("\x7f", 800); // caller sent audio, then went quiet
+        $sessProp->setValue($server, ['k' => $s]);
+
+        $cleanup = new \ReflectionMethod($server, 'cleanupExpiredSessions');
+        $cleanup->setAccessible(true);
+        $cleanup->invoke($server);
+
+        $this->assertSame(1, $server->getActiveSessionCount(), 'a call that spoke must keep the normal idle cap');
+    }
+
     // --- 'org' mode: extension directory coherent with the seeded company roster (FP-0180) ---
 
     public function test_org_mode_valid_set_equals_org_roster_and_derives_seed_like_panels(): void
