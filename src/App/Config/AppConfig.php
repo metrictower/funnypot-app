@@ -131,6 +131,30 @@ final class AppConfig
         public int $rollupRetainMinH,
         public int $rollupRetainHourD,
         public int $rollupRetainDayD,
+        // AI-attacker cost-amplification tarpit (FP-0245). Master switch OFF by default (opt-in) given
+        // the self-DoS class — flip on only after the load test. The caps are tied to pm.max_children=16
+        // (spec §3): a tarpit request holds one of a small pool of slots for its lifetime, so it can
+        // never starve the honeypot's real detection/reporting job. tarpitDbPath is its own SQLite file.
+        public bool $tarpitEnabled,
+        public string $tarpitDbPath,
+        /** Global concurrent tarpit slots (≤ ¼ of 16 workers leaves ≥12 for real traffic). */
+        public int $tarpitMaxConcurrent,
+        /** Concurrent slots one IP may hold (1 = no single IP can occupy the pool). */
+        public int $tarpitMaxPerIp,
+        /** Bytes per single tarpit response (streamed generators, hard-capped). */
+        public int $tarpitBytesPerRespMb,
+        /** Total bytes one IP may pull from the tarpit per hour. */
+        public int $tarpitBytesPerIpHrMb,
+        /** Total server wall-time one IP may consume across tarpit hits per hour. */
+        public int $tarpitWallPerIpHrS,
+        /** Aggregate tarpit egress ceiling per hour; over it, shed all tarpit to 404. */
+        public int $tarpitGlobalBytesHrMb,
+        /** Labyrinth pages one IP may fetch per hour (bounds iterations even though each page is cheap). */
+        public int $tarpitPagesPerIpHr,
+        /** Optional server latency while holding a slot (0245d; 0 = off, hard-clamped ≤ 2000 ms). */
+        public int $tarpitLatencyMs,
+        /** Decompression cap if gzip is ever used (D3); decompressed ≤ this, ratio ≤ 100:1. */
+        public int $tarpitDecompCapMb,
     ) {
     }
 
@@ -300,6 +324,19 @@ final class AppConfig
             rollupRetainMinH: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_MIN_H', '48')),
             rollupRetainHourD: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_HOUR_D', '30')),
             rollupRetainDayD: max(1, (int) $str('FUNNYPOT_ROLLUP_RETAIN_DAY_D', '365')),
+            // Tarpit (FP-0245): opt-in master switch; caps clamped to sane floors+ceilings so a bad env
+            // value can neither disable a cap (floor) nor exceed the 16-worker pool / overflow (ceiling).
+            tarpitEnabled: in_array(strtolower((string) $env('FUNNYPOT_TARPIT')), ['1', 'on', 'true', 'yes'], true),
+            tarpitDbPath: $str('FUNNYPOT_TARPIT_DB', $store . '/tarpit.sqlite'),
+            tarpitMaxConcurrent: max(1, min(15, (int) $str('FUNNYPOT_TARPIT_MAX_CONCURRENT', '4'))),
+            tarpitMaxPerIp: max(1, min(15, (int) $str('FUNNYPOT_TARPIT_MAX_PER_IP', '1'))),
+            tarpitBytesPerRespMb: max(1, min(512, (int) $str('FUNNYPOT_TARPIT_BYTES_PER_RESP_MB', '8'))),
+            tarpitBytesPerIpHrMb: max(1, min(65536, (int) $str('FUNNYPOT_TARPIT_BYTES_PER_IP_HR_MB', '64'))),
+            tarpitWallPerIpHrS: max(1, min(3600, (int) $str('FUNNYPOT_TARPIT_WALL_PER_IP_HR_S', '120'))),
+            tarpitGlobalBytesHrMb: max(1, min(1048576, (int) $str('FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB', '1024'))),
+            tarpitPagesPerIpHr: max(1, min(1000000, (int) $str('FUNNYPOT_TARPIT_PAGES_PER_IP_HR', '2000'))),
+            tarpitLatencyMs: max(0, min(2000, (int) $str('FUNNYPOT_TARPIT_LATENCY_MS', '0'))),
+            tarpitDecompCapMb: max(1, min(64, (int) $str('FUNNYPOT_TARPIT_DECOMP_CAP_MB', '16'))),
         );
     }
 }

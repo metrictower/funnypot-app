@@ -13,6 +13,7 @@ use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
+use Funnypot\App\Storage\TarpitBudget;
 
 // Store-backed config (FP-0242a): the entrypoint respawns this runner each pass, so a live change to
 // a value it reads (retention/llm knobs) is picked up on the next pass. Fail-safe: degrades to env.
@@ -33,6 +34,24 @@ if ($config->llmEnabled && is_file($config->llmCacheDb)) {
         }
     } catch (Throwable $e) {
         fwrite(STDERR, 'retention (llm): ' . $e->getMessage() . "\n");
+    }
+}
+
+// Tarpit upkeep (FP-0245): reap slots a crashed holder left behind and prune stale hourly-ledger
+// buckets, on the same timer. acquire() also self-reaps inline, but a fatal/OOM/SIGTERM never runs
+// release() or the shutdown handler, so this cron pass is the backstop that keeps the small slot
+// pool from wedging. Runs whenever the tarpit is on and its db exists.
+if ($config->tarpitEnabled && is_file($config->tarpitDbPath)) {
+    try {
+        $budget = new TarpitBudget($config->tarpitDbPath, $config->tarpitEnabled);
+        // A SHORT slot TTL (nginx fastcgi_read_timeout territory), never the 120 s/hr wall budget.
+        $reaped = $budget->reap();
+        $pruned = $budget->pruneLedger();
+        if ($reaped > 0 || $pruned > 0) {
+            fwrite(STDERR, sprintf("retention: tarpit reaped %d slots, pruned %d ledger buckets\n", $reaped, $pruned));
+        }
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'retention (tarpit): ' . $e->getMessage() . "\n");
     }
 }
 

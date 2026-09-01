@@ -69,6 +69,17 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_HONEYTOKEN_KEY` | unset | enables the tamper-evident bait cookie (returned-altered = high-signal probe) |
 | `FUNNYPOT_DB` | `demo/storage/funnypot.sqlite` | SQLite store path for real all-time stats; `off` = file-only (recent-window stats) |
 | `FUNNYPOT_GEO_DB` | `demo/storage/dbip-country.csv.gz` | DB-IP Lite CSV for the GeoIP map/country stats |
+| `FUNNYPOT_TARPIT` | off | master switch for the cost-amplification tarpit foundation (opt-in; ship off, flip on after the load test) |
+| `FUNNYPOT_TARPIT_DB` | `demo/storage/tarpit.sqlite` | the tarpit's own SQLite file (concurrency slots + hourly per-IP budget ledger) |
+| `FUNNYPOT_TARPIT_MAX_CONCURRENT` | `4` | global concurrent tarpit slots (clamped 1–15; ≤ ¼ of the 16 fpm workers so the tarpit never starves real detection) |
+| `FUNNYPOT_TARPIT_MAX_PER_IP` | `1` | concurrent slots one IP may hold (clamped 1–15) |
+| `FUNNYPOT_TARPIT_BYTES_PER_RESP_MB` | `8` | hard byte cap per streamed tarpit response (clamped 1–512) |
+| `FUNNYPOT_TARPIT_BYTES_PER_IP_HR_MB` | `64` | bytes one IP may pull from the tarpit per hour (clamped 1–65536) |
+| `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S` | `120` | server wall-time one IP may consume across tarpit hits per hour (clamped 1–3600) |
+| `FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB` | `1024` | aggregate tarpit egress ceiling per hour; over it, shed all tarpit to 404 (clamped 1–1048576) |
+| `FUNNYPOT_TARPIT_PAGES_PER_IP_HR` | `2000` | tarpit pages/responses one IP may fetch per hour (clamped 1–1000000) |
+| `FUNNYPOT_TARPIT_LATENCY_MS` | `0` | optional server latency while holding a slot (0 = off; clamped ≤ 2000 ms, well under nginx's 15 s read-timeout) |
+| `FUNNYPOT_TARPIT_DECOMP_CAP_MB` | `16` | decompression cap if gzip is ever used (decompressed ≤ this, ratio ≤ 100:1 — a nuisance, never a bomb; clamped 1–64) |
 
 The dashboard polls a delta feed (`/?feed=1&after=<cursor>`) that returns only rows appended since
 the last poll, not the whole tail, and appends them in place; load older pages back through history.

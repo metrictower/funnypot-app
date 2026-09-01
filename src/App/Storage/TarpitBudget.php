@@ -1,0 +1,306 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Funnypot\App\Storage;
+
+use PDO;
+use Throwable;
+
+/**
+ * The tarpit caps, enforced cross-worker (FP-0245a). php-fpm gives 16 workers total for every port
+ * (demo/fpm-pool.conf:8), so an uncapped tarpit is a self-DoS: N slow requests pin N of those 16.
+ * This is the single backstop that keeps the tarpit from starving the honeypot's real job, and — on
+ * the gate-exempt tarpit routes, where the per-IP velocity gate is deliberately removed
+ * (spec invariant 6) — the ONLY per-IP guard. It must hold against any client, crawler or LLM,
+ * well-behaved or not, and it fails CLOSED: any storage error or cap breach sheds to a bounded 404,
+ * never a slow path.
+ *
+ * It generalises {@see LlmFakeCache}::acquire/release/reapInflight — a BEGIN IMMEDIATE slot table so
+ * the count and the insert see one write-locked snapshot (no check-then-act race) — over its own
+ * tarpit.sqlite, opened through the shared {@see Sqlite} helper, with two tables:
+ *   - tarpit_slot(id, ip, started_at) — one row per in-flight tarpit request; the global-concurrency
+ *     and per-IP-concurrency caps count rows here.
+ *   - tarpit_ledger(ip, hour_bucket, bytes, wall_ms, pages) — the rolling per-IP hourly budget:
+ *     bytes/IP/hr, wall-ms/IP/hr, pages/IP/hr, and a global bytes/hr aggregate.
+ *
+ * Two hardening choices over the LlmFakeCache precedent, both justified by the small (default 4)
+ * slot pool (see the FP-0245 plan review's SHOULD-FIX 4 & 5):
+ *   - the slot-reap TTL is SHORT (default 15 s, aligned to nginx fastcgi_read_timeout 15s), kept
+ *     entirely separate from the 120 s/hr wall BUDGET — a 120 s slot TTL would let 4 crashed holders
+ *     wedge the whole pool for two minutes;
+ *   - acquire() self-reaps stale slots INLINE before the COUNT, so a crashed holder self-clears
+ *     within one TTL regardless of the retention cron cadence. release() runs in a finally on the
+ *     happy path, but a PHP fatal/OOM/SIGTERM never runs finally — so the inline reaper, not
+ *     release(), is the real safety net for such a small pool.
+ *
+ * Public API note (FP-0228): acquire() returns the slot id alongside the status, and guard() is the
+ * one-call "may I proceed?" seam every tarpit route MUST call first; FP-0228 extends this surface
+ * (latency accounting per IP) and relies on the slot id + the ledger's wall_ms column shape.
+ */
+final class TarpitBudget
+{
+    public const WON = 'won';                 // caller holds a slot and may serve one tarpit response
+    public const FULL = 'full';               // global concurrency cap reached (or fail-closed) — shed
+    public const PER_IP_FULL = 'per_ip_full'; // this IP already holds its allowance — shed
+
+    private ?PDO $db = null;
+
+    /** @var callable():int */
+    private $clock;
+
+    /**
+     * @param bool $enabled       master switch (FUNNYPOT_TARPIT); OFF => guard() is inert (always null)
+     * @param int  $maxConcurrent global concurrent tarpit slots (default 4 = ¼ of the 16 workers)
+     * @param int  $maxPerIp      concurrent slots one IP may hold (default 1)
+     * @param int  $bytesPerIpHr  bytes one IP may pull per hour (bytes, not MiB)
+     * @param int  $wallPerIpHrMs server wall-ms one IP may consume per hour (ms)
+     * @param int  $globalBytesHr aggregate bytes across all IPs per hour (bytes)
+     * @param int  $pagesPerIpHr  tarpit pages/responses one IP may fetch per hour
+     * @param int  $slotTtlSecs   crashed-holder slot TTL (SHORT, ~nginx read-timeout) — NOT the wall budget
+     * @param callable():int|null $clock injectable unix-time source for tests (defaults to time())
+     */
+    public function __construct(
+        private string $dbPath,
+        private bool $enabled = false,
+        private int $maxConcurrent = 4,
+        private int $maxPerIp = 1,
+        private int $bytesPerIpHr = 64 * 1024 * 1024,
+        private int $wallPerIpHrMs = 120 * 1000,
+        private int $globalBytesHr = 1024 * 1024 * 1024,
+        private int $pagesPerIpHr = 2000,
+        private int $slotTtlSecs = 15,
+        ?callable $clock = null
+    ) {
+        $this->clock = $clock ?? static fn (): int => time();
+    }
+
+    /**
+     * The one seam every tarpit route calls FIRST (spec invariant 6, plan-review SHOULD-FIX 3). It is
+     * the ONLY per-IP guard on those gate-exempt routes, so nothing may dispatch tarpit work without
+     * it. Returns a held slot id when the caller may proceed, or null to shed to a bounded 404. Fails
+     * closed in every branch: master switch off, over budget, no free slot, or any storage error =>
+     * null. The caller releases the slot id in a finally and charges the ledger on the way out.
+     */
+    public function guard(string $ip): ?int
+    {
+        if (!$this->enabled) {
+            return null; // master switch off — the whole tarpit is inert
+        }
+        try {
+            if ($this->overBudget($ip)) {
+                return null; // hourly budget spent — shed
+            }
+            $r = $this->acquire($ip);
+
+            return $r['status'] === self::WON ? $r['slot'] : null;
+        } catch (Throwable $e) {
+            return null; // fail-closed: never a slow failure mode
+        }
+    }
+
+    /**
+     * Try to take a concurrency slot for $ip under the global + per-IP caps, atomically. BEGIN
+     * IMMEDIATE grabs the write lock so the inline stale-slot reap, both counts and the insert all see
+     * one consistent snapshot — the caps are hard ceilings with no check-then-act race even under a
+     * burst. Fails closed to FULL on lock contention or any storage error (never WON, never a throw).
+     *
+     * @return array{status:string,slot:int|null} slot is the tarpit_slot row id on WON, else null
+     */
+    public function acquire(string $ip): array
+    {
+        $db = null;
+        try {
+            $db = $this->db();
+            $now = ($this->clock)();
+            $db->exec('BEGIN IMMEDIATE');
+
+            // SHOULD-FIX 5: self-reap stale slots INLINE, before the count, so a crashed holder
+            // self-clears within one TTL regardless of when the retention cron next runs.
+            $cut = gmdate('c', $now - max(1, $this->slotTtlSecs));
+            $db->prepare('DELETE FROM tarpit_slot WHERE started_at < :c')->execute([':c' => $cut]);
+
+            $global = (int) $db->query('SELECT COUNT(*) FROM tarpit_slot')->fetchColumn();
+            if ($global >= max(1, $this->maxConcurrent)) {
+                $db->exec('COMMIT');
+
+                return ['status' => self::FULL, 'slot' => null];
+            }
+
+            $perIpStmt = $db->prepare('SELECT COUNT(*) FROM tarpit_slot WHERE ip = :ip');
+            $perIpStmt->execute([':ip' => $ip]);
+            if ((int) $perIpStmt->fetchColumn() >= max(1, $this->maxPerIp)) {
+                $db->exec('COMMIT');
+
+                return ['status' => self::PER_IP_FULL, 'slot' => null];
+            }
+
+            $db->prepare('INSERT INTO tarpit_slot (ip, started_at) VALUES (:ip, :t)')
+                ->execute([':ip' => $ip, ':t' => gmdate('c', $now)]);
+            $slot = (int) $db->lastInsertId();
+            $db->exec('COMMIT');
+
+            return ['status' => self::WON, 'slot' => $slot];
+        } catch (Throwable $e) {
+            if ($db !== null) {
+                try {
+                    $db->exec('ROLLBACK');
+                } catch (Throwable $e2) {
+                    // no active transaction to roll back
+                }
+            }
+
+            return ['status' => self::FULL, 'slot' => null]; // fail-closed
+        }
+    }
+
+    /** Free a held slot. No-op on null (guard() returned null => nothing was taken). Best-effort. */
+    public function release(?int $slotId): void
+    {
+        if ($slotId === null) {
+            return;
+        }
+        try {
+            $this->db()->prepare('DELETE FROM tarpit_slot WHERE id = :id')->execute([':id' => $slotId]);
+        } catch (Throwable $e) {
+            // best-effort; the inline reaper + retention cron clean up anything left behind
+        }
+    }
+
+    /** Reclaim slots left by a crashed holder. Returns rows cleared. TTL defaults to the SHORT slot TTL. */
+    public function reap(?int $secs = null): int
+    {
+        try {
+            $ttl = $secs ?? $this->slotTtlSecs;
+            $st = $this->db()->prepare('DELETE FROM tarpit_slot WHERE started_at < :c');
+            $st->execute([':c' => gmdate('c', ($this->clock)() - $ttl)]);
+
+            return $st->rowCount();
+        } catch (Throwable $e) {
+            return 0; // best-effort
+        }
+    }
+
+    public function inflightCount(): int
+    {
+        try {
+            return (int) $this->db()->query('SELECT COUNT(*) FROM tarpit_slot')->fetchColumn();
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+
+    /** Slots this IP currently holds (test/telemetry helper). */
+    public function inflightForIp(string $ip): int
+    {
+        try {
+            $st = $this->db()->prepare('SELECT COUNT(*) FROM tarpit_slot WHERE ip = :ip');
+            $st->execute([':ip' => $ip]);
+
+            return (int) $st->fetchColumn();
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Add a tarpit response's cost to the current hour bucket for $ip (bytes emitted, server wall-ms,
+     * pages served). Upsert on (ip, hour_bucket); best-effort — a lost charge only under-counts, and
+     * the concurrency + fail-closed guards are the hard controls. Callers pass the values guard()'s
+     * slot lifetime produced.
+     */
+    public function charge(string $ip, int $bytes, int $wallMs, int $pages = 1): void
+    {
+        try {
+            $this->db()->prepare(
+                'INSERT INTO tarpit_ledger (ip, hour_bucket, bytes, wall_ms, pages) VALUES (:ip, :h, :b, :w, :p)
+                 ON CONFLICT(ip, hour_bucket) DO UPDATE SET bytes = bytes + :b, wall_ms = wall_ms + :w, pages = pages + :p'
+            )->execute([
+                ':ip' => $ip,
+                ':h' => $this->hourBucket(),
+                ':b' => max(0, $bytes),
+                ':w' => max(0, $wallMs),
+                ':p' => max(0, $pages),
+            ]);
+        } catch (Throwable $e) {
+            // best-effort
+        }
+    }
+
+    /**
+     * True if $ip has spent its per-IP hourly budget (bytes / wall-ms / pages) OR the global bytes/hr
+     * aggregate is exhausted, for the current hour bucket. Fails CLOSED (returns true) on any storage
+     * error: if the budget cannot be verified, treat it as spent and shed.
+     */
+    public function overBudget(string $ip): bool
+    {
+        try {
+            $bucket = $this->hourBucket();
+            $db = $this->db();
+
+            $st = $db->prepare(
+                'SELECT COALESCE(SUM(bytes),0) b, COALESCE(SUM(wall_ms),0) w, COALESCE(SUM(pages),0) p
+                 FROM tarpit_ledger WHERE ip = :ip AND hour_bucket = :h'
+            );
+            $st->execute([':ip' => $ip, ':h' => $bucket]);
+            $row = $st->fetch(PDO::FETCH_ASSOC) ?: ['b' => 0, 'w' => 0, 'p' => 0];
+            if ((int) $row['b'] >= $this->bytesPerIpHr) {
+                return true;
+            }
+            if ((int) $row['w'] >= $this->wallPerIpHrMs) {
+                return true;
+            }
+            if ((int) $row['p'] >= $this->pagesPerIpHr) {
+                return true;
+            }
+
+            $g = $db->prepare('SELECT COALESCE(SUM(bytes),0) FROM tarpit_ledger WHERE hour_bucket = :h');
+            $g->execute([':h' => $bucket]);
+
+            return (int) $g->fetchColumn() >= $this->globalBytesHr;
+        } catch (Throwable $e) {
+            return true; // fail-closed
+        }
+    }
+
+    /** Drop ledger buckets older than $keepHours (retention). Returns rows removed. */
+    public function pruneLedger(int $keepHours = 3): int
+    {
+        try {
+            $st = $this->db()->prepare('DELETE FROM tarpit_ledger WHERE hour_bucket < :c');
+            $st->execute([':c' => $this->hourBucket() - max(1, $keepHours)]);
+
+            return $st->rowCount();
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+
+    private function hourBucket(): int
+    {
+        return intdiv(($this->clock)(), 3600);
+    }
+
+    private function db(): PDO
+    {
+        if ($this->db !== null) {
+            return $this->db;
+        }
+        $db = Sqlite::open($this->dbPath);
+        $db->exec(
+            'CREATE TABLE IF NOT EXISTS tarpit_slot (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, started_at TEXT
+            )'
+        );
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_tarpit_slot_ip ON tarpit_slot(ip)');
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_tarpit_slot_started ON tarpit_slot(started_at)');
+        $db->exec(
+            'CREATE TABLE IF NOT EXISTS tarpit_ledger (
+                ip TEXT, hour_bucket INTEGER, bytes INTEGER DEFAULT 0, wall_ms INTEGER DEFAULT 0,
+                pages INTEGER DEFAULT 0, PRIMARY KEY (ip, hour_bucket)
+            )'
+        );
+
+        return $this->db = $db;
+    }
+}

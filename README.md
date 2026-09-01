@@ -71,6 +71,20 @@ never interpolated). The whole view is **operator-only**: it exposes no new atta
 top-N source-IP/ASN intel stays behind auth, and any query fault degrades to empty widgets, never a
 `500` tell.
 
+**Cost-amplification tarpit foundation (opt-in).** AI attackers pay per token / iteration / compute,
+so the tarpit makes the fake surface expensive to ingest and reason over while staying cheap for us.
+Its foundation is a **seeded streaming generator** (`src/App/Tarpit/SeededStream.php`): deterministic,
+offset-addressable fake bytes produced 4 KiB block at a time, so a multi-million-line log or an 8 MiB
+export streams at **O(block) memory** (never materialized) with **O(1) `Range`** support — the same
+asymmetry the endless-download bait already relies on. Because php-fpm gives only 16 workers total, an
+uncapped tarpit would self-DoS, so every tarpit response is gated by a cross-worker **`TarpitBudget`**
+(`src/App/Storage/TarpitBudget.php`, its own `tarpit.sqlite`): a `BEGIN IMMEDIATE` slot ledger enforces
+a small global concurrency cap (default 4), per-IP = 1, and hourly byte / wall-time / page budgets,
+**fails closed** to a bounded 404 on any breach or storage fault, and self-reaps crashed holders on a
+short (~15 s) TTL. It is **off by default** (`FUNNYPOT_TARPIT=0`) and every cap is env-tunable
+(`FUNNYPOT_TARPIT_*` — see `demo/README.md`); the flagship LLM-only labyrinth and context-polluters
+that ride on it are separate, later layers.
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 

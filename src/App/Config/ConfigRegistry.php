@@ -138,6 +138,18 @@ final class ConfigRegistry
             'rollup.retain_min_h' => ['field' => 'rollupRetainMinH', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_MIN_H', 'type' => 'int', 'min' => 1, 'default' => '48', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:270 (max(1,...))
             'rollup.retain_hour_d' => ['field' => 'rollupRetainHourD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_HOUR_D', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:271 (max(1,...))
             'rollup.retain_day_d' => ['field' => 'rollupRetainDayD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_DAY_D', 'type' => 'int', 'min' => 1, 'default' => '365', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:272 (max(1,...))
+
+            // --- AI-attacker cost-amplification tarpit (FP-0245). Master switch opt-in; caps clamped floor+ceiling. tarpitDbPath is env-only (a path). ---
+            'tarpit.enabled' => ['field' => 'tarpitEnabled', 'env' => 'FUNNYPOT_TARPIT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:307
+            'tarpit.max_concurrent' => ['field' => 'tarpitMaxConcurrent', 'env' => 'FUNNYPOT_TARPIT_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '4', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:309 (max(1,min(15,...)))
+            'tarpit.max_per_ip' => ['field' => 'tarpitMaxPerIp', 'env' => 'FUNNYPOT_TARPIT_MAX_PER_IP', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:310 (max(1,min(15,...)))
+            'tarpit.bytes_per_resp_mb' => ['field' => 'tarpitBytesPerRespMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_RESP_MB', 'type' => 'int', 'min' => 1, 'max' => 512, 'default' => '8', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:311 (max(1,min(512,...)))
+            'tarpit.bytes_per_ip_hr_mb' => ['field' => 'tarpitBytesPerIpHrMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_IP_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 65536, 'default' => '64', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:312 (max(1,min(65536,...)))
+            'tarpit.wall_per_ip_hr_s' => ['field' => 'tarpitWallPerIpHrS', 'env' => 'FUNNYPOT_TARPIT_WALL_PER_IP_HR_S', 'type' => 'int', 'min' => 1, 'max' => 3600, 'default' => '120', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:313 (max(1,min(3600,...)))
+            'tarpit.global_bytes_hr_mb' => ['field' => 'tarpitGlobalBytesHrMb', 'env' => 'FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 1048576, 'default' => '1024', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:314 (max(1,min(1048576,...)))
+            'tarpit.pages_per_ip_hr' => ['field' => 'tarpitPagesPerIpHr', 'env' => 'FUNNYPOT_TARPIT_PAGES_PER_IP_HR', 'type' => 'int', 'min' => 1, 'max' => 1000000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:315 (max(1,min(1000000,...)))
+            'tarpit.latency_ms' => ['field' => 'tarpitLatencyMs', 'env' => 'FUNNYPOT_TARPIT_LATENCY_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:316 (max(0,min(2000,...)))
+            'tarpit.decomp_cap_mb' => ['field' => 'tarpitDecompCapMb', 'env' => 'FUNNYPOT_TARPIT_DECOMP_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '16', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:317 (max(1,min(64,...)))
         ];
     }
 
