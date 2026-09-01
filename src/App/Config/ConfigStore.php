@@ -249,8 +249,9 @@ final class ConfigStore
         if (!$ok) {
             throw new RuntimeException($coerced);
         }
-        $db = $this->db();
+        $db = null;
         try {
+            $db = $this->db();
             $db->beginTransaction();
             $old = $this->currentValue($db, $key);
             $st = $db->prepare(
@@ -263,7 +264,7 @@ final class ConfigStore
             $gen = $this->bumpGeneration($db);
             $db->commit();
         } catch (Throwable $e) {
-            if ($db->inTransaction()) {
+            if ($db !== null && $db->inTransaction()) {
                 $db->rollBack();
             }
             throw new RuntimeException('config set failed: ' . $e->getMessage(), 0, $e);
@@ -279,8 +280,9 @@ final class ConfigStore
      */
     public function reset(string $key, string $actor, string $sourceIp): void
     {
-        $db = $this->db();
+        $db = null;
         try {
+            $db = $this->db();
             $db->beginTransaction();
             $old = $this->currentValue($db, $key);
             if ($old === null) {
@@ -293,7 +295,7 @@ final class ConfigStore
             $gen = $this->bumpGeneration($db);
             $db->commit();
         } catch (Throwable $e) {
-            if ($db->inTransaction()) {
+            if ($db !== null && $db->inTransaction()) {
                 $db->rollBack();
             }
             throw new RuntimeException('config reset failed: ' . $e->getMessage(), 0, $e);
@@ -310,9 +312,10 @@ final class ConfigStore
      */
     public function seedFromEnv(): int
     {
-        $db = $this->db();
+        $db = null;
         $count = 0;
         try {
+            $db = $this->db();
             $db->beginTransaction();
             $upsert = $db->prepare(
                 'INSERT INTO config (key, value, updated_at, updated_by) VALUES (:k, :v, :t, :by)
@@ -336,7 +339,7 @@ final class ConfigStore
             $gen = $this->bumpGeneration($db);
             $db->commit();
         } catch (Throwable $e) {
-            if ($db->inTransaction()) {
+            if ($db !== null && $db->inTransaction()) {
                 $db->rollBack();
             }
             throw new RuntimeException('config seed failed: ' . $e->getMessage(), 0, $e);
