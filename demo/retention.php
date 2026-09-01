@@ -40,10 +40,12 @@ if ($config->llmEnabled && is_file($config->llmCacheDb)) {
 // Tarpit upkeep (FP-0245): reap slots a crashed holder left behind and prune stale hourly-ledger
 // buckets, on the same timer. acquire() also self-reaps inline, but a fatal/OOM/SIGTERM never runs
 // release() or the shutdown handler, so this cron pass is the backstop that keeps the small slot
-// pool from wedging. Runs whenever the tarpit is on and its db exists.
-if ($config->tarpitEnabled && is_file($config->tarpitDbPath)) {
+// pool from wedging. Runs whenever the tarpit OR the FP-0228 sleep decoy is on and the db exists (the
+// sleep decoy charges its honoured sleep to the SAME tarpit_ledger.wall_ms rows, so this one prune
+// keeps them bounded too — no unbounded state).
+if (($config->tarpitEnabled || $config->sleepDecoy) && is_file($config->tarpitDbPath)) {
     try {
-        $budget = new TarpitBudget($config->tarpitDbPath, $config->tarpitEnabled);
+        $budget = new TarpitBudget($config->tarpitDbPath, $config->tarpitEnabled || $config->sleepDecoy);
         // A SHORT slot TTL (nginx fastcgi_read_timeout territory), never the 120 s/hr wall budget.
         $reaped = $budget->reap();
         $pruned = $budget->pruneLedger();

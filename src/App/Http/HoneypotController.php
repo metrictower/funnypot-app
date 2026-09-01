@@ -39,6 +39,7 @@ final class HoneypotController
         private ?LlmFakeResponder $llmFakes = null,
         private ?AttackClassifier $attackClassifier = null,
         private ?OperatorBlocklist $operatorBlock = null,
+        private ?SleepDecoy $sleepDecoy = null,
     ) {
     }
 
@@ -196,6 +197,18 @@ final class HoneypotController
         ));
 
         $detection = $funnypot->detect($context);
+
+        // FP-0228: honour a time-based blind-injection SLEEP probe with a metered, slot-gated,
+        // budget-bounded delay. Placed here — after detect(), before ANY serve branch below — so it
+        // covers EVERY path a sleep probe can be answered on (served attack fake, panel, LLM fake, 404)
+        // uniformly, additive to serveDelay(). This is deliberate: SHOULD-FIX 1 — a recognised SQLi
+        // SLEEP probe is SERVED an attack fake ($response !== null), where the fall-through $payloadClass
+        // (computed only on the 404 miss below) is null; SleepDecoy classifies the sleep structure
+        // INDEPENDENTLY instead. It self-gates (structure present + sqli/rce + budget + a won slot), so a
+        // benign/non-sleep request returns after one regex, off-by-default is a no-op ($sleepDecoy null),
+        // and any budget fault degrades to zero delay — never a 500. The standalone controller always
+        // runs respond + gate-open + isolated-origin (below), the posture this decoy is scoped to.
+        $this->sleepDecoy?->maybeDelay($context, $clientIp);
 
         // The honeypot's own admin panel (/admin, /dashboard, … mounted at the path root, and every
         // sub-path) is a deep-engagement lure and must be served by the panel emulator and logged as

@@ -157,6 +157,9 @@ final class ConfigRegistry
             'tarpit.pages_per_ip_hr' => ['field' => 'tarpitPagesPerIpHr', 'env' => 'FUNNYPOT_TARPIT_PAGES_PER_IP_HR', 'type' => 'int', 'min' => 1, 'max' => 1000000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(1000000,...)))
             'tarpit.latency_ms' => ['field' => 'tarpitLatencyMs', 'env' => 'FUNNYPOT_TARPIT_LATENCY_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(0,min(2000,...)))
             'tarpit.decomp_cap_mb' => ['field' => 'tarpitDecompCapMb', 'env' => 'FUNNYPOT_TARPIT_DECOMP_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '16', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(64,...)))
+            // --- Time-based blind-injection SLEEP decoy (FP-0228). Opt-in; rides the tarpit slot/ledger. The per-IP cumulative sleep budget is tarpit.wall_per_ip_hr_s (no separate knob — one ledger). ---
+            'sleep_decoy.enabled' => ['field' => 'sleepDecoy', 'env' => 'FUNNYPOT_SLEEP_DECOY', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            'sleep_decoy.per_req_cap_ms' => ['field' => 'sleepPerReqCapMs', 'env' => 'FUNNYPOT_SLEEP_PER_REQ_CAP_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(0,min(2000,...)))
         ];
     }
 

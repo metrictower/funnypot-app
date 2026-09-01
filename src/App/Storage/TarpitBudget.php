@@ -138,6 +138,35 @@ final class TarpitBudget
     }
 
     /**
+     * FP-0228 sibling of {@see applyLatency()}: apply a PER-REQUEST latency (the honoured SLEEP the
+     * attacker asked for, already capped by the caller) as ONE bounded sleep, reusing applyLatency()'s
+     * exact mechanism — the SAME injected sleeper, the SAME LATENCY_HARD_CAP_MS wall (a second clamp
+     * behind AppConfig's), the SAME fail-safe. It differs only in taking the ms per call instead of the
+     * construction-fixed $latencyMs, because a time-based decoy's delay tracks each probe's requested
+     * seconds. The SELF-DoS invariant is identical and non-negotiable: call this ONLY while holding a
+     * TarpitBudget slot (i.e. after a non-null {@see guard()}), so the number of workers ever sleeping
+     * at once can never exceed MAX_CONCURRENT. Returns the ms actually slept (0 on disabled / ≤0 / fault)
+     * so the caller can charge that wall time to the ledger.
+     */
+    public function applyLatencyMs(int $requestedMs): int
+    {
+        if (!$this->enabled) {
+            return 0; // master switch off — inert (defence in depth; a caller only reaches here on WON)
+        }
+        $ms = max(0, min(self::LATENCY_HARD_CAP_MS, $requestedMs));
+        if ($ms <= 0) {
+            return 0;
+        }
+        try {
+            ($this->sleeper)($ms);
+
+            return $ms;
+        } catch (Throwable $e) {
+            return 0; // fail-safe: no latency, never a slow/500 failure mode
+        }
+    }
+
+    /**
      * The one seam every tarpit route calls FIRST (spec invariant 6, plan-review SHOULD-FIX 3). It is
      * the ONLY per-IP guard on those gate-exempt routes, so nothing may dispatch tarpit work without
      * it. Returns a held slot id when the caller may proceed, or null to shed to a bounded 404. Fails

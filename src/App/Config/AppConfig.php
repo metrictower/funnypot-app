@@ -160,6 +160,15 @@ final class AppConfig
         public int $tarpitLatencyMs,
         /** Decompression cap if gzip is ever used (D3); decompressed ≤ this, ratio ≤ 100:1. */
         public int $tarpitDecompCapMb,
+        // Time-based blind-injection decoy (FP-0228). Off by default (opt-in). Honours an attacker's
+        // SLEEP(n)/WAITFOR/time-based-cmdi just enough to satisfy calibrated-SLEEP confirmation, but
+        // bounded: the delay rides FP-0245's TarpitBudget slot (≤ MAX_CONCURRENT workers ever sleeping)
+        // and its per-IP hourly wall ledger (tarpitWallPerIpHrS is the operator's cumulative allowance).
+        /** Master switch for the FP-0228 honoured-SLEEP decoy (needs the tarpit slot/ledger infra). */
+        public bool $sleepDecoy = false,
+        /** Per-request honoured-sleep cap (ms), hard-clamped ≤ 2000 so an operator typo can't pin a
+         *  worker near nginx's 15s timeout; TarpitBudget re-clamps to LATENCY_HARD_CAP_MS behind this. */
+        public int $sleepPerReqCapMs = 2000,
     ) {
     }
 
@@ -349,6 +358,11 @@ final class AppConfig
             tarpitPagesPerIpHr: max(1, min(1000000, (int) $str('FUNNYPOT_TARPIT_PAGES_PER_IP_HR', '2000'))),
             tarpitLatencyMs: max(0, min(2000, (int) $str('FUNNYPOT_TARPIT_LATENCY_MS', '0'))),
             tarpitDecompCapMb: max(1, min(64, (int) $str('FUNNYPOT_TARPIT_DECOMP_CAP_MB', '16'))),
+            // FP-0228 honoured-SLEEP decoy: opt-in flag + per-request cap hard-clamped ≤2000 (a second
+            // wall behind TarpitBudget::LATENCY_HARD_CAP_MS). The per-IP cumulative budget is NOT a new
+            // knob — it rides FUNNYPOT_TARPIT_WALL_PER_IP_HR_S (the same wall ledger), no competing budget.
+            sleepDecoy: in_array(strtolower((string) $env('FUNNYPOT_SLEEP_DECOY')), ['1', 'on', 'true', 'yes'], true),
+            sleepPerReqCapMs: max(0, min(2000, (int) $str('FUNNYPOT_SLEEP_PER_REQ_CAP_MS', '2000'))),
         );
     }
 }

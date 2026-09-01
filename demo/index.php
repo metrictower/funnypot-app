@@ -36,6 +36,7 @@ use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Http\Router;
+use Funnypot\App\Http\SleepDecoy;
 use Funnypot\App\Llm\CircuitBreaker;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmFakeResponder;
@@ -243,7 +244,28 @@ if ($config->aiApiEnabled) {
     ));
 }
 
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock);
+// FP-0228 time-based blind-injection SLEEP decoy — opt-in (FUNNYPOT_SLEEP_DECOY), off by default so
+// $sleepDecoy is null and the controller adds zero delay. It rides its OWN TarpitBudget over the SAME
+// tarpit.sqlite (one cross-worker slot pool + one per-IP wall ledger, shared with the labyrinth/polluter
+// tarpits) — enabled here regardless of FUNNYPOT_TARPIT so the honoured-sleep slot/budget infra works,
+// and the per-IP cumulative sleep allowance IS the hourly wall budget (tarpitWallPerIpHrS), not a second
+// budget. The honoured usleep runs ONLY while holding a slot, so ≤ MAX_CONCURRENT workers ever sleep.
+$sleepDecoy = null;
+if ($config->sleepDecoy) {
+    $sleepBudget = new TarpitBudget(
+        $config->tarpitDbPath,
+        true, // enabled — the sleep decoy needs a live slot pool + ledger even if the labyrinth is off
+        $config->tarpitMaxConcurrent,
+        $config->tarpitMaxPerIp,
+        $config->tarpitBytesPerIpHrMb * 1024 * 1024,
+        $config->tarpitWallPerIpHrS * 1000, // the operator's per-IP cumulative honoured-sleep allowance
+        $config->tarpitGlobalBytesHrMb * 1024 * 1024,
+        $config->tarpitPagesPerIpHr,
+        15, // SHORT slot-reap TTL (nginx fastcgi_read_timeout), well above the ≤2000ms honoured sleep
+    );
+    $sleepDecoy = new SleepDecoy($sleepBudget, $config, new AttackClassifier());
+}
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
