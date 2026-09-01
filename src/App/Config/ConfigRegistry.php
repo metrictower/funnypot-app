@@ -9,10 +9,12 @@ namespace Funnypot\App\Config;
  * {@see ConfigStore} and (in FP-0242b) the admin UI. One entry per canonical key.
  *
  * IMPORTANT — this is a TRANSCRIPTION of the defaults and clamps already coded in
- * {@see AppConfig::fromEnv()} (which stays the seed + fallback). Each entry cites the
- * `AppConfig.php` source line it mirrors so a reviewer can diff the two by eye, and
- * ConfigRegistryTest asserts (by reflection over `AppConfig::__construct`) that the field set here
- * stays in sync with the value object. The env-only fields — filesystem paths, secrets/identity and
+ * {@see AppConfig::fromEnv()} (which stays the seed + fallback). Each entry's clamp bounds mirror the
+ * matching `AppConfig::build()` field; per-line `AppConfig.php:NNN` citations were dropped (FP-0242b
+ * review nit fable#5) because they drift on every edit to `AppConfig` — ConfigRegistryTest asserts (by
+ * reflection over `AppConfig::__construct`) that the field set here stays in sync with the value
+ * object, which is the durable guard the stale line numbers pretended to be. The env-only fields —
+ * filesystem paths, secrets/identity and
  * network topology — are deliberately NOT here (they stay env-sourced inside `fromStore`); the test
  * holds their allow-list.
  *
@@ -67,89 +69,94 @@ final class ConfigRegistry
     {
         return [
             // --- Deception / behaviour ---
-            'mode' => ['field' => 'mode', 'env' => 'FUNNYPOT_MODE', 'type' => 'enum', 'enum' => ['public', 'stealth'], 'default' => 'public', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:186
-            'style' => ['field' => 'style', 'env' => 'FUNNYPOT_STYLE', 'type' => 'enum', 'enum' => ['realistic', 'taunt', 'malformed'], 'default' => 'realistic', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:187
-            'powered_by' => ['field' => 'poweredBy', 'env' => 'FUNNYPOT_POWERED_BY', 'type' => 'string', 'default' => '', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:192 (effective default is persona-derived, resolved in build())
-            'severity_ceiling' => ['field' => 'severityCeiling', 'env' => 'FUNNYPOT_CEILING', 'type' => 'string', 'default' => 'critical', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:194 (free string in fromEnv; not clamped)
-            'latency_ms' => ['field' => 'latencyMs', 'env' => 'FUNNYPOT_LATENCY_MS', 'type' => 'int', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:195 (no clamp)
-            'jitter_ms' => ['field' => 'jitterMs', 'env' => 'FUNNYPOT_JITTER_MS', 'type' => 'int', 'default' => '40', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:196 (no clamp)
-            'attack_emulation' => ['field' => 'attackEmulation', 'env' => 'FUNNYPOT_ATTACK', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:197
-            'decoy_archive' => ['field' => 'decoyArchive', 'env' => 'FUNNYPOT_DECOY_ARCHIVE', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:198
-            'dashboard_path' => ['field' => 'dashboardPath', 'env' => 'FUNNYPOT_DASHBOARD_PATH', 'type' => 'string', 'default' => '/__fp/', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:203 (build() normalises to /trim/)
-            'funnypot_path' => ['field' => 'funnypotPath', 'env' => 'FUNNYPOT_APP_PATH', 'type' => 'string', 'default' => 'funnypot', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:204
-            'hide_main_page' => ['field' => 'hideMainPage', 'env' => 'FUNNYPOT_HIDE_MAIN', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:205
-            'capture_raw' => ['field' => 'captureRaw', 'env' => 'FUNNYPOT_CAPTURE_RAW', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false], // AppConfig.php:206
+            'mode' => ['field' => 'mode', 'env' => 'FUNNYPOT_MODE', 'type' => 'enum', 'enum' => ['public', 'stealth'], 'default' => 'public', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'style' => ['field' => 'style', 'env' => 'FUNNYPOT_STYLE', 'type' => 'enum', 'enum' => ['realistic', 'taunt', 'malformed'], 'default' => 'realistic', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'powered_by' => ['field' => 'poweredBy', 'env' => 'FUNNYPOT_POWERED_BY', 'type' => 'string', 'default' => '', 'group' => 'Deception', 'live' => true, 'secret' => false], // (effective default is persona-derived, resolved in build())
+            'severity_ceiling' => ['field' => 'severityCeiling', 'env' => 'FUNNYPOT_CEILING', 'type' => 'string', 'default' => 'critical', 'group' => 'Deception', 'live' => true, 'secret' => false], // (free string in fromEnv; not clamped)
+            'latency_ms' => ['field' => 'latencyMs', 'env' => 'FUNNYPOT_LATENCY_MS', 'type' => 'int', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false], // (no clamp)
+            'jitter_ms' => ['field' => 'jitterMs', 'env' => 'FUNNYPOT_JITTER_MS', 'type' => 'int', 'default' => '40', 'group' => 'Deception', 'live' => true, 'secret' => false], // (no clamp)
+            'attack_emulation' => ['field' => 'attackEmulation', 'env' => 'FUNNYPOT_ATTACK', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'decoy_archive' => ['field' => 'decoyArchive', 'env' => 'FUNNYPOT_DECOY_ARCHIVE', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'dashboard_path' => ['field' => 'dashboardPath', 'env' => 'FUNNYPOT_DASHBOARD_PATH', 'type' => 'string', 'default' => '/__fp/', 'group' => 'Deception', 'live' => true, 'secret' => false], // (build() normalises to /trim/)
+            'funnypot_path' => ['field' => 'funnypotPath', 'env' => 'FUNNYPOT_APP_PATH', 'type' => 'string', 'default' => 'funnypot', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'hide_main_page' => ['field' => 'hideMainPage', 'env' => 'FUNNYPOT_HIDE_MAIN', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'capture_raw' => ['field' => 'captureRaw', 'env' => 'FUNNYPOT_CAPTURE_RAW', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            // FP-0242b: what an UNAUTHENTICATED visitor sees on the dashboard path. Default 'none' is the
+            // fail-safe/least-exposed baseline (operator decision, comments.md 2026-09-01): the store
+            // returns this default on a read fault, so the baseline MUST be the least-exposed value for
+            // "config-read error ⇒ less exposure" to hold. The authed operator always sees full regardless.
+            'dashboard.public_view' => ['field' => 'dashboardPublicView', 'env' => 'FUNNYPOT_PUBLIC_VIEW', 'type' => 'enum', 'enum' => ['full', 'minimal', 'none'], 'default' => 'none', 'group' => 'Deception', 'live' => true, 'secret' => false],
 
             // --- Feature toggles (opt-in unless noted) — restart-required: each gates object construction at bootstrap (spec §4) ---
-            'protocols_enabled' => ['field' => 'protocolsEnabled', 'env' => 'FUNNYPOT_PROTOCOLS', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:200
-            'blocklist_enabled' => ['field' => 'blocklistEnabled', 'env' => 'FUNNYPOT_BLOCKLIST', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:207
-            'abuseipdb_report' => ['field' => 'abuseIpdbReport', 'env' => 'FUNNYPOT_ABUSEIPDB_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:211
-            'threatintel_report' => ['field' => 'threatIntelReport', 'env' => 'FUNNYPOT_THREATINTEL_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:216
-            'llm_enabled' => ['field' => 'llmEnabled', 'env' => 'FUNNYPOT_LLM', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:221
-            'ai_api_enabled' => ['field' => 'aiApiEnabled', 'env' => 'FUNNYPOT_AI_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:222
-            'docker_api_enabled' => ['field' => 'dockerApiEnabled', 'env' => 'FUNNYPOT_DOCKER_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:223
-            'endless_download' => ['field' => 'endlessDownload', 'env' => 'FUNNYPOT_ENDLESS_DOWNLOAD', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false], // AppConfig.php:256
+            'protocols_enabled' => ['field' => 'protocolsEnabled', 'env' => 'FUNNYPOT_PROTOCOLS', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'blocklist_enabled' => ['field' => 'blocklistEnabled', 'env' => 'FUNNYPOT_BLOCKLIST', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'abuseipdb_report' => ['field' => 'abuseIpdbReport', 'env' => 'FUNNYPOT_ABUSEIPDB_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'threatintel_report' => ['field' => 'threatIntelReport', 'env' => 'FUNNYPOT_THREATINTEL_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'llm_enabled' => ['field' => 'llmEnabled', 'env' => 'FUNNYPOT_LLM', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'ai_api_enabled' => ['field' => 'aiApiEnabled', 'env' => 'FUNNYPOT_AI_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'docker_api_enabled' => ['field' => 'dockerApiEnabled', 'env' => 'FUNNYPOT_DOCKER_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'endless_download' => ['field' => 'endlessDownload', 'env' => 'FUNNYPOT_ENDLESS_DOWNLOAD', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false],
 
             // --- LLM / fake-AI sampling + throttles (restart-required: baked into clients at bootstrap) ---
-            'ai.strict_auth' => ['field' => 'aiStrictAuth', 'env' => 'FUNNYPOT_AI_STRICT_AUTH', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:224
-            'ai.strict_model' => ['field' => 'aiStrictModel', 'env' => 'FUNNYPOT_AI_STRICT_MODEL', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:225
-            'ai.temp' => ['field' => 'aiTemp', 'env' => 'FUNNYPOT_AI_TEMP', 'type' => 'float', 'default' => '0.8', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:226 (no clamp)
-            'ai.min_p' => ['field' => 'aiMinP', 'env' => 'FUNNYPOT_AI_MIN_P', 'type' => 'float', 'default' => '0.0', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:227 (no clamp)
-            'ai.top_p' => ['field' => 'aiTopP', 'env' => 'FUNNYPOT_AI_TOP_P', 'type' => 'float', 'default' => '1.0', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:228 (no clamp)
-            'ai.real_first' => ['field' => 'aiRealFirst', 'env' => 'FUNNYPOT_AI_REAL_FIRST', 'type' => 'int', 'min' => 0, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:229 (max(0,...))
-            'ai.real_window_s' => ['field' => 'aiRealWindowS', 'env' => 'FUNNYPOT_AI_REAL_WINDOW_S', 'type' => 'int', 'min' => 1, 'default' => '600', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:230 (max(1,...))
-            'llm.url' => ['field' => 'llmUrl', 'env' => 'FUNNYPOT_LLM_URL', 'type' => 'string', 'default' => 'http://funnypot-llm:8080/completion', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:231
-            'llm.timeout_ms' => ['field' => 'llmTimeoutMs', 'env' => 'FUNNYPOT_LLM_TIMEOUT_MS', 'type' => 'int', 'min' => 200, 'default' => '9000', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:235 (max(200,...))
-            'llm.n_predict' => ['field' => 'llmNPredict', 'env' => 'FUNNYPOT_LLM_N_PREDICT', 'type' => 'int', 'min' => 64, 'default' => '320', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:236 (max(64,...))
-            'llm.cache_max_bytes' => ['field' => 'llmCacheMaxBytes', 'env' => 'FUNNYPOT_LLM_CACHE_MAX_BYTES', 'type' => 'int', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:238 (no clamp)
-            'llm.max_concurrent' => ['field' => 'llmMaxConcurrent', 'env' => 'FUNNYPOT_LLM_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'default' => '4', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:239 (max(1,...))
-            'llm.prompt_version' => ['field' => 'llmPromptVersion', 'env' => 'FUNNYPOT_LLM_PROMPT_VERSION', 'type' => 'string', 'default' => 'v2', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:240
-            'llm.breaker_threshold' => ['field' => 'llmBreakerThreshold', 'env' => 'FUNNYPOT_LLM_BREAKER_THRESHOLD', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:241 (max(1,...))
-            'llm.breaker_cooldown_s' => ['field' => 'llmBreakerCooldownS', 'env' => 'FUNNYPOT_LLM_BREAKER_COOLDOWN_S', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:242 (max(1,...))
-            'llm.velocity_per_60s' => ['field' => 'llmVelocityPer60s', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_60S', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:243 (max(1,...))
-            'llm.velocity_per_10m' => ['field' => 'llmVelocityPer10m', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_10M', 'type' => 'int', 'min' => 1, 'default' => '15', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:244 (max(1,...))
-            'llm.gate_allow' => ['field' => 'llmGateAllowIps', 'env' => 'FUNNYPOT_LLM_GATE_ALLOW', 'type' => 'csv', 'default' => '', 'group' => 'LLM', 'live' => false, 'secret' => false], // AppConfig.php:245
+            'ai.strict_auth' => ['field' => 'aiStrictAuth', 'env' => 'FUNNYPOT_AI_STRICT_AUTH', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false],
+            'ai.strict_model' => ['field' => 'aiStrictModel', 'env' => 'FUNNYPOT_AI_STRICT_MODEL', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false],
+            'ai.temp' => ['field' => 'aiTemp', 'env' => 'FUNNYPOT_AI_TEMP', 'type' => 'float', 'default' => '0.8', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
+            'ai.min_p' => ['field' => 'aiMinP', 'env' => 'FUNNYPOT_AI_MIN_P', 'type' => 'float', 'default' => '0.0', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
+            'ai.top_p' => ['field' => 'aiTopP', 'env' => 'FUNNYPOT_AI_TOP_P', 'type' => 'float', 'default' => '1.0', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
+            'ai.real_first' => ['field' => 'aiRealFirst', 'env' => 'FUNNYPOT_AI_REAL_FIRST', 'type' => 'int', 'min' => 0, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(0,...))
+            'ai.real_window_s' => ['field' => 'aiRealWindowS', 'env' => 'FUNNYPOT_AI_REAL_WINDOW_S', 'type' => 'int', 'min' => 1, 'default' => '600', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.url' => ['field' => 'llmUrl', 'env' => 'FUNNYPOT_LLM_URL', 'type' => 'string', 'default' => 'http://funnypot-llm:8080/completion', 'group' => 'LLM', 'live' => false, 'secret' => false],
+            'llm.timeout_ms' => ['field' => 'llmTimeoutMs', 'env' => 'FUNNYPOT_LLM_TIMEOUT_MS', 'type' => 'int', 'min' => 200, 'default' => '9000', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(200,...))
+            'llm.n_predict' => ['field' => 'llmNPredict', 'env' => 'FUNNYPOT_LLM_N_PREDICT', 'type' => 'int', 'min' => 64, 'default' => '320', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(64,...))
+            'llm.cache_max_bytes' => ['field' => 'llmCacheMaxBytes', 'env' => 'FUNNYPOT_LLM_CACHE_MAX_BYTES', 'type' => 'int', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
+            'llm.max_concurrent' => ['field' => 'llmMaxConcurrent', 'env' => 'FUNNYPOT_LLM_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'default' => '4', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.prompt_version' => ['field' => 'llmPromptVersion', 'env' => 'FUNNYPOT_LLM_PROMPT_VERSION', 'type' => 'string', 'default' => 'v2', 'group' => 'LLM', 'live' => false, 'secret' => false],
+            'llm.breaker_threshold' => ['field' => 'llmBreakerThreshold', 'env' => 'FUNNYPOT_LLM_BREAKER_THRESHOLD', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.breaker_cooldown_s' => ['field' => 'llmBreakerCooldownS', 'env' => 'FUNNYPOT_LLM_BREAKER_COOLDOWN_S', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.velocity_per_60s' => ['field' => 'llmVelocityPer60s', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_60S', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.velocity_per_10m' => ['field' => 'llmVelocityPer10m', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_10M', 'type' => 'int', 'min' => 1, 'default' => '15', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.gate_allow' => ['field' => 'llmGateAllowIps', 'env' => 'FUNNYPOT_LLM_GATE_ALLOW', 'type' => 'csv', 'default' => '', 'group' => 'LLM', 'live' => false, 'secret' => false],
 
             // --- Threat-intel / blocklist knobs (restart-required) ---
-            'blocklist.min_lists' => ['field' => 'blocklistMinLists', 'env' => 'FUNNYPOT_BLOCKLIST_MIN_LISTS', 'type' => 'int', 'min' => 1, 'default' => '1', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:209 (max(1,...))
-            'abuseipdb.daily_cap' => ['field' => 'abuseIpdbDailyCap', 'env' => 'FUNNYPOT_ABUSEIPDB_DAILY_CAP', 'type' => 'int', 'min' => 1, 'default' => '1000', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:214 (max(1,...))
-            'abuseipdb.dedup_hours' => ['field' => 'abuseIpdbDedupHours', 'env' => 'FUNNYPOT_ABUSEIPDB_DEDUP_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:215 (max(1,...))
-            'threatintel.url' => ['field' => 'threatIntelUrl', 'env' => 'FUNNYPOT_THREATINTEL_URL', 'type' => 'string', 'default' => 'https://threatintel.metrictower.com', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:217
-            'threatintel.daily_cap' => ['field' => 'threatIntelDailyCap', 'env' => 'FUNNYPOT_THREATINTEL_DAILY_CAP', 'type' => 'int', 'min' => 1, 'default' => '1000', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:219 (max(1,...))
-            'threatintel.dedup_hours' => ['field' => 'threatIntelDedupHours', 'env' => 'FUNNYPOT_THREATINTEL_DEDUP_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // AppConfig.php:220 (max(1,...))
+            'blocklist.min_lists' => ['field' => 'blocklistMinLists', 'env' => 'FUNNYPOT_BLOCKLIST_MIN_LISTS', 'type' => 'int', 'min' => 1, 'default' => '1', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
+            'abuseipdb.daily_cap' => ['field' => 'abuseIpdbDailyCap', 'env' => 'FUNNYPOT_ABUSEIPDB_DAILY_CAP', 'type' => 'int', 'min' => 1, 'default' => '1000', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
+            'abuseipdb.dedup_hours' => ['field' => 'abuseIpdbDedupHours', 'env' => 'FUNNYPOT_ABUSEIPDB_DEDUP_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
+            'threatintel.url' => ['field' => 'threatIntelUrl', 'env' => 'FUNNYPOT_THREATINTEL_URL', 'type' => 'string', 'default' => 'https://threatintel.metrictower.com', 'group' => 'Threat-intel', 'live' => false, 'secret' => false],
+            'threatintel.daily_cap' => ['field' => 'threatIntelDailyCap', 'env' => 'FUNNYPOT_THREATINTEL_DAILY_CAP', 'type' => 'int', 'min' => 1, 'default' => '1000', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
+            'threatintel.dedup_hours' => ['field' => 'threatIntelDedupHours', 'env' => 'FUNNYPOT_THREATINTEL_DEDUP_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
 
             // --- Endless-download throttle knobs (restart-required: DownloadRouter ctor). Clamped both floor+ceiling. ---
-            'dl.chunk_min_kb' => ['field' => 'dlChunkMinKb', 'env' => 'FUNNYPOT_DL_CHUNK_MIN_KB', 'type' => 'int', 'min' => 1, 'max' => 1024, 'default' => '100', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:257 (max(1,min(1024,...)))
-            'dl.chunk_max_kb' => ['field' => 'dlChunkMaxKb', 'env' => 'FUNNYPOT_DL_CHUNK_MAX_KB', 'type' => 'int', 'min' => 1, 'max' => 1024, 'default' => '200', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:258 (max(1,min(1024,...)))
-            'dl.interval_ms' => ['field' => 'dlIntervalMs', 'env' => 'FUNNYPOT_DL_INTERVAL_MS', 'type' => 'int', 'min' => 10, 'max' => 5000, 'default' => '100', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:259 (max(10,min(5000,...)))
-            'dl.vary_pct' => ['field' => 'dlVaryPct', 'env' => 'FUNNYPOT_DL_VARY_PCT', 'type' => 'int', 'min' => 0, 'max' => 95, 'default' => '50', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:260 (max(0,min(95,...)))
-            'dl.ease_period_s' => ['field' => 'dlEasePeriodS', 'env' => 'FUNNYPOT_DL_EASE_PERIOD_S', 'type' => 'int', 'min' => 1, 'max' => 600, 'default' => '20', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:261 (max(1,min(600,...)))
-            'dl.fallback_cap_mb' => ['field' => 'dlFallbackCapMb', 'env' => 'FUNNYPOT_DL_FALLBACK_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 500, 'default' => '50', 'group' => 'Download', 'live' => false, 'secret' => false], // AppConfig.php:262 (max(1,min(500,...)))
+            'dl.chunk_min_kb' => ['field' => 'dlChunkMinKb', 'env' => 'FUNNYPOT_DL_CHUNK_MIN_KB', 'type' => 'int', 'min' => 1, 'max' => 1024, 'default' => '100', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(1,min(1024,...)))
+            'dl.chunk_max_kb' => ['field' => 'dlChunkMaxKb', 'env' => 'FUNNYPOT_DL_CHUNK_MAX_KB', 'type' => 'int', 'min' => 1, 'max' => 1024, 'default' => '200', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(1,min(1024,...)))
+            'dl.interval_ms' => ['field' => 'dlIntervalMs', 'env' => 'FUNNYPOT_DL_INTERVAL_MS', 'type' => 'int', 'min' => 10, 'max' => 5000, 'default' => '100', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(10,min(5000,...)))
+            'dl.vary_pct' => ['field' => 'dlVaryPct', 'env' => 'FUNNYPOT_DL_VARY_PCT', 'type' => 'int', 'min' => 0, 'max' => 95, 'default' => '50', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(0,min(95,...)))
+            'dl.ease_period_s' => ['field' => 'dlEasePeriodS', 'env' => 'FUNNYPOT_DL_EASE_PERIOD_S', 'type' => 'int', 'min' => 1, 'max' => 600, 'default' => '20', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(1,min(600,...)))
+            'dl.fallback_cap_mb' => ['field' => 'dlFallbackCapMb', 'env' => 'FUNNYPOT_DL_FALLBACK_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 500, 'default' => '50', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(1,min(500,...)))
 
             // --- Retention (separate CLI runner; picked up on its next timer pass) ---
-            'retain_days' => ['field' => 'retainDays', 'env' => 'FUNNYPOT_RETAIN_DAYS', 'type' => 'int', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // AppConfig.php:201 (no clamp)
-            'retain_gb' => ['field' => 'retainGb', 'env' => 'FUNNYPOT_RETAIN_GB', 'type' => 'float', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // AppConfig.php:202 (no clamp)
+            'retain_days' => ['field' => 'retainDays', 'env' => 'FUNNYPOT_RETAIN_DAYS', 'type' => 'int', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
+            'retain_gb' => ['field' => 'retainGb', 'env' => 'FUNNYPOT_RETAIN_GB', 'type' => 'float', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
 
             // --- Analytics rollup worker (FP-0243; separate CLI runner, picked up next pass) ---
-            'rollup.enabled' => ['field' => 'rollupEnabled', 'env' => 'FUNNYPOT_ROLLUP', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:266
-            'rollup.interval_s' => ['field' => 'rollupIntervalS', 'env' => 'FUNNYPOT_ROLLUP_INTERVAL', 'type' => 'int', 'min' => 1, 'default' => '15', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:267 (max(1,...))
-            'rollup.batch' => ['field' => 'rollupBatch', 'env' => 'FUNNYPOT_ROLLUP_BATCH', 'type' => 'int', 'min' => 1, 'default' => '5000', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:268 (max(1,...))
-            'rollup.top_k' => ['field' => 'rollupTopK', 'env' => 'FUNNYPOT_ROLLUP_TOPK', 'type' => 'int', 'min' => 1, 'default' => '20', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:269 (max(1,...))
-            'rollup.retain_min_h' => ['field' => 'rollupRetainMinH', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_MIN_H', 'type' => 'int', 'min' => 1, 'default' => '48', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:270 (max(1,...))
-            'rollup.retain_hour_d' => ['field' => 'rollupRetainHourD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_HOUR_D', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:271 (max(1,...))
-            'rollup.retain_day_d' => ['field' => 'rollupRetainDayD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_DAY_D', 'type' => 'int', 'min' => 1, 'default' => '365', 'group' => 'Rollup', 'live' => false, 'secret' => false], // AppConfig.php:272 (max(1,...))
+            'rollup.enabled' => ['field' => 'rollupEnabled', 'env' => 'FUNNYPOT_ROLLUP', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Rollup', 'live' => false, 'secret' => false],
+            'rollup.interval_s' => ['field' => 'rollupIntervalS', 'env' => 'FUNNYPOT_ROLLUP_INTERVAL', 'type' => 'int', 'min' => 1, 'default' => '15', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
+            'rollup.batch' => ['field' => 'rollupBatch', 'env' => 'FUNNYPOT_ROLLUP_BATCH', 'type' => 'int', 'min' => 1, 'default' => '5000', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
+            'rollup.top_k' => ['field' => 'rollupTopK', 'env' => 'FUNNYPOT_ROLLUP_TOPK', 'type' => 'int', 'min' => 1, 'default' => '20', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
+            'rollup.retain_min_h' => ['field' => 'rollupRetainMinH', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_MIN_H', 'type' => 'int', 'min' => 1, 'default' => '48', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
+            'rollup.retain_hour_d' => ['field' => 'rollupRetainHourD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_HOUR_D', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
+            'rollup.retain_day_d' => ['field' => 'rollupRetainDayD', 'env' => 'FUNNYPOT_ROLLUP_RETAIN_DAY_D', 'type' => 'int', 'min' => 1, 'default' => '365', 'group' => 'Rollup', 'live' => false, 'secret' => false], // (max(1,...))
 
             // --- AI-attacker cost-amplification tarpit (FP-0245). Master switch opt-in; caps clamped floor+ceiling. tarpitDbPath is env-only (a path). ---
-            'tarpit.enabled' => ['field' => 'tarpitEnabled', 'env' => 'FUNNYPOT_TARPIT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:307
-            'tarpit.max_concurrent' => ['field' => 'tarpitMaxConcurrent', 'env' => 'FUNNYPOT_TARPIT_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '4', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:309 (max(1,min(15,...)))
-            'tarpit.max_per_ip' => ['field' => 'tarpitMaxPerIp', 'env' => 'FUNNYPOT_TARPIT_MAX_PER_IP', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:310 (max(1,min(15,...)))
-            'tarpit.bytes_per_resp_mb' => ['field' => 'tarpitBytesPerRespMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_RESP_MB', 'type' => 'int', 'min' => 1, 'max' => 512, 'default' => '8', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:311 (max(1,min(512,...)))
-            'tarpit.bytes_per_ip_hr_mb' => ['field' => 'tarpitBytesPerIpHrMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_IP_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 65536, 'default' => '64', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:312 (max(1,min(65536,...)))
-            'tarpit.wall_per_ip_hr_s' => ['field' => 'tarpitWallPerIpHrS', 'env' => 'FUNNYPOT_TARPIT_WALL_PER_IP_HR_S', 'type' => 'int', 'min' => 1, 'max' => 3600, 'default' => '120', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:313 (max(1,min(3600,...)))
-            'tarpit.global_bytes_hr_mb' => ['field' => 'tarpitGlobalBytesHrMb', 'env' => 'FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 1048576, 'default' => '1024', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:314 (max(1,min(1048576,...)))
-            'tarpit.pages_per_ip_hr' => ['field' => 'tarpitPagesPerIpHr', 'env' => 'FUNNYPOT_TARPIT_PAGES_PER_IP_HR', 'type' => 'int', 'min' => 1, 'max' => 1000000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:315 (max(1,min(1000000,...)))
-            'tarpit.latency_ms' => ['field' => 'tarpitLatencyMs', 'env' => 'FUNNYPOT_TARPIT_LATENCY_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:316 (max(0,min(2000,...)))
-            'tarpit.decomp_cap_mb' => ['field' => 'tarpitDecompCapMb', 'env' => 'FUNNYPOT_TARPIT_DECOMP_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '16', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // AppConfig.php:317 (max(1,min(64,...)))
+            'tarpit.enabled' => ['field' => 'tarpitEnabled', 'env' => 'FUNNYPOT_TARPIT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            'tarpit.max_concurrent' => ['field' => 'tarpitMaxConcurrent', 'env' => 'FUNNYPOT_TARPIT_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '4', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(15,...)))
+            'tarpit.max_per_ip' => ['field' => 'tarpitMaxPerIp', 'env' => 'FUNNYPOT_TARPIT_MAX_PER_IP', 'type' => 'int', 'min' => 1, 'max' => 15, 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(15,...)))
+            'tarpit.bytes_per_resp_mb' => ['field' => 'tarpitBytesPerRespMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_RESP_MB', 'type' => 'int', 'min' => 1, 'max' => 512, 'default' => '8', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(512,...)))
+            'tarpit.bytes_per_ip_hr_mb' => ['field' => 'tarpitBytesPerIpHrMb', 'env' => 'FUNNYPOT_TARPIT_BYTES_PER_IP_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 65536, 'default' => '64', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(65536,...)))
+            'tarpit.wall_per_ip_hr_s' => ['field' => 'tarpitWallPerIpHrS', 'env' => 'FUNNYPOT_TARPIT_WALL_PER_IP_HR_S', 'type' => 'int', 'min' => 1, 'max' => 3600, 'default' => '120', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(3600,...)))
+            'tarpit.global_bytes_hr_mb' => ['field' => 'tarpitGlobalBytesHrMb', 'env' => 'FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB', 'type' => 'int', 'min' => 1, 'max' => 1048576, 'default' => '1024', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(1048576,...)))
+            'tarpit.pages_per_ip_hr' => ['field' => 'tarpitPagesPerIpHr', 'env' => 'FUNNYPOT_TARPIT_PAGES_PER_IP_HR', 'type' => 'int', 'min' => 1, 'max' => 1000000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(1000000,...)))
+            'tarpit.latency_ms' => ['field' => 'tarpitLatencyMs', 'env' => 'FUNNYPOT_TARPIT_LATENCY_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(0,min(2000,...)))
+            'tarpit.decomp_cap_mb' => ['field' => 'tarpitDecompCapMb', 'env' => 'FUNNYPOT_TARPIT_DECOMP_CAP_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '16', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(64,...)))
         ];
     }
 

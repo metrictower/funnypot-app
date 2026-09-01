@@ -37,6 +37,11 @@ final class AppConfig
         public float $retainGb,
         /** Operator dashboard path in stealth mode (public mode serves it at /). */
         public string $dashboardPath,
+        /** What an UNAUTHENTICATED visitor sees on the dashboard path (FP-0242b): full | minimal | none.
+         *  Default (and any unknown value) is `none` — the fail-safe, least-exposed value: an
+         *  unauthenticated visitor who finds the hidden path sees nothing. An authenticated operator
+         *  ALWAYS sees the full view regardless of this knob. */
+        public string $dashboardPublicView,
         public bool $blocklistEnabled,
         public string $intelDbPath,
         public int $blocklistMinLists,
@@ -255,6 +260,13 @@ final class AppConfig
             retainDays: (int) ($str('FUNNYPOT_RETAIN_DAYS', '0')),
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),
             dashboardPath: '/' . trim($str('FUNNYPOT_DASHBOARD_PATH', '/__fp/'), '/') . '/',
+            // Public-visibility knob (FP-0242b). Clamp toward LESS exposure: any value that is not one of
+            // the three known levels resolves to 'none' (the fail-safe baseline), so a garbage stored/env
+            // value can never widen exposure. The registry default is 'none' too, so a store read fault
+            // (which yields the baseline) also lands on the least-exposed view.
+            dashboardPublicView: in_array($str('FUNNYPOT_PUBLIC_VIEW', 'none'), ['full', 'minimal', 'none'], true)
+                ? $str('FUNNYPOT_PUBLIC_VIEW', 'none')
+                : 'none',
             funnypotPath: '/' . trim($str('FUNNYPOT_APP_PATH', 'funnypot'), '/'),
             hideMainPage: in_array(strtolower((string) $env('FUNNYPOT_HIDE_MAIN')), ['1', 'on', 'true', 'yes'], true),
             captureRaw: in_array(strtolower((string) $env('FUNNYPOT_CAPTURE_RAW')), ['1', 'on', 'true', 'yes'], true),

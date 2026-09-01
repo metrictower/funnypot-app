@@ -45,6 +45,12 @@ final class ConfigStore
     private string $sentinelPath;
     private ?PDO $db = null;
 
+    // APCu keys namespaced by the db path (FP-0242b review nit fable#6): a second config db on the same
+    // box can never collide with this one's cached snapshot/generation. Harmless today (one config db in
+    // prod) but cheap insurance, and it makes a per-test store isolation-clean when APCu is present.
+    private string $apcuSnapKey;
+    private string $apcuGenKey;
+
     /** @var array<string,string>|null per-instance memo of the resolved override map */
     private ?array $memo = null;
     private int $memoGen = -2;
@@ -66,6 +72,9 @@ final class ConfigStore
             $this->registry = new ConfigRegistry();
         }
         $this->sentinelPath = $sentinelPath ?? (dirname($dbPath) . '/config.gen');
+        $ns = substr(md5($dbPath), 0, 12);
+        $this->apcuSnapKey = self::APCU_SNAP . '.' . $ns;
+        $this->apcuGenKey = self::APCU_GEN . '.' . $ns;
     }
 
     /**
@@ -184,8 +193,8 @@ final class ConfigStore
         }
         if (function_exists('apcu_fetch')) {
             $ok = false;
-            $cached = apcu_fetch(self::APCU_SNAP, $ok);
-            $cachedGen = apcu_fetch(self::APCU_GEN);
+            $cached = apcu_fetch($this->apcuSnapKey, $ok);
+            $cachedGen = apcu_fetch($this->apcuGenKey);
             if ($ok && is_array($cached) && (int) $cachedGen === $gen) {
                 $this->memoGen = $gen;
 
@@ -202,8 +211,8 @@ final class ConfigStore
             return $this->memo ?? [];
         }
         if (function_exists('apcu_store')) {
-            apcu_store(self::APCU_SNAP, $rows);
-            apcu_store(self::APCU_GEN, $gen);
+            apcu_store($this->apcuSnapKey, $rows);
+            apcu_store($this->apcuGenKey, $gen);
         }
         $this->memoGen = $gen;
 
@@ -245,6 +254,14 @@ final class ConfigStore
      */
     public function set(string $key, $rawValue, string $actor, string $sourceIp): void
     {
+        // Reject an empty override (FP-0242b review nit fable#3). A stored '' is returned verbatim by
+        // get()/snapshot() and then AppConfig::build()'s $str treats '' as "use the default" — so an
+        // empty override would SILENTLY MASK a set env var (the env value is lost, the coded default
+        // wins) with no way to tell from the resolved value that an override even exists. Clearing an
+        // override is a distinct, explicit operation: reset(). This guards every type, not just strings.
+        if (is_string($rawValue) ? trim($rawValue) === '' : ($rawValue === null || $rawValue === '')) {
+            throw new RuntimeException("config set failed: empty value for '{$key}' is not allowed (use reset to clear an override)");
+        }
         [$ok, $coerced] = $this->registry->validate($key, $rawValue);
         if (!$ok) {
             throw new RuntimeException($coerced);
@@ -349,6 +366,18 @@ final class ConfigStore
         return $count;
     }
 
+    /**
+     * The stored override rows only (key => raw stored value) — NOT the resolved baseline. The admin UI
+     * uses this to tell a knob's source apart: a key present here is a stored override, else it falls
+     * through to env/default. Fail-safe (returns [] on a read fault, like every read path here).
+     *
+     * @return array<string,string>
+     */
+    public function stored(): array
+    {
+        return $this->overrides();
+    }
+
     /** @return list<array<string,mixed>> the audit log, newest first (for the admin UI) */
     public function audits(int $limit = 200): array
     {
@@ -410,16 +439,29 @@ final class ConfigStore
     private function publish(int $gen): void
     {
         $tmp = $this->sentinelPath . '.tmp';
+        $wrote = false;
         if (@file_put_contents($tmp, (string) $gen) !== false) {
             @chmod($tmp, 0666);
-            @rename($tmp, $this->sentinelPath); // atomic replace so a reader never sees a half-write
-        } else {
-            @file_put_contents($this->sentinelPath, (string) $gen);
+            $wrote = @rename($tmp, $this->sentinelPath); // atomic replace so a reader never sees a half-write
+        }
+        if (!$wrote) {
+            $wrote = @file_put_contents($this->sentinelPath, (string) $gen) !== false;
+        }
+        // An unwritable sentinel means other processes (fpm workers on their next read, the CLI
+        // listeners) never learn the generation advanced and serve the STALE config indefinitely
+        // (FP-0242b review nit fable#4). The DB is still the source of truth, so this is best-effort,
+        // but it must be OBSERVABLE — an operator diagnosing "my config change didn't take" needs a
+        // log line, not silence.
+        if (!$wrote) {
+            $msg = 'ConfigStore: could not write generation sentinel ' . $this->sentinelPath
+                . ' — other processes may serve stale config until it is writable';
+            error_log($msg);
+            @trigger_error($msg, E_USER_WARNING);
         }
         @chmod($this->sentinelPath, 0666);
         if (function_exists('apcu_delete')) {
-            apcu_delete(self::APCU_SNAP);
-            apcu_delete(self::APCU_GEN);
+            apcu_delete($this->apcuSnapKey);
+            apcu_delete($this->apcuGenKey);
         }
         // Force this instance to re-read on its next resolve (it just changed the store).
         $this->memo = null;
