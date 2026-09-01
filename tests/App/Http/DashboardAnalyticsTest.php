@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Http;
 
+use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Storage\AnalyticsStore;
@@ -45,9 +46,29 @@ final class DashboardAnalyticsTest extends TestCase
         }
         $this->tmp = [];
         putenv('FUNNYPOT_ADMIN_PASSWORD');
-        unset($_GET, $_POST, $_SERVER['HTTP_X_ADMIN_TOKEN']);
+        unset($_GET, $_POST, $_SERVER['HTTP_X_ADMIN_TOKEN'], $_COOKIE[AdminAuth::COOKIE]);
         $_GET = [];
         $_POST = [];
+    }
+
+    /**
+     * A fresh AdminAuth on a temp db with one operator. The V9 gate is now session-based (FP-0242b), so
+     * the analytics endpoint is exercised through a real session cookie, not the retired X-Admin-Token.
+     */
+    private function auth(): AdminAuth
+    {
+        $auth = new AdminAuth($this->dbPath());
+        $auth->createOrResetUser('admin', self::PASS);
+
+        return $auth;
+    }
+
+    /** Log the operator in against $auth, populating $_COOKIE so a following admin() call is authed. */
+    private function authedSession(AdminAuth $auth): void
+    {
+        $res = $auth->login('admin', self::PASS, '203.0.113.1');
+        self::assertTrue($res['ok'] ?? false, 'fixture login must succeed');
+        $_POST['csrf'] = (string) $res['csrf']; // analytics is a read (CSRF not required), harmless to set
     }
 
     private function dbPath(): string
@@ -70,7 +91,7 @@ final class DashboardAnalyticsTest extends TestCase
         return new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
     }
 
-    private function controller(SqliteHitStore $store, ?AnalyticsStore $analytics = null): DashboardController
+    private function controller(SqliteHitStore $store, ?AnalyticsStore $analytics = null, ?AdminAuth $auth = null): DashboardController
     {
         return new DashboardController(
             $store,
@@ -80,6 +101,7 @@ final class DashboardAnalyticsTest extends TestCase
             null,
             null,
             $analytics ?? $store,
+            $auth,
         );
     }
 
@@ -117,39 +139,41 @@ final class DashboardAnalyticsTest extends TestCase
 
     // --- V9: the auth gate ---
 
-    public function test_v9_analytics_is_forbidden_without_a_token(): void
+    public function test_v9_analytics_is_forbidden_without_a_session(): void
     {
         $store = new SqliteHitStore($this->dbPath());
-        unset($_SERVER['HTTP_X_ADMIN_TOKEN']);
+        unset($_COOKIE[AdminAuth::COOKIE]);
 
-        $json = $this->call($this->controller($store), 'analytics');
+        // A controller with auth wired but NO session cookie present.
+        $json = $this->call($this->controller($store, null, $this->auth()), 'analytics');
 
         // Forbidden branch: an error payload and NOT a shred of analytics data.
-        self::assertArrayHasKey('error', (array) $json, 'no token must hit the forbidden branch');
+        self::assertArrayHasKey('error', (array) $json, 'no session must hit the forbidden branch');
         self::assertArrayNotHasKey('breakdown', (array) $json, 'no analytics payload may leak unauthenticated');
         self::assertArrayNotHasKey('topN', (array) $json);
         self::assertNotSame(true, $json['ok'] ?? null);
     }
 
-    public function test_v9_analytics_is_forbidden_with_a_wrong_token(): void
+    public function test_v9_analytics_is_forbidden_with_a_bogus_session_cookie(): void
     {
         $store = new SqliteHitStore($this->dbPath());
-        $_SERVER['HTTP_X_ADMIN_TOKEN'] = 'not-the-password';
+        $_COOKIE[AdminAuth::COOKIE] = str_repeat('a', 64); // well-formed but unknown session id
 
-        $json = $this->call($this->controller($store), 'analytics');
+        $json = $this->call($this->controller($store, null, $this->auth()), 'analytics');
 
-        self::assertSame('forbidden', $json['error'] ?? null, 'a wrong token must be forbidden');
-        self::assertArrayNotHasKey('breakdown', (array) $json, 'no analytics payload may leak on a wrong token');
+        self::assertSame('forbidden', $json['error'] ?? null, 'an unknown session must be forbidden');
+        self::assertArrayNotHasKey('breakdown', (array) $json, 'no analytics payload may leak on a bogus session');
     }
 
-    public function test_v9_analytics_returns_the_four_keys_with_the_right_token(): void
+    public function test_v9_analytics_returns_the_four_keys_with_a_valid_session(): void
     {
         $store = new SqliteHitStore($this->dbPath());
-        $_SERVER['HTTP_X_ADMIN_TOKEN'] = self::PASS;
+        $auth = $this->auth();
+        $this->authedSession($auth);
 
-        $json = $this->call($this->controller($store), 'analytics');
+        $json = $this->call($this->controller($store, null, $auth), 'analytics');
 
-        self::assertTrue($json['ok'] ?? false, 'the right token passes the gate');
+        self::assertTrue($json['ok'] ?? false, 'a valid session passes the gate');
         self::assertArrayNotHasKey('error', (array) $json);
         foreach (['breakdown', 'series', 'topN', 'ataglance'] as $k) {
             self::assertArrayHasKey($k, $json, "the analytics payload must expose '$k'");
@@ -172,10 +196,11 @@ final class DashboardAnalyticsTest extends TestCase
         }
         self::assertSame(8, $store->foldRollups(1000));
 
-        $_SERVER['HTTP_X_ADMIN_TOKEN'] = self::PASS;
+        $auth = $this->auth();
+        $this->authedSession($auth);
         // minute granularity + a window covering the seed so the fresh buckets are in range.
         $_GET = ['win' => '3600', 'gran' => 'm'];
-        $json = $this->call($this->controller($store), 'analytics');
+        $json = $this->call($this->controller($store, null, $auth), 'analytics');
 
         self::assertTrue($json['ok'] ?? false);
 
@@ -200,10 +225,11 @@ final class DashboardAnalyticsTest extends TestCase
     public function test_v10_a_store_fault_degrades_to_empty_widgets_and_200_never_500(): void
     {
         $store = new SqliteHitStore($this->dbPath());
-        $_SERVER['HTTP_X_ADMIN_TOKEN'] = self::PASS;
+        $auth = $this->auth();
+        $this->authedSession($auth);
 
         // A throwing analytics store simulates a query fault on every method.
-        $c = $this->controller($store, new ThrowingAnalyticsStore());
+        $c = $this->controller($store, new ThrowingAnalyticsStore(), $auth);
         $json = $this->call($c, 'analytics');
 
         // A well-formed 200 payload (ok:true) with empty widgets — the fault was swallowed, not a 500.
