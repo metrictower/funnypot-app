@@ -7,6 +7,7 @@ namespace Funnypot\App\Http;
 use Closure;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\TarpitBudget;
+use Funnypot\App\Tarpit\InertSecret;
 use Funnypot\App\Tarpit\LlmOnlyLink;
 use Funnypot\App\Tarpit\SeededStream;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -344,14 +345,24 @@ final class LabyrinthController
 
     // --- deterministic fixed-width primitives (O(1) memory via SeededStream) ------------------------
 
-    /** A fixed-width base64url-ish token of exactly $len chars, deterministic in ($label,$i). */
+    /**
+     * A fixed-width base64url-ish token of exactly $len chars, deterministic in ($label,$i). SeededStream
+     * yields base64 (A-Za-z0-9+/=) with no CR/LF; the URL-hostile bytes are mapped to [-_0] so the result
+     * is safe in a URL path, an HTML text node and a comment.
+     *
+     * FP-0245c review (fold-in): the `+/=`→`-_0` remap can introduce a `-`/`_` boundary around a 6-digit
+     * run, so a token could rarely (~1/2000) read as a bare CRS-rule id and self-tell. Route it through
+     * the SAME systemic clean-gate the polluter tokens use — reject-sample a fixed-length variant until
+     * clean. Deterministic per (label,i), so revisits stay byte-identical and the page byte-size bound is
+     * unchanged (every variant is exactly $len chars).
+     */
     private function token(string $label, int $i, int $len): string
     {
-        // SeededStream yields base64 (A-Za-z0-9+/=) with no CR/LF; map the URL-hostile bytes to [-_0] so
-        // the result is a fixed-width identifier safe in a URL path, an HTML text node and a comment.
-        $raw = $this->stream->bytesAt($this->personaSeed, $label . '|t' . $i, 0, $len);
+        return InertSecret::derive($label . '|t' . $i, function (string $k) use ($len): string {
+            $raw = $this->stream->bytesAt($this->personaSeed, $k, 0, $len);
 
-        return strtr($raw, '+/=', '-_0');
+            return strtr($raw, '+/=', '-_0');
+        });
     }
 
     /** A token safe to place in a URL path segment (same alphabet as token(), already URL-safe). */

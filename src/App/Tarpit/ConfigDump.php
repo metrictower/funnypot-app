@@ -15,13 +15,15 @@ use Throwable;
  * it early re-bills the whole blob on every later reasoning step (the fable R2 ★quadratic insight).
  *
  * Asymmetry + safety, exactly as the ticket demands:
- *   - STREAMED and O(block) memory via {@see SeededStream}: the body is fabricated section-by-section
- *     and flushed, never materialised, so a worker's memory is O(one section) regardless of the cap.
+ *   - STREAMED and O(section) memory: the body is fabricated section-by-section by {@see chunks()} and
+ *     flushed, never materialised, so a worker's memory is O(one section) regardless of the cap.
  *   - HARD BYTE-CAPPED (BYTES_PER_RESP_MB): a "bloated" blob within a fixed byte budget — the pollution
  *     is in the SHAPE/tokenisation cost, not an unbounded body. connection_aborted() halts fabrication.
- *   - INERT: every credential-shaped value is a {@see FakeSecrets} token (AWS/Stripe/reset/bcrypt/JWT
- *     shapes that authenticate to NOTHING, per-(seed,key) unique, fingerprint-safe); the FLAG{...}
- *     honeytokens are dead strings that unlock nothing; hostnames are persona-derived synthetic
+ *   - INERT + FINGERPRINT-CLEAN: every credential-shaped value is an {@see InertSecret} token (AWS/
+ *     Stripe/reset shapes that authenticate to NOTHING) and the FLAG{...} honeytokens are dead strings;
+ *     EVERY generated structural identifier (region/service slugs) is routed through the SAME
+ *     {@see InertSecret::derive()} clean-gate, so no slug's digits can coincidentally spell a detector
+ *     signature (e.g. a bare 6-digit CRS-rule id). Hostnames are persona-derived synthetic
  *     (.internal / example ranges), never a real host, ARN or third-party endpoint.
  *
  * Coherent with the rest of the deploy: values are drawn from the SAME persona seed the panel/labyrinth
@@ -29,14 +31,8 @@ use Throwable;
  */
 final class ConfigDump
 {
-    /** Bytes of raw seeded filler drawn per section — bounds one section's working memory. */
-    private const SECTION_DRAW = 256;
-
-    private SeededStream $stream;
-
-    public function __construct(private int $personaSeed, private ?SeededStream $seeded = null)
+    public function __construct(private int $personaSeed)
     {
-        $this->stream = $seeded ?? new SeededStream();
     }
 
     /**
@@ -131,10 +127,8 @@ final class ConfigDump
      */
     private function section(int $k): string
     {
-        // Raw seeded filler for this section's opaque identifiers (O(SECTION_DRAW) memory).
-        $raw = $this->stream->bytesAt($this->personaSeed, 'settings|section', $k * self::SECTION_DRAW, self::SECTION_DRAW);
-        $slug = $this->slug($raw, 0, 6);
-        $region = $this->slug($raw, 6, 4);
+        $slug = $this->slug('settings|slug|' . $k, 6);
+        $region = $this->slug('settings|region-id|' . $k, 4);
         $domain = $this->persona('company.domain', 'internal.example');
 
         $apiKey = InertSecret::apiKey($this->personaSeed, 'settings|region|' . $k . '|aws');
@@ -163,16 +157,24 @@ final class ConfigDump
             . "    },\n";
     }
 
-    /** A fixed-width lowercase-alnum slug from raw seeded bytes (URL/host-safe, inert). */
-    private function slug(string $raw, int $off, int $len): string
+    /**
+     * A fixed-width lowercase-base36 slug (URL/host-safe, inert), deterministic in $key and routed
+     * through the systemic clean-gate — so an all-digit slug that happens to read as a bare CRS rule id
+     * (e.g. `943936`) is rejected and a clean variant re-derived. Fixed length across variants.
+     */
+    private function slug(string $key, int $len): string
     {
         $alpha = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        $out = '';
-        for ($i = 0; $i < $len; $i++) {
-            $out .= $alpha[ord($raw[($off + $i) % strlen($raw)]) % strlen($alpha)];
-        }
 
-        return $out;
+        return InertSecret::derive($key, function (string $k) use ($alpha, $len): string {
+            $h = hash('sha256', $this->personaSeed . '|slug|' . $k);
+            $out = '';
+            for ($i = 0; $i < $len; $i++) {
+                $out .= $alpha[hexdec($h[$i * 2] . $h[$i * 2 + 1]) % 36];
+            }
+
+            return $out;
+        });
     }
 
     /** A dead FLAG{...} honeytoken — a deterministic 32-hex string that unlocks nothing anywhere. */

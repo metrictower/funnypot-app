@@ -61,7 +61,7 @@ final class PolluterControllerTest extends TestCase
      * @param array<string,int> $over budget overrides
      * @return array{0:PolluterController,1:TarpitBudget,2:SqliteHitStore}
      */
-    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $capMb = 8): array
+    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $capMb = 8, ?\Closure $bufferedBuilder = null): array
     {
         $factory = function (): StreamEmitter {
             // A no-op sink: begin() records status/headers without calling real header(); chunk()
@@ -82,7 +82,7 @@ final class PolluterControllerTest extends TestCase
         );
         $store = new SqliteHitStore($this->path('hits'));
         $geo = new Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
-        $ctrl = new PolluterController($store, $geo, $budget, self::SEED, $capMb, null, $factory);
+        $ctrl = new PolluterController($store, $geo, $budget, self::SEED, $capMb, null, $factory, $bufferedBuilder);
 
         return [$ctrl, $budget, $store];
     }
@@ -258,6 +258,24 @@ final class PolluterControllerTest extends TestCase
 
         $this->get($c, PolluterController::CONFIG_PATH);
         self::assertSame(404, $this->status(), 'a budget-store fault ⇒ bounded 404 (fail-closed), never a 500');
+        self::assertStringContainsString('404 Not Found', $this->body());
+    }
+
+    public function test_buffered_builder_fault_sheds_to_a_bounded_404_not_an_empty_200(): void
+    {
+        // A buffered body (hostile/shadow) is built BEFORE the emitter begins; if the builder throws, no
+        // headers are sent, so the fault must shed to the bounded 404 — never an empty default 200 or 500.
+        $throwing = static function (string $kind, int $cap): string {
+            throw new \RuntimeException('builder boom');
+        };
+        [$c] = $this->make(bufferedBuilder: $throwing);
+
+        $this->get($c, PolluterController::HOSTILE_PATH, [], '192.0.2.88');
+        self::assertSame(404, $this->status(), 'a builder fault before begin() ⇒ bounded 404, not an empty 200');
+        self::assertStringContainsString('404 Not Found', $this->body());
+
+        $this->get($c, PolluterController::SHADOW_PATH, [], '192.0.2.89');
+        self::assertSame(404, $this->status(), 'same for the shadow buffered path');
         self::assertStringContainsString('404 Not Found', $this->body());
     }
 

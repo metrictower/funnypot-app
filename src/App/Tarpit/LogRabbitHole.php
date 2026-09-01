@@ -205,9 +205,16 @@ final class LogRabbitHole
      * A fixed-width lowercase-hex token, deterministic in ($label). One sha256 per token (cheap) — the
      * log stays offset-addressable because {@see lineAt()} is itself deterministic and fixed-width, so
      * bytesAt() needs no 4 KiB block model to seek; keeping a full log serve well under the slot TTL.
+     *
+     * Routed through the systemic clean-gate so a raw sha256 prefix that happens to contain a retired
+     * hex bait literal (or a bare CRS-id run) is rejected and a clean variant re-derived — the same gate
+     * the credential tokens use, now applied to the STRUCTURAL filler too (FP-0245c review).
      */
     private function hexToken(string $label, int $len): string
     {
-        return substr(hash('sha256', $this->personaSeed . '|' . $label), 0, $len);
+        return InertSecret::derive(
+            $label,
+            fn (string $k): string => substr(hash('sha256', $this->personaSeed . '|' . $k), 0, $len)
+        );
     }
 }

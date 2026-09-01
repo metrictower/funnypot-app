@@ -58,7 +58,7 @@ final class LabyrinthNavTest extends TestCase
      * @param array<string,int> $over budget overrides
      * @return array{0:LabyrinthController,1:array<string,mixed>&object,2:SqliteHitStore}
      */
-    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null): array
+    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $personaSeed = 4242): array
     {
         $cap = new class {
             public int $status = 0;
@@ -84,7 +84,7 @@ final class LabyrinthNavTest extends TestCase
         );
         $store = new SqliteHitStore($this->path('hits'));
         $geo = new Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
-        $lab = new LabyrinthController($store, $geo, $budget, 4242, 8, null, $emit);
+        $lab = new LabyrinthController($store, $geo, $budget, $personaSeed, 8, null, $emit);
 
         return [$lab, $cap, $store];
     }
@@ -235,6 +235,52 @@ final class LabyrinthNavTest extends TestCase
                 preg_match('~(?:href|src)\s*=\s*"[^"]*audit-archive~i', $cap->body),
                 "no href/src may resolve to labyrinth surface on {$p}"
             );
+        }
+    }
+
+    // --- no fingerprint self-tell in the rendered maze (FP-0245c review fold-in) -------------------
+
+    /**
+     * The `+/=`→`-_0` token remap can rarely (~1/2000 pages) place a `-`/`_` boundary around a 6-digit
+     * run, so a rendered token could read as a bare CRS-rule id — a self-tell now the labyrinth is live.
+     * The token path is routed through the SAME systemic clean-gate as the polluters; assert that across
+     * a sweep of seeds AND deep pages/shards/records NO rendered page trips the app fingerprint denylist.
+     * (Fable found seed 5 / page 29 before the fix; this sweep covers it and a broad range.)
+     */
+    public function test_no_rendered_page_trips_the_fingerprint_denylist_across_seeds_and_depth(): void
+    {
+        $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
+        $literals = array_values((array) ($d['literals'] ?? []));
+        $patterns = array_values((array) ($d['patterns'] ?? []));
+        $scan = static function (string $t) use ($literals, $patterns): ?string {
+            foreach ($literals as $n) {
+                if ($n !== '' && stripos($t, (string) $n) !== false) {
+                    return 'lit:' . $n;
+                }
+            }
+            foreach ($patterns as $p) {
+                if (@preg_match('~' . $p . '~i', $t) === 1) {
+                    return 'pat:' . $p;
+                }
+            }
+
+            return null;
+        };
+
+        $seeds = [5, 4242, 99991, 1, 2, 3, 7, 13, 42];
+        $ipN = 0;
+        foreach ($seeds as $seed) {
+            [$lab, $cap] = $this->make(personaSeed: $seed);
+            // A spread of page indices (incl. the fable offender 29), a shard stream, and a record leaf.
+            for ($page = 1; $page <= 40; $page++) {
+                $this->get($lab, '/admin/audit-archive/page-' . str_pad((string) $page, 6, '0', STR_PAD_LEFT), '203.0.113.' . ($ipN++ % 250 + 1));
+                $hit = $scan($cap->body);
+                self::assertNull($hit, "fingerprint self-tell on seed {$seed} page {$page}: {$hit}");
+            }
+            $this->get($lab, '/admin/audit-archive/shard-ABCD1234EFGH5678/page-000029', '198.51.100.1');
+            self::assertNull($scan($cap->body), "fingerprint self-tell on seed {$seed} shard page");
+            $this->get($lab, '/admin/audit-archive/record/abcDEF012ghiJKL345mnoPQR', '198.51.100.2');
+            self::assertNull($scan($cap->body), "fingerprint self-tell on seed {$seed} record leaf");
         }
     }
 

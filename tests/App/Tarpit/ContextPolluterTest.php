@@ -210,18 +210,57 @@ final class ContextPolluterTest extends TestCase
 
     // --- inert / legal sweep across every polluter -------------------------------------------------
 
-    public function test_every_polluter_body_passes_the_fingerprint_gate_and_names_no_real_thirdparty(): void
+    /**
+     * The strengthened fingerprint sweep (FP-0245c review). The original scanned ONE seed at a REDUCED
+     * cap and so MISSED that the STRUCTURAL filler identifiers (config slugs, log hex filler) were not
+     * gated — an all-digit slug like `943936` reads as a bare CRS-rule id, and a raw sha256 filler prefix
+     * can carry a retired hex bait literal. This sweeps MANY seeds — including the reviewer-found
+     * offenders — at the FULL 8 MiB cap for the config, and the FULL log body (juicy offsets included).
+     * It FAILS without the systemic clean-gate on slug()/hexToken() and PASSES with it.
+     *
+     * @dataProvider fingerprintSeeds
+     */
+    public function test_every_polluter_body_passes_the_fingerprint_gate_at_full_cap(int $seed): void
     {
-        $bodies = [
-            'config' => $this->configBody(512 * 1024),
-            'log' => $this->logBody(512 * 1024),
-            'hostile' => (new HostileFormat(self::SEED))->json(self::CAP),
-            'shadow' => (new ShadowBait(self::SEED))->render(),
-        ];
-        foreach ($bodies as $where => $body) {
-            self::assertFingerprintClean($body, $where);
-            self::assertNoRealThirdParty($body, $where);
+        // Config at the FULL BYTES_PER_RESP_MB cap (8 MiB) — where the ungated slugs surfaced (~28-38%).
+        $config = $this->configBody(self::CAP, $seed);
+        self::assertSame(self::CAP, strlen($config), 'config was scanned at the full response cap');
+        self::assertFingerprintClean($config, "config (seed {$seed}, 8 MiB)");
+        self::assertNoRealThirdParty($config, "config (seed {$seed})");
+
+        // The FULL log body, juicy credential offsets included (the ungated hex filler surfaced ~6%).
+        $log = $this->logBody(PHP_INT_MAX, $seed);
+        self::assertSame((new LogRabbitHole($seed))->size(), strlen($log), 'log was scanned in full');
+        self::assertFingerprintClean($log, "log (seed {$seed}, full body)");
+        self::assertNoRealThirdParty($log, "log (seed {$seed})");
+
+        $hostile = (new HostileFormat($seed))->json(self::CAP);
+        self::assertFingerprintClean($hostile, "hostile (seed {$seed})");
+        self::assertNoRealThirdParty($hostile, "hostile (seed {$seed})");
+
+        $shadow = (new ShadowBait($seed))->render();
+        self::assertFingerprintClean($shadow, "shadow (seed {$seed})");
+        self::assertNoRealThirdParty($shadow, "shadow (seed {$seed})");
+    }
+
+    /**
+     * Seeds to sweep: the reviewer-found offenders (99991, 957659, 992929, 935109 + 4242) plus a broad
+     * contiguous range, so a regression in ANY generated identifier's gating is caught, not just one seed.
+     *
+     * @return array<string,array{0:int}>
+     */
+    public static function fingerprintSeeds(): array
+    {
+        $seeds = [99991, 957659, 992929, 935109, 4242];
+        for ($s = 1; $s <= 20; $s++) {
+            $seeds[] = $s;
         }
+        $out = [];
+        foreach (array_values(array_unique($seeds)) as $s) {
+            $out['seed ' . $s] = [$s];
+        }
+
+        return $out;
     }
 
     // --- flat / bounded memory (SHOULD-FIX 1: non-vacuous, memory_reset_peak_usage) -----------------

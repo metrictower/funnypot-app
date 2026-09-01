@@ -32,41 +32,45 @@ final class InertSecret
 
     public static function apiKey(int $seed, string $key): string
     {
-        return self::clean(static fn (string $k): string => FakeSecrets::apiKey($seed, $k), $key);
+        return self::derive($key, static fn (string $k): string => FakeSecrets::apiKey($seed, $k));
     }
 
     public static function stripeKey(int $seed, string $key): string
     {
-        return self::clean(static fn (string $k): string => FakeSecrets::stripeKey($seed, $k), $key);
+        return self::derive($key, static fn (string $k): string => FakeSecrets::stripeKey($seed, $k));
     }
 
     public static function resetToken(int $seed, string $key): string
     {
-        return self::clean(static fn (string $k): string => FakeSecrets::resetToken($seed, $k), $key);
+        return self::derive($key, static fn (string $k): string => FakeSecrets::resetToken($seed, $k));
     }
 
     public static function bcryptHash(int $seed, string $key): string
     {
-        return self::clean(static fn (string $k): string => FakeSecrets::bcryptHash($seed, $k), $key);
+        return self::derive($key, static fn (string $k): string => FakeSecrets::bcryptHash($seed, $k));
     }
 
     /** A dead FLAG{<32 hex>} honeytoken, also guaranteed clean against the app denylist. */
     public static function flag(int $seed, string $key): string
     {
-        return self::clean(
-            static fn (string $k): string => 'FLAG{' . substr(hash('sha256', $seed . '|flag|' . $k), 0, 32) . '}',
-            $key
+        return self::derive(
+            $key,
+            static fn (string $k): string => 'FLAG{' . substr(hash('sha256', $seed . '|flag|' . $k), 0, 32) . '}'
         );
     }
 
     /**
-     * Re-derive under key variants until the value is fingerprint-clean (checked inside delimiters so a
-     * boundary run is caught). Bounded loop: a fresh sha256-derived value trips the denylist with
-     * vanishing probability, so this almost always returns on the first try; the cap is a safety net.
+     * The systemic clean-gate. Re-derive a value under key variants (`key`, `key|v1`, `key|v2`, …) until
+     * it is fingerprint-clean, so ANY generated string that lands in a served body — a secret, a slug, a
+     * filler hex token, a labyrinth id — can be forced clean the same way. $gen must be deterministic in
+     * the key it is handed (so the chosen variant is stable). The value is checked inside delimiters, so a
+     * digit run at either boundary is caught (the exact false-positive an `AKIA…`/base36/hex tail can hit
+     * against the app's broadened bare-CRS pattern). Bounded loop: a fresh sha256-derived value trips the
+     * denylist with vanishing probability, so this almost always returns on the first try.
      *
      * @param callable(string):string $gen
      */
-    private static function clean(callable $gen, string $key): string
+    public static function derive(string $key, callable $gen): string
     {
         for ($i = 0; $i < 64; $i++) {
             $k = $i === 0 ? $key : $key . '|v' . $i;
@@ -79,7 +83,13 @@ final class InertSecret
         return $gen($key); // unreachable in practice; return the base value rather than loop forever
     }
 
-    private static function isClean(string $text): bool
+    /**
+     * True if $text carries NO app-denylist signature (the same gate {@see derive()} enforces). Callers
+     * that already have a fixed, deterministic value (e.g. a remapped token) use this to reject-and-retry
+     * in their own derivation loop. Wrap a bare identifier in a boundary char (e.g. a space or quote)
+     * before calling if the served context places one there.
+     */
+    public static function isClean(string $text): bool
     {
         $d = self::denylist();
         foreach ($d['literals'] as $needle) {

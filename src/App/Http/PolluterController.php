@@ -52,14 +52,17 @@ final class PolluterController
     public const SHADOW_PATH = '/admin/export/shadow';
 
     private Closure $emitterFactory;
+    private Closure $bufferedBuilder;
     private ConfigDump $config;
     private LogRabbitHole $log;
     private HostileFormat $hostile;
     private ShadowBait $shadow;
 
     /**
-     * @param int                          $bytesPerRespMb hard per-response byte cap
-     * @param Closure():StreamEmitter|null  $emitterFactory injectable for tests (defaults to delay-0)
+     * @param int                          $bytesPerRespMb  hard per-response byte cap
+     * @param Closure():StreamEmitter|null  $emitterFactory  injectable for tests (defaults to delay-0)
+     * @param Closure(string,int):string|null $bufferedBuilder builds a buffered body ('hostile'|'shadow',
+     *        cap) BEFORE begin() — a test seam to exercise the "builder throws ⇒ bounded 404" fault path
      */
     public function __construct(
         private HitStore $hits,
@@ -68,13 +71,17 @@ final class PolluterController
         private int $personaSeed,
         private int $bytesPerRespMb = 8,
         private ?Blocklist $blocklist = null,
-        ?Closure $emitterFactory = null
+        ?Closure $emitterFactory = null,
+        ?Closure $bufferedBuilder = null
     ) {
         $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
         $this->config = new ConfigDump($personaSeed);
         $this->log = new LogRabbitHole($personaSeed);
         $this->hostile = new HostileFormat($personaSeed);
         $this->shadow = new ShadowBait($personaSeed);
+        $this->bufferedBuilder = $bufferedBuilder ?? fn (string $kind, int $cap): string => $kind === 'shadow'
+            ? $this->shadow->render($cap)
+            : $this->hostile->json($cap);
     }
 
     /** GET seam matcher: exactly the four polluter paths (query/fragment stripped). */
@@ -87,9 +94,10 @@ final class PolluterController
 
     /**
      * Serve one polluter. guard() FIRST (the only per-IP backstop here); null ⇒ bounded 404. The slot is
-     * released in a `finally` and the ledger charged. Headers/status are resolved before the first byte
-     * on the buffered paths; on the streamed paths a mid-stream fault just ends the body early (headers
-     * already sent), never a 500 — mirroring DownloadRouter.
+     * released in a `finally` and the ledger charged. On the buffered paths the body is built BEFORE the
+     * emitter starts, so a fault there (nothing sent yet) sheds to a bounded 404 — never an empty 200 or a
+     * 500. On the streamed paths a mid-stream fault just ends the body early (headers already sent).
+     * $started tracks whether the emitter began, so the catch shows a 404 only when it is still owed.
      */
     public function handle(RequestContext $ctx, string $clientIp): void
     {
@@ -106,43 +114,40 @@ final class PolluterController
         $startNs = hrtime(true);
         $bytes = 0;
         $technique = 'config';
+        $started = false;
         try {
             switch ($path) {
                 case self::LOG_PATH:
                     $technique = 'log';
-                    $bytes = $this->serveLog($emitter, $ctx, $cap);
+                    $bytes = $this->serveLog($emitter, $ctx, $cap, $started);
                     break;
                 case self::HOSTILE_PATH:
                     $technique = 'hostile';
-                    $bytes = $this->serveBuffered(
-                        $emitter,
-                        'application/json; charset=utf-8',
-                        $this->hostile->json($cap)
-                    );
+                    // Build BEFORE begin(): a builder fault here leaves $started false ⇒ bounded 404.
+                    $body = ($this->bufferedBuilder)('hostile', $cap);
+                    $bytes = $this->serveBuffered($emitter, 'application/json; charset=utf-8', $body, $started);
                     break;
                 case self::SHADOW_PATH:
                     $technique = 'shadow';
-                    $bytes = $this->serveBuffered(
-                        $emitter,
-                        'text/plain; charset=utf-8',
-                        $this->shadow->render($cap)
-                    );
+                    $body = ($this->bufferedBuilder)('shadow', $cap);
+                    $bytes = $this->serveBuffered($emitter, 'text/plain; charset=utf-8', $body, $started);
                     break;
                 case self::CONFIG_PATH:
                 default:
-                    $technique = 'config';
                     $emitter->begin(200, [
                         'Content-Type' => 'text/plain; charset=utf-8',
                         'Cache-Control' => 'no-store',
                     ]);
+                    $started = true;
                     $bytes = $this->config->stream($emitter, $cap);
                     break;
             }
         } catch (Throwable $e) {
-            // On the buffered paths the body is built before begin(), so a fault there never sent
-            // headers — fall through to a bounded 404. On the streamed paths headers are already out,
-            // so a mid-stream fault simply ends the body (never a 500).
-            // (Best-effort: if nothing was emitted yet we still owe a response.)
+            // Nothing emitted yet ⇒ we still owe a response: shed to a bounded 404 (never an empty 200 or
+            // a 500). Once the emitter has begun (streamed body), a mid-stream fault just ends it early.
+            if (!$started) {
+                $this->bounded404($emitter);
+            }
         } finally {
             $wallMs = (int) ((hrtime(true) - $startNs) / 1_000_000);
             $this->budget->charge($clientIp, $bytes, $wallMs, 1);
@@ -156,7 +161,7 @@ final class PolluterController
      * {@see LogRabbitHole::bytesAt()}; otherwise stream the whole (byte-capped) body (200). Returns
      * bytes emitted.
      */
-    private function serveLog(StreamEmitter $emitter, RequestContext $ctx, int $cap): int
+    private function serveLog(StreamEmitter $emitter, RequestContext $ctx, int $cap, bool &$started): int
     {
         $size = $this->log->size();
         $range = $this->parseRange($ctx->headers['Range'] ?? '', $size);
@@ -170,6 +175,7 @@ final class PolluterController
                 'Accept-Ranges' => 'bytes',
                 'Cache-Control' => 'no-store',
             ]);
+            $started = true;
             $emitter->chunk($body);
 
             return strlen($body);
@@ -180,14 +186,16 @@ final class PolluterController
             'Accept-Ranges' => 'bytes',
             'Cache-Control' => 'no-store',
         ]);
+        $started = true;
 
         return $this->log->stream($emitter, $cap);
     }
 
     /** Emit a fully-built (buffered) body of bounded size at 200. Returns bytes emitted. */
-    private function serveBuffered(StreamEmitter $emitter, string $contentType, string $body): int
+    private function serveBuffered(StreamEmitter $emitter, string $contentType, string $body, bool &$started): int
     {
         $emitter->begin(200, ['Content-Type' => $contentType, 'Cache-Control' => 'no-store']);
+        $started = true;
         if ($body !== '') {
             foreach (str_split($body, 8192) as $chunk) {
                 $emitter->chunk($chunk);

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Tarpit;
 
-
 /**
  * C4 — the bounded `/etc/shadow` bcrypt bait (FP-0245c). A fixed, small `/etc/shadow`-shaped file whose
  * password fields are {@see FakeSecrets}::bcryptHash tokens: correct `$2y$10$…` shape, seeded and

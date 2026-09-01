@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Tarpit;
 
-
 /**
  * A3 — one token-hostile artifact (FP-0245c context-polluter). A deeply-nested, punctuation-dense JSON
  * blob: small in BYTES (well under the response cap, cheap for us to emit and to ship) but expensive in
@@ -95,7 +94,12 @@ final class HostileFormat
             case 4:
                 return '[' . ($path % 13) . ',' . (($path * 7) % 29) . ',' . (($path * 3) % 17) . ']';
             case 5:
-                return '{"t":"' . substr(hash('sha256', $this->personaSeed . '|hostile|t|' . $path), 0, 8) . '"}';
+                $t = InertSecret::derive(
+                    'hostile|t|' . $path,
+                    fn (string $k): string => substr(hash('sha256', $this->personaSeed . '|' . $k), 0, 8)
+                );
+
+                return '{"t":"' . $t . '"}';
             default:
                 return '{"e":null,"z":0}';
         }
