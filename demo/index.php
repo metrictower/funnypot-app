@@ -34,6 +34,7 @@ use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
+use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Llm\CircuitBreaker;
 use Funnypot\App\Llm\LlmClient;
@@ -261,6 +262,7 @@ $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets',
 // through to the honeypot) and no entry hint is planted. Its own TarpitBudget over tarpit.sqlite is the
 // ONLY per-IP guard on the gate-exempt route; the caps are the anti-self-DoS backstop, not robots.txt.
 $labyrinth = null;
+$polluter = null;
 if ($config->tarpitEnabled) {
     $tarpitBudget = new TarpitBudget(
         $config->tarpitDbPath,
@@ -274,6 +276,9 @@ if ($config->tarpitEnabled) {
         15, // SHORT slot-reap TTL, aligned to nginx fastcgi_read_timeout 15s (NOT the 120s/hr wall budget)
     );
     $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist);
+    // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
+    // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
+    $polluter = new PolluterController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist);
 }
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
@@ -319,4 +324,4 @@ if ($config->dockerApiEnabled) {
     $docker = new DockerApiRouter(new DockerApiResponder($store, $config->personaSeed, $abuse));
 }
 
-(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter))->dispatch($context, $clientIp, $tokenVerdict);

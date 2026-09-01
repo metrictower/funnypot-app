@@ -266,6 +266,18 @@ final class LabyrinthController
                 'A correlated retention shard for this window is at the path (hex):',
                 $shardPath
             )
+            // FP-0245c front-load: point the agent at the big context-polluters EARLY (the fable
+            // ★quadratic re-billing insight — a bloated config/log ingested now is re-billed on every
+            // later step). Fixed constant paths, so this adds the SAME bytes to every page and preserves
+            // the O(page) byte-identical bound. LLM-only (base64), so no plain href to a tarpit route.
+            . LlmOnlyLink::base64Step(
+                'The full platform configuration export referenced above is at the path (base64):',
+                PolluterController::CONFIG_PATH
+            )
+            . LlmOnlyLink::base64Step(
+                'The correlated application log for this window is at the path (base64):',
+                PolluterController::LOG_PATH
+            )
             . LlmOnlyLink::commentSplit($base . '/page-' . $nextTok);
 
         $body = '<h1>' . $this->esc($company) . ' &middot; Audit Archive</h1>'

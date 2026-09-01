@@ -28,6 +28,7 @@ final class Router
         private ?DownloadRouter $download = null,
         private ?DockerApiRouter $docker = null,
         private ?LabyrinthController $labyrinth = null,
+        private ?PolluterController $polluter = null,
     ) {
     }
 
@@ -85,6 +86,14 @@ final class Router
         // paths fall through to the honeypot like any probe. Every hit is guarded by TarpitBudget first.
         if ($method === 'GET' && $this->labyrinth !== null && $this->labyrinth->matches($path)) {
             $this->labyrinth->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Front-loaded context-polluters (FP-0245c). GET-only, gate-exempt, mounted only when the tarpit
+        // master switch is on; otherwise these paths fall through to the honeypot like any probe. Every
+        // hit is guarded by TarpitBudget first (the only per-IP guard on this route).
+        if ($method === 'GET' && $this->polluter !== null && $this->polluter->matches($path)) {
+            $this->polluter->handle($ctx, $clientIp);
 
             return;
         }
@@ -197,6 +206,14 @@ final class Router
         // paths fall through to the honeypot like any probe. Every hit is guarded by TarpitBudget first.
         if ($method === 'GET' && $this->labyrinth !== null && $this->labyrinth->matches($path)) {
             $this->labyrinth->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Front-loaded context-polluters (FP-0245c). GET-only, gate-exempt, mounted only when the tarpit
+        // master switch is on; otherwise these paths fall through to the honeypot like any probe. Every
+        // hit is guarded by TarpitBudget first (the only per-IP guard on this route).
+        if ($method === 'GET' && $this->polluter !== null && $this->polluter->matches($path)) {
+            $this->polluter->handle($ctx, $clientIp);
 
             return;
         }
