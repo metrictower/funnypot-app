@@ -249,6 +249,54 @@ final class PolluterControllerTest extends TestCase
         $occupier->release($held['slot']);
     }
 
+    /**
+     * FP-0245d guard-before-latency ordering (review N1). The server latency is applied ONLY after a
+     * non-null guard() — so a SHED polluter hit (no free slot) is served immediately, never delayed. A
+     * recording sleeper proves it: it fires exactly once (on the served, slot-holding hit) and NOT on the
+     * shed hit. This FAILS if applyLatency() is ever moved above the guard() at the top of handle() — the
+     * shed hit would then record a second sleep, reintroducing the self-DoS on the polluter surface. The
+     * storm test hardcodes the correct order in its child script; this pins it for PolluterController too.
+     */
+    public function test_latency_is_applied_only_after_a_won_slot_never_on_a_shed_hit(): void
+    {
+        $slept = [];
+        $recording = function (int $ms) use (&$slept): void {
+            $slept[] = $ms;
+        };
+        $bpath = $this->path('lat');
+        // One global slot + a 500 ms latency wired via a recording (no-op) sleeper on the SAME db the
+        // controller uses, so an occupier can force the second hit to shed with no free slot.
+        $budget = new TarpitBudget($bpath, true, 1, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 500, $recording);
+        $factory = function (): StreamEmitter {
+            return $this->last = new StreamEmitter(static function (string $b): void {
+            }, 0);
+        };
+        $store = new SqliteHitStore($this->path('hits'));
+        $geo = new Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
+        $ctrl = new PolluterController($store, $geo, $budget, self::SEED, 8, null, $factory);
+
+        // A served hit wins the (only) slot and DOES incur the latency — proves the sleeper is wired.
+        $this->get($ctrl, PolluterController::CONFIG_PATH, [], '192.0.2.70');
+        self::assertSame(200, $this->status(), 'a served polluter hit wins a slot');
+        self::assertSame([500], $slept, 'server latency is applied on the served (slot-holding) hit');
+
+        // Now an occupier holds the only slot; the next polluter hit finds none free and is SHED.
+        $occupier = new TarpitBudget($bpath, true, 1, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15);
+        $held = $occupier->acquire('10.0.0.1');
+        self::assertSame(TarpitBudget::WON, $held['status']);
+
+        $this->get($ctrl, PolluterController::LOG_PATH, [], '192.0.2.71');
+        self::assertSame(404, $this->status(), 'no free slot ⇒ bounded 404');
+        self::assertSame(
+            [500],
+            $slept,
+            'a shed polluter hit is served immediately: applyLatency() runs ONLY after a won guard(); '
+            . 'moving it above guard() would record a 2nd sleep here'
+        );
+
+        $occupier->release($held['slot']);
+    }
+
     public function test_fail_safe_on_a_storage_fault_never_500s(): void
     {
         $blocker = sys_get_temp_dir() . '/fp_pol_block_' . bin2hex(random_bytes(6));

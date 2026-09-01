@@ -114,8 +114,10 @@ final class TarpitBudget
      * It is a single sleep BEFORE the first byte (never a per-byte drip), hard-clamped ≤
      * LATENCY_HARD_CAP_MS regardless of config (defence behind AppConfig's clamp), and fail-safe: a
      * sleeper fault adds NO latency and never propagates (a tarpit must never fail slow, never 500).
-     * Returns the ms actually slept so the caller charges it to the per-IP/global wall ledger — which is
-     * how an IP's repeated latency accrues until it trips overBudget() and then gets served immediately.
+     * The returned ms actually slept is INFORMATIONAL (telemetry/tests): the callers do NOT use it to
+     * charge the ledger — they measure one hrtime wall window that SPANS this sleep and charge that, so
+     * the slept time is already inside the per-IP/global wall charge. That is how an IP's repeated
+     * latency accrues until it trips overBudget() and is then served immediately.
      */
     public function applyLatency(): int
     {
