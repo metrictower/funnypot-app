@@ -22,6 +22,7 @@ use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Docker\DockerApiResponder;
 use Funnypot\App\Docker\DockerApiRouter;
 use Funnypot\App\Http\ConsoleRouter;
@@ -87,7 +88,12 @@ register_shutdown_function(static function () use ($funnypotFault): void {
     }
 });
 
-$config = AppConfig::fromEnv(__DIR__);
+// Store-backed config (FP-0242a): resolved value = stored override > env seed > coded default. The
+// config db sits beside the hit store on the persisted volume; its path is derived from env WITHOUT
+// building an AppConfig first (chicken-and-egg), exactly as fromEnv derives its storage dir. Reads
+// are fail-safe — an unreadable store degrades to the env/default baseline, never breaking a request.
+$configStore = new ConfigStore(ConfigStore::defaultDbPath(__DIR__));
+$config = AppConfig::fromStore($configStore, __DIR__);
 @mkdir(dirname($config->logPath), 0777, true);
 
 $store = new SqliteHitStore($config->dbPath, $config->logPath);

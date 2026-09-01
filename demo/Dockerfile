@@ -15,16 +15,22 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist --no-p
 FROM php:8.3-fpm-alpine
 
 # nginx + openssl; pdo_sqlite for the dashboard store; sodium/openssl are built into the base for
-# the pure-PHP SSH server (curve25519 / ed25519 / aes-ctr).
+# the pure-PHP SSH server (curve25519 / ed25519 / aes-ctr). APCu (FP-0242a) is the config store's
+# cross-worker read-cache (spec §0/§3) — without it the CredentialStore + ConfigStore APCu paths are
+# dead and every config read falls back to a SQLite SELECT. pecl needs the phpize build deps, dropped
+# again after the extension is built so they don't bloat the runtime image.
 RUN apk add --no-cache nginx openssl sqlite-libs libpng libjpeg-turbo freetype \
-    && apk add --no-cache --virtual .build-deps sqlite-dev libpng-dev libjpeg-turbo-dev freetype-dev \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS sqlite-dev libpng-dev libjpeg-turbo-dev freetype-dev \
     && docker-php-ext-configure gd --with-jpeg --with-freetype \
     && docker-php-ext-install pdo_sqlite gd \
+    && pecl install apcu \
+    && docker-php-ext-enable apcu \
     && apk del .build-deps
 
 # opcache on (artifacts are compiled once, not re-parsed per request) + a worker pool sized for
 # concurrency + the shared routing snippet.
 COPY demo/opcache.ini            /usr/local/etc/php/conf.d/zz-funnypot.ini
+COPY demo/apcu.ini               /usr/local/etc/php/conf.d/zz-funnypot-apcu.ini
 COPY demo/fpm-pool.conf          /usr/local/etc/php-fpm.d/zz-funnypot.conf
 COPY demo/nginx.conf             /etc/nginx/http.d/default.conf
 COPY demo/funnypot-location.conf /etc/nginx/funnypot-location.conf

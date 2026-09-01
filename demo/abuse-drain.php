@@ -10,9 +10,12 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 
-$config = AppConfig::fromEnv(__DIR__);
+// Store-backed config (FP-0242a): respawned each drain pass, so a live knob change is picked up next
+// pass (own process + APCu segment + sentinel read). Fail-safe: degrades to env/default.
+$config = AppConfig::fromStore(new ConfigStore(ConfigStore::defaultDbPath(__DIR__)), __DIR__);
 if (!$config->abuseIpdbReport || $config->abuseIpdbKey === '') {
     exit(0);
 }

@@ -10,9 +10,12 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\ThreatIntel\Blocklist;
 
-$config = AppConfig::fromEnv(__DIR__);
+// Store-backed config (FP-0242a): the entrypoint reruns this at boot and on a timer, so a live change
+// to the blocklist knobs is picked up on the next run (own process + sentinel read). Fail-safe.
+$config = AppConfig::fromStore(new ConfigStore(ConfigStore::defaultDbPath(__DIR__)), __DIR__);
 if (!$config->blocklistEnabled) {
     exit(0);
 }

@@ -15,6 +15,7 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
@@ -76,7 +77,10 @@ if ($protocol === '' || $bind === '') {
     exit(2);
 }
 
-$config = AppConfig::fromEnv(__DIR__);
+// Store-backed config (FP-0242a): this listener is long-lived (a select loop), so it reads the store
+// once at boot; the protocol knobs it uses are restart-required (spec §4), picked up on respawn.
+// Fail-safe: an unreadable store degrades to the env/default baseline.
+$config = AppConfig::fromStore(new ConfigStore(ConfigStore::defaultDbPath(__DIR__)), __DIR__);
 @mkdir(dirname($config->logPath), 0777, true);
 $store = new SqliteHitStore($config->dbPath, $config->logPath);
 

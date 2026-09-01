@@ -241,6 +241,16 @@ Concretely:
    bulk refreshes transact here and contend with nothing), `geo.db`
    (unchanged). Per-file write locks make cross-concern contention
    structurally impossible.
+   > **Extended — FP-0242a.** A fourth per-concern file, `config.sqlite`,
+   > holds the runtime config store (operator overrides + audit + a
+   > monotonic generation counter). It reuses the same `Storage\Sqlite::open`
+   > pragmas, and its write shape is the polar opposite of a stress case:
+   > a handful of tiny single-row upserts, only when an operator edits a
+   > knob. Reads are served from an APCu snapshot (php-fpm) / a per-process
+   > memo (listeners), invalidated across processes by a `config.gen`
+   > sentinel file, so the hot path pays at most one small `SELECT` on a
+   > generation change and nothing between changes. Keeping it in its own
+   > file (not `hits.db`) preserves the one-file-per-concern rule.
 3. An hourly rollup table plus maintained counters so the 3-second dashboard
    tick stops doing full-table GROUP BYs. This is the only real scaling work,
    and it would be needed under Postgres too.

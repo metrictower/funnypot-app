@@ -152,18 +152,48 @@ final class AppConfig
         return in_array($this->style, ['realistic', 'taunt'], true) ? $this->style : 'realistic';
     }
 
+    /**
+     * The env-sourced builder — the seed + the fallback. Kept as the canonical factory (the test
+     * suite and the CLI runners call it directly); now a thin delegate over {@see build()} with the
+     * raw source being plain getenv().
+     */
     public static function fromEnv(string $baseDir): self
+    {
+        return self::build($baseDir, static fn (string $key) => getenv($key));
+    }
+
+    /**
+     * The store-backed builder (FP-0242a). Same object, same validation/clamps — the ONLY difference
+     * is the raw source: each FUNNYPOT_* var resolves to its stored override if one exists, else the
+     * real env value (see {@see ConfigStore::rawForEnv()}). Env-only fields (paths, secrets, identity,
+     * network topology) are not registered in the store and fall straight through to getenv here, so
+     * they stay env-sourced. Fail-safe: an unreadable store degrades to the env/default baseline.
+     */
+    public static function fromStore(ConfigStore $store, string $baseDir): self
+    {
+        return self::build($baseDir, static fn (string $key) => $store->rawForEnv($key));
+    }
+
+    /**
+     * Resolve every field from a raw source. Precedence + defaults + clamps live here ONCE, shared by
+     * {@see fromEnv} and {@see fromStore}, so a stored override is coerced/clamped exactly as an env
+     * value always was. $env is a getenv()-shaped callable: it returns the raw string for a key, or
+     * false when unset (both false and '' mean "use the default", as getenv semantics require).
+     *
+     * @param callable(string):(string|false) $env
+     */
+    private static function build(string $baseDir, callable $env): self
     {
         $store = rtrim($baseDir, '/') . '/storage';
 
-        // getenv() returns false when unset and '' when set empty; treat both as "use the default".
-        $str = static function (string $key, string $default): string {
-            $v = getenv($key);
+        // The source returns false when unset and '' when set empty; treat both as "use the default".
+        $str = static function (string $key, string $default) use ($env): string {
+            $v = $env($key);
 
             return ($v === false || $v === '') ? $default : $v;
         };
         // A boolean flag that is on by default and only switched off by an explicit "0".
-        $onUnless0 = static fn (string $key): bool => getenv($key) !== '0';
+        $onUnless0 = static fn (string $key): bool => $env($key) !== '0';
 
         $db = $str('FUNNYPOT_DB', $store . '/funnypot.sqlite');
         if ($db === 'off') {
@@ -183,7 +213,7 @@ final class AppConfig
         $defaultPoweredBy = 'PHP/' . PersonaIdentity::fromSeed($personaSeed)->productVersion('php');
 
         return new self(
-            mode: getenv('FUNNYPOT_MODE') === 'stealth' ? 'stealth' : 'public',
+            mode: $env('FUNNYPOT_MODE') === 'stealth' ? 'stealth' : 'public',
             style: $str('FUNNYPOT_STYLE', 'realistic'),
             dbPath: $db,
             logPath: $str('FUNNYPOT_LOG', $store . '/hits.log'),
@@ -202,27 +232,27 @@ final class AppConfig
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),
             dashboardPath: '/' . trim($str('FUNNYPOT_DASHBOARD_PATH', '/__fp/'), '/') . '/',
             funnypotPath: '/' . trim($str('FUNNYPOT_APP_PATH', 'funnypot'), '/'),
-            hideMainPage: in_array(strtolower((string) getenv('FUNNYPOT_HIDE_MAIN')), ['1', 'on', 'true', 'yes'], true),
-            captureRaw: in_array(strtolower((string) getenv('FUNNYPOT_CAPTURE_RAW')), ['1', 'on', 'true', 'yes'], true),
-            blocklistEnabled: in_array(strtolower((string) getenv('FUNNYPOT_BLOCKLIST')), ['1', 'on', 'true', 'yes'], true),
+            hideMainPage: in_array(strtolower((string) $env('FUNNYPOT_HIDE_MAIN')), ['1', 'on', 'true', 'yes'], true),
+            captureRaw: in_array(strtolower((string) $env('FUNNYPOT_CAPTURE_RAW')), ['1', 'on', 'true', 'yes'], true),
+            blocklistEnabled: in_array(strtolower((string) $env('FUNNYPOT_BLOCKLIST')), ['1', 'on', 'true', 'yes'], true),
             intelDbPath: $str('FUNNYPOT_INTEL_DB', $store . '/intel.sqlite'),
             blocklistMinLists: max(1, (int) $str('FUNNYPOT_BLOCKLIST_MIN_LISTS', '1')),
             abuseIpdbKey: $str('FUNNYPOT_ABUSEIPDB_KEY', ''),
-            abuseIpdbReport: in_array(strtolower((string) getenv('FUNNYPOT_ABUSEIPDB_REPORT')), ['1', 'on', 'true', 'yes'], true),
+            abuseIpdbReport: in_array(strtolower((string) $env('FUNNYPOT_ABUSEIPDB_REPORT')), ['1', 'on', 'true', 'yes'], true),
             selfIps: array_values(array_filter(array_map('trim', explode(',', $str('FUNNYPOT_SELF_IPS', ''))))),
             trustedProxies: array_values(array_filter(array_map('trim', explode(',', $str('FUNNYPOT_TRUSTED_PROXIES', ''))))),
             abuseIpdbDailyCap: max(1, (int) $str('FUNNYPOT_ABUSEIPDB_DAILY_CAP', '1000')),
             abuseIpdbDedupHours: max(1, (int) $str('FUNNYPOT_ABUSEIPDB_DEDUP_HOURS', '24')),
-            threatIntelReport: in_array(strtolower((string) getenv('FUNNYPOT_THREATINTEL_REPORT')), ['1', 'on', 'true', 'yes'], true),
+            threatIntelReport: in_array(strtolower((string) $env('FUNNYPOT_THREATINTEL_REPORT')), ['1', 'on', 'true', 'yes'], true),
             threatIntelUrl: $str('FUNNYPOT_THREATINTEL_URL', 'https://threatintel.metrictower.com'),
             threatIntelKey: $str('FUNNYPOT_THREATINTEL_KEY', ''),
             threatIntelDailyCap: max(1, (int) $str('FUNNYPOT_THREATINTEL_DAILY_CAP', '1000')),
             threatIntelDedupHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_DEDUP_HOURS', '24')),
-            llmEnabled: in_array(strtolower((string) getenv('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
-            aiApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
-            dockerApiEnabled: in_array(strtolower((string) getenv('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true),
-            aiStrictAuth: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_AUTH')), ['1', 'on', 'true', 'yes'], true),
-            aiStrictModel: in_array(strtolower((string) getenv('FUNNYPOT_AI_STRICT_MODEL')), ['1', 'on', 'true', 'yes'], true),
+            llmEnabled: in_array(strtolower((string) $env('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
+            aiApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
+            dockerApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true),
+            aiStrictAuth: in_array(strtolower((string) $env('FUNNYPOT_AI_STRICT_AUTH')), ['1', 'on', 'true', 'yes'], true),
+            aiStrictModel: in_array(strtolower((string) $env('FUNNYPOT_AI_STRICT_MODEL')), ['1', 'on', 'true', 'yes'], true),
             aiTemp: (float) $str('FUNNYPOT_AI_TEMP', '0.8'),
             aiMinP: (float) $str('FUNNYPOT_AI_MIN_P', '0.0'),
             aiTopP: (float) $str('FUNNYPOT_AI_TOP_P', '1.0'),

@@ -301,6 +301,49 @@ be recorded, so a newly-added template shows up on its own at its declared defau
 A disabled service does not bind, a disabled attack rule is skipped, and `nuclei-reflection` off drops all
 nuclei-derived fakes. See [`docs/EMULATION-CATALOG.md`](docs/EMULATION-CATALOG.md).
 
+## Runtime config store
+
+Every `FUNNYPOT_*` knob has a coded default in `AppConfig`, and the container is configured by setting
+those env vars at deploy time. On top of that, a **runtime config store** (SQLite, FP-0242a) lets an
+operator override a knob **without a redeploy**. The resolved value of any knob follows a fixed
+precedence:
+
+1. **stored override** — a row in the config store (set by the operator), wins if present;
+2. **env seed** — the `FUNNYPOT_*` var, if set (what ships today);
+3. **coded default** — the literal in `AppConfig`.
+
+The store lives in `storage/config.sqlite` on the persisted volume, beside the hit store. It is
+**sparse**: only real overrides get a row — every knob you never touch keeps falling through to
+env → default, so an empty store behaves exactly like today. The typed schema (default, bounds/clamps,
+group, and whether a change is live or restart-required) is declared once in
+`src/App/Config/ConfigRegistry.php`, transcribed from `AppConfig::fromEnv` and kept in sync by a test.
+A stored value is coerced and clamped on read by the exact same code path as an env value, so an
+out-of-range override is bounded just as an out-of-range env var always was.
+
+```bash
+# Materialise the current environment into the store as override rows (one-time, explicit):
+php demo/config-seed.php
+# Or set/reset a single knob directly (values validated against the registry):
+sqlite3 storage/config.sqlite "INSERT INTO config(key,value,updated_at,updated_by)
+  VALUES('style','taunt',datetime('now'),'operator')
+  ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+```
+
+Seeding is never automatic (the store stays sparse); it is the explicit `demo/config-seed.php` CLI.
+Every write bumps a generation counter mirrored into a `config.gen` sentinel file on the same volume;
+the php-fpm workers share an APCu snapshot invalidated on write, and the long-lived protocol/drain
+listeners re-read the sentinel on their own cadence — so a change to a **live** knob (`style`,
+`severity_ceiling`, latency/jitter, the per-request behavioural knobs) is picked up on the next
+request with no restart, while a **restart-required** knob (feature toggles and the LLM/download/
+retention knobs baked into objects at bootstrap) takes effect on the next process (re)start. Reads are
+**fail-safe** — an unreadable store degrades to the env/default baseline and never breaks a request;
+writes are **fail-closed** — an invalid value is rejected so the operator sees the error. APCu is
+optional (the read path works without it, just with one small SQLite `SELECT` per request); the demo
+image installs it (`demo/apcu.ini`).
+
+> A dedicated, off-attacker-surface admin UI over this store is FP-0242b (not in this layer). Until it
+> lands, edit the store via the CLI above or `sqlite3`.
+
 ## Safety and invariants
 
 funnypot is built so it can only ever mislead an attacker, never help one.

@@ -10,10 +10,13 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\SqliteHitStore;
 
-$config = AppConfig::fromEnv(__DIR__);
+// Store-backed config (FP-0242a): the entrypoint respawns this runner each pass, so a live change to
+// a value it reads (retention/llm knobs) is picked up on the next pass. Fail-safe: degrades to env.
+$config = AppConfig::fromStore(new ConfigStore(ConfigStore::defaultDbPath(__DIR__)), __DIR__);
 
 // LLM cache upkeep runs whenever the responder is on: cap the cache by size (0 = unbounded) and
 // reap in-flight locks a crashed generation would otherwise leave held. Independent of hit retention.
