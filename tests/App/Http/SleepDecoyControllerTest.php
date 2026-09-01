@@ -95,7 +95,8 @@ final class SleepDecoyControllerTest extends TestCase
             0,
             $sleeper
         );
-        $decoy = $decoyOn ? new SleepDecoy($budget, $config, new AttackClassifier(), static fn (int $c): int => 0) : null;
+        // Jitter = its ceiling ⇒ a capped 2 s probe reaches exactly 2000 ms (deterministic assertion).
+        $decoy = $decoyOn ? new SleepDecoy($budget, $config, new AttackClassifier(), static fn (int $c): int => $c) : null;
 
         $controller = new HoneypotController(
             $store,

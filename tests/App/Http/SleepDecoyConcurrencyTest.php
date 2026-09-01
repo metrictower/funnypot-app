@@ -141,9 +141,12 @@ final class SleepDecoyConcurrencyTest extends TestCase
             }
         }
 
-        // Exactly MAX_CONCURRENT workers won a slot and slept; the rest were served immediately, no delay.
-        self::assertSame($maxConcurrent, $slept, 'only slot-holders may sleep');
-        self::assertSame($n - $maxConcurrent, $skipped, 'every shed probe is served immediately, never delayed');
+        // At least MAX_CONCURRENT workers won a slot and slept, and every worker either slept or was shed
+        // WITHOUT delay. We do NOT assert EXACTLY MAX_CONCURRENT slept: on a starved host a straggler
+        // whose single guard() lands after a winner released can win a freed slot and sleep SEQUENTIALLY
+        // (still peak-overlap ≤ MAX_CONCURRENT — the real invariant, asserted just below).
+        self::assertGreaterThanOrEqual($maxConcurrent, $slept, 'the slot pool is used to capacity');
+        self::assertSame($n, $slept + $skipped, 'every worker either slept (won a slot) or was shed with no delay');
 
         // The core assertion: no instant is covered by more than MAX_CONCURRENT sleep windows.
         $events = [];

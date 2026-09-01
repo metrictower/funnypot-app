@@ -37,6 +37,13 @@ final class AttackClassifierTest extends TestCase
             ['sqli or 1=1', "id=1 or 1=1", 'sqli'],
             ['sqli sleep', "id=1;sleep(5)", 'sqli'],
             ['sqli info_schema', "q=information_schema.tables", 'sqli'],
+            // FP-0228 time-based blind-injection primitives — additive coverage.
+            ['sqli pg_sleep', "id=1;select pg_sleep(5)", 'sqli'],
+            ['sqli dbms_pipe', "id=1||dbms_pipe.receive_message('a',5)", 'sqli'],
+            ['rce time-based ;sleep', 'host=127.0.0.1;sleep 5', 'rce'],
+            ['rce time-based | sleep', 'x=1| sleep 5', 'rce'],
+            ['rce time-based &&sleep', 'x=1&&sleep 5', 'rce'],
+            ['rce time-based backtick sleep', 'x=`sleep 5`', 'rce'],
             ['xss script', 'q=<script>alert(1)</script>', 'xss'],
             ['xss handler', 'name=<img src=x onerror=alert(1)>', 'xss'],
             ['lfi passwd', 'file=../../../../etc/passwd', 'lfi'],
@@ -53,6 +60,12 @@ final class AttackClassifierTest extends TestCase
             ['benign search', 'q=quarterly sales report 2026', null],
             ['benign single dotdot', 'path=../images/logo.png', null],
             ['benign double-encoded text', 'name=%2547%2543', null],
+            // FP-0228 broadening must NOT newly flag benign traffic containing the word "sleep":
+            // the shell-`sleep N` patterns need an injection metachar AND `sleep␣digit`, so prose,
+            // a param named sleep_*, and a plain search term all stay null.
+            ['benign sleep prose', 'q=i need sleep 8 hours tonight', null],
+            ['benign sleep param', 'sleep_mode=on&page=2', null],
+            ['benign sleep search', 'q=best sleep tracker app', null],
         ];
     }
 

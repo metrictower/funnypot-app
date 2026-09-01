@@ -39,12 +39,21 @@ final class AttackClassifier
             '~&&\s*(?:id|whoami|cat|curl|wget)\b~',
             '~\$\(\s*[a-z]~',
             '~\b(?:wget|curl)\s+https?://~',
+            // Time-based command injection (FP-0228): a shell `sleep N` (space-separated arg, unlike the
+            // SQL sleep(N) below) reached through an injection context. High-precision — the metachar +
+            // `\s+\d` keeps it off benign prose and off the paren form, so `;sleep(5)` stays sqli.
+            '~[;|&]\s*sleep\s+\d~',
+            '~\x60\s*sleep\s+\d~',
         ],
         'sqli' => [
             '~\bunion\b[\s/*]+\bselect\b~',
             '~\bor\b\s+1\s*=\s*1\b~',
             "~'\s*or\s*'1'\s*=\s*'1~",
             '~\bsleep\s*\(\s*\d~',
+            // Other SQL time-based blind-injection primitives (FP-0228): Postgres pg_sleep() and Oracle
+            // dbms_pipe.receive_message() — strong, rarely-benign tells the bare sleep( above misses.
+            '~\bpg_sleep\s*\(~',
+            '~\breceive_message\s*\(~',
             '~\bbenchmark\s*\(~',
             '~\binformation_schema\b~',
             '~\bwaitfor\s+delay\b~',

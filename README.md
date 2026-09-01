@@ -122,11 +122,14 @@ IP's total server latency is itself budget-bounded, and a store fault adds no la
 
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
-vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a recognised SQLi/RCE
-probe carrying a time-based structure (`SLEEP(n)`, `pg_sleep`, `WAITFOR DELAY`, `dbms_pipe`, `BENCHMARK`,
-`$(sleep n)`) is answered after a delay of `min(n, cap)` seconds (`FUNNYPOT_SLEEP_PER_REQ_CAP_MS`, default
-`2000`, hard-clamped ≤ 2000 ms), so the small `{0,1,2}` calibration set correlates ≈ 1 and the scanner
-confirms; large `n` clamps to the cap (an accepted residual tell). It reuses the SAME `TarpitBudget`: the
+vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a probe carrying a
+time-based structure — SQL `SLEEP(n)` / `pg_sleep` / `WAITFOR DELAY` / `dbms_pipe.receive_message` /
+`BENCHMARK`, or command-injection `$(sleep n)` / `` `sleep n` `` / `;sleep n` — is answered after a delay
+of `min(n, cap)` seconds (`FUNNYPOT_SLEEP_PER_REQ_CAP_MS`, default `2000`, hard-clamped ≤ 2000 ms), so the
+small `{0,1,2}` calibration set correlates ≈ 1 and the scanner confirms; large `n` clamps to the cap (an
+accepted residual tell). Honouring additionally requires the probe to classify as `sqli`/`rce` (the
+`AttackClassifier` tags every one of those structures as such — extended for FP-0228), so benign traffic
+is never delayed. It reuses the SAME `TarpitBudget`: the
 sleep runs **only while holding a slot** (≤ `MAX_CONCURRENT` workers ever sleeping) and the honoured time
 is charged to the SAME per-IP hourly **wall ledger** — so once an IP has burned its `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S`
 allowance (the operator's ~60 s cumulative budget), further probes are served immediately with zero delay.

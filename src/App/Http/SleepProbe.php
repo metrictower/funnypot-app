@@ -19,6 +19,10 @@ use Funnypot\Core\RequestContext;
  * same way it is detected, then pulls the numeric argument out of the first time-based structure it
  * finds. A parsed value is clamped to a sane ceiling BEFORE the caller re-clamps to the per-request cap,
  * so a `sleep(999999999)` cannot overflow the caller's `seconds * 1000` math.
+ *
+ * NOTE: parsing a structure here does NOT mean it is honoured — {@see SleepDecoy} additionally gates on
+ * the probe classifying as sqli/rce. The `AttackClassifier` tags every structure this reads as one of
+ * those (extended for FP-0228), so the two stay in step and benign traffic is never delayed.
  */
 final class SleepProbe
 {

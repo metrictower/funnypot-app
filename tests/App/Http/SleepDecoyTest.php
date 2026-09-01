@@ -139,12 +139,34 @@ final class SleepDecoyTest extends TestCase
         self::assertLessThanOrEqual(1.5, $slope, 'slope in lonkero confirm band (0.7,1.5)');
         self::assertTrue($measured[0] <= $measured[1] && $measured[1] <= $measured[2], 'monotonic non-decreasing');
 
-        // Large n clamps to the per-request cap (2000 ms), regardless of jitter — the accepted residual
-        // tell (slope degrades for large n).
+        // Large n clamps to the per-request cap band [cap-jitter, cap] — the accepted residual tell
+        // (slope degrades for large n) — while still varying with jitter (never a constant 2000 ms).
         $before = count($sleeps);
         $decoy->maybeDelay(self::sqliSleep(10), $ip);
         self::assertGreaterThan($before, count($sleeps), 'a large-n probe is still honoured');
-        self::assertSame(2000, (int) end($sleeps), 'a 10 s SLEEP is clamped to the 2000 ms per-request cap');
+        $capped = (int) end($sleeps);
+        self::assertLessThanOrEqual(2000, $capped, 'a 10 s SLEEP never exceeds the 2000 ms per-request cap');
+        self::assertGreaterThanOrEqual(1800, $capped, 'and clamps to the cap band (cap - jitter ceiling)');
+    }
+
+    /** The jitter is applied BELOW the cap, so two capped probes can differ — not a constant timing tell. */
+    public function test_a_capped_probe_still_varies_with_jitter(): void
+    {
+        $sleeps = [];
+        $budget = $this->budget(static function (int $ms) use (&$sleeps): void {
+            $sleeps[] = $ms;
+        }, static fn (): int => 1_000_000);
+        // Alternating jitter 0 then 200 (the band ceiling) — two capped SLEEP(10) probes must differ.
+        $vals = [0, 200];
+        $vi = 0;
+        $jitter = static function (int $ceil) use (&$vals, &$vi): int {
+            return $vals[$vi++ % count($vals)];
+        };
+        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), $jitter);
+
+        $decoy->maybeDelay(self::sqliSleep(10), '198.51.100.50');
+        $decoy->maybeDelay(self::sqliSleep(10), '198.51.100.50');
+        self::assertSame([1800, 2000], $sleeps, 'a capped probe varies in [cap-jitter, cap], not a constant 2000 ms');
     }
 
     // --- (b) budget exhaustion ----------------------------------------------------------------------
@@ -155,9 +177,10 @@ final class SleepDecoyTest extends TestCase
         $sleeper = static function (int $ms) use (&$sleeps): void {
             $sleeps[] = $ms;
         };
-        // 60 s per-IP hourly wall budget, frozen bucket, 2 s honoured per probe, no jitter (exactness).
+        // 60 s per-IP hourly wall budget, frozen bucket, 2 s honoured per probe. Jitter = its ceiling so
+        // each capped probe reaches exactly the cap (2000 ms), keeping the accounting exact.
         $budget = $this->budget($sleeper, static fn (): int => 1_000_000, 60_000);
-        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => 0);
+        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => $c);
 
         $ip = '203.0.113.9';
         for ($i = 0; $i < 30; $i++) { // 30 × 2 s = 60 s ⇒ budget exactly spent
@@ -187,7 +210,7 @@ final class SleepDecoyTest extends TestCase
             },
             60_000
         );
-        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => 0);
+        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => $c);
 
         $ip = '203.0.113.10';
         for ($i = 0; $i < 30; $i++) {
@@ -257,7 +280,7 @@ final class SleepDecoyTest extends TestCase
         self::assertSame(0, $budget->inflightCount(), 'off ⇒ no slot is even taken');
     }
 
-    public function test_benign_and_non_sqli_rce_probes_are_never_delayed(): void
+    public function test_benign_traffic_is_never_delayed(): void
     {
         $sleeps = [];
         $budget = $this->budget(static function (int $ms) use (&$sleeps): void {
@@ -265,25 +288,39 @@ final class SleepDecoyTest extends TestCase
         });
         $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => 0);
 
-        // No time-based structure at all ⇒ baseline traffic.
+        // No time-based structure at all ⇒ baseline traffic (SleepProbe returns null).
         $decoy->maybeDelay(new RequestContext('GET', '/index.php', 'id=42&name=bob'), '198.51.100.31');
-        // A structure SleepProbe reads but the classifier does NOT tag sqli/rce (bare ;sleep cmdi) ⇒ the
-        // class gate refuses it.
-        $decoy->maybeDelay(new RequestContext('GET', '/x', 'q=a;sleep 5'), '198.51.100.31');
-        self::assertSame([], $sleeps, 'benign / non-sqli-rce probes are never delayed');
+        // The word "sleep" in benign prose (no injection metachar) ⇒ SleepProbe returns null.
+        $decoy->maybeDelay(new RequestContext('GET', '/search', 'q=i need sleep 8 hours'), '198.51.100.31');
+        self::assertSame([], $sleeps, 'benign traffic carrying no injection structure is never delayed');
     }
 
-    public function test_an_rce_time_based_probe_is_honoured(): void
+    /** @dataProvider honouredStructures */
+    public function test_sqli_and_rce_time_based_probes_are_honoured(RequestContext $probe): void
     {
         $sleeps = [];
         $budget = $this->budget(static function (int $ms) use (&$sleeps): void {
             $sleeps[] = $ms;
         });
-        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => 0);
+        // Jitter = its ceiling ⇒ the 2 s probe reaches exactly the 2000 ms cap (deterministic).
+        $decoy = new SleepDecoy($budget, $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => $c);
 
-        // $(sleep 2) is an RCE tell the classifier catches AND a time-based structure SleepProbe reads.
-        $decoy->maybeDelay(new RequestContext('GET', '/cgi', 'x=$(sleep 2)'), '198.51.100.32');
-        self::assertSame([2000], $sleeps, 'a time-based RCE probe is honoured too');
+        $decoy->maybeDelay($probe, '198.51.100.34');
+        self::assertSame([2000], $sleeps, 'a recognised sqli/rce time-based probe is honoured');
+    }
+
+    /** @return array<string,array{0:RequestContext}> each parsed by SleepProbe AND classified sqli/rce. */
+    public static function honouredStructures(): array
+    {
+        return [
+            'sql sleep'   => [new RequestContext('GET', '/p', 'id=1 AND SLEEP(2)')],
+            'pg_sleep'    => [new RequestContext('GET', '/p', 'id=1;select pg_sleep(2)')],
+            'waitfor'     => [new RequestContext('GET', '/p', "id=1;WAITFOR DELAY '0:0:2'")],
+            'dbms_pipe'   => [new RequestContext('GET', '/p', "id=1||dbms_pipe.receive_message('a',2)")],
+            'rce subshell' => [new RequestContext('GET', '/cgi', 'x=$(sleep 2)')],
+            'rce ;sleep'  => [new RequestContext('GET', '/cgi', 'host=127.0.0.1;sleep 2')],
+            'rce backtick' => [new RequestContext('GET', '/cgi', 'x=`sleep 2`')],
+        ];
     }
 
     // --- slot-held-while-sleeping (the self-DoS seam, single-process check) --------------------------
