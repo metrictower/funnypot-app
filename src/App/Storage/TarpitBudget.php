@@ -59,6 +59,13 @@ final class TarpitBudget
      * @param int  $pagesPerIpHr  tarpit pages/responses one IP may fetch per hour
      * @param int  $slotTtlSecs   crashed-holder slot TTL (SHORT, ~nginx read-timeout) — NOT the wall budget
      * @param callable():int|null $clock injectable unix-time source for tests (defaults to time())
+     *
+     * NOTE for the 0245b/c/d wiring (flagged by the FP-0245a review): the SHORT slotTtlSecs means a
+     * LEGITIMATE holder whose response streams longer than the TTL will have its slot reaped out from
+     * under it, softening the concurrency ceiling. That is the deliberate trade — a short TTL is the
+     * only safe reclaim for a crashed holder (release() never runs on a fatal/OOM/SIGTERM). So the
+     * wiring MUST keep a single tarpit response under slotTtlSecs (the byte/latency caps already bound
+     * it) OR refresh started_at mid-stream; do not let a normal tarpit response outlive its slot.
      */
     public function __construct(
         private string $dbPath,

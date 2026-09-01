@@ -93,6 +93,95 @@ final class TarpitBudgetTest extends TestCase
         self::assertSame(4, $b->inflightCount());
     }
 
+    /**
+     * Acceptance §2 (cross-process): the sequential test above proves the cap ARITHMETIC on one
+     * connection; this proves the `BEGIN IMMEDIATE` serialization actually holds when N real processes
+     * race `acquire()` at once (a single-connection test would pass even if the transaction were
+     * removed). 12 barrier-synced children on distinct IPs, cap=4 => exactly 4 WON across all
+     * processes, inflight == 4. (Reviewers opus+fable both asked this be pinned before flip-on.)
+     */
+    public function test_global_cap_holds_across_concurrent_processes(): void
+    {
+        if (!function_exists('proc_open')) {
+            self::markTestSkipped('proc_open unavailable');
+        }
+        $path = $this->path();
+        // Parent creates the schema FIRST so the children attach to an existing DB — a cold first-ever
+        // CREATE racing 12 writers can fail-closed to FULL (the safe direction, but it would make the
+        // "exactly 4 WON" count flaky). One warm read materialises the tables.
+        $warm = $this->budget($path);
+        self::assertSame(0, $warm->inflightCount());
+
+        $autoload = dirname(__DIR__, 3) . '/vendor/autoload.php';
+        $child = $path . '.child.php';
+        $go = $path . '.go';
+        $this->tmp[] = $child;
+        $this->tmp[] = $go;
+        // Child: build the SAME budget (cap 4 / per-IP 1 / fixed clock), reach the barrier, then acquire
+        // for its own distinct IP and record the status. It does NOT release — holding the slot is what
+        // makes the cross-process ceiling observable to the parent's inflightCount().
+        file_put_contents($child, "<?php\n"
+            . 'require ' . var_export($autoload, true) . ";\n"
+            . "use Funnypot\\App\\Storage\\TarpitBudget;\n"
+            . '$b = new TarpitBudget(' . var_export($path, true)
+            . ", true, 4, 1, 67108864, 120000, 1073741824, 2000, 15, static fn(): int => 1000000);\n"
+            . '$ready = ' . var_export($path, true) . " . '.ready.' . \$argv[1];\n"
+            . '$go = ' . var_export($go, true) . ";\n"
+            . "touch(\$ready);\n"
+            . "while (!file_exists(\$go)) { usleep(200); }\n"
+            . "\$r = \$b->acquire('10.0.0.' . \$argv[1]);\n"
+            . 'file_put_contents(' . var_export($path, true) . " . '.out.' . \$argv[1], \$r['status']);\n");
+
+        $n = 12;
+        $procs = [];
+        for ($i = 0; $i < $n; $i++) {
+            $this->tmp[] = $path . '.ready.' . $i;
+            $this->tmp[] = $path . '.out.' . $i;
+            $p = proc_open([PHP_BINARY, $child, (string) $i], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            self::assertIsResource($p);
+            $procs[] = [$p, $pipes];
+        }
+        // Wait for every child to reach the barrier, then release them all at once.
+        $deadline = microtime(true) + 15;
+        $ready = 0;
+        do {
+            $ready = 0;
+            for ($i = 0; $i < $n; $i++) {
+                if (file_exists($path . '.ready.' . $i)) {
+                    $ready++;
+                }
+            }
+            if ($ready === $n) {
+                break;
+            }
+            usleep(1000);
+        } while (microtime(true) < $deadline);
+        self::assertSame($n, $ready, 'all child processes must reach the barrier');
+        touch($go);
+        foreach ($procs as [$p, $pipes]) {
+            foreach ($pipes as $pipe) {
+                @stream_get_contents($pipe);
+                @fclose($pipe);
+            }
+            proc_close($p); // blocks until the child exits
+        }
+
+        $won = 0;
+        $full = 0;
+        for ($i = 0; $i < $n; $i++) {
+            $status = @file_get_contents($path . '.out.' . $i);
+            self::assertNotFalse($status, "child $i recorded no acquire result");
+            if ($status === TarpitBudget::WON) {
+                $won++;
+            } elseif ($status === TarpitBudget::FULL) {
+                $full++;
+            }
+        }
+        self::assertSame(4, $won, 'exactly MAX_CONCURRENT slots may be WON across all racing processes');
+        self::assertSame($n - 4, $full, 'every other racer must be denied (fail-closed under contention)');
+        self::assertSame(4, $warm->inflightCount(), 'the DB must hold exactly the cap in flight');
+    }
+
     public function test_per_ip_cap_and_release_frees_the_slot(): void
     {
         $b = $this->budget($this->path());
