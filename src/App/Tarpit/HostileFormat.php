@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Tarpit;
 
-use Funnypot\Core\Support\Fake\FakeSecrets;
 
 /**
  * A3 — one token-hostile artifact (FP-0245c context-polluter). A deeply-nested, punctuation-dense JSON
@@ -19,9 +18,12 @@ use Funnypot\Core\Support\Fake\FakeSecrets;
  */
 final class HostileFormat
 {
-    /** Nesting depth and per-level breadth — small counts, but the nest multiplies structural tokens. */
-    private const DEPTH = 12;
-    private const BREADTH = 3;
+    /** The natural (uncapped) output size — deliberately small; the cost is TOKENS, not bytes. */
+    private const TARGET = 16384;
+
+    /** Nesting depth band for each chain — deep enough to be punctuation-dense, jagged for variety. */
+    private const MIN_DEPTH = 30;
+    private const DEPTH_JITTER = 20;
 
     public function __construct(private int $personaSeed)
     {
@@ -34,32 +36,48 @@ final class HostileFormat
      */
     public function json(int $capBytes): string
     {
-        $out = $this->build(0, 0);
-        if (strlen($out) > $capBytes) {
-            $out = substr($out, 0, max(0, $capBytes));
+        $target = min(max(0, $capBytes), self::TARGET);
+        if ($target <= 2) {
+            return substr('[]', 0, max(0, $capBytes));
         }
+        // A top-level array of many INDEPENDENT deep chains, built until the small target size. Bounded:
+        // each chain is built once (never a combinatorial 3^depth tree), so memory/CPU are O(target), not
+        // O(logical size) — the streamed-generator discipline applied to a buffered artifact.
+        $chains = [];
+        $len = 2; // the enclosing "[]"
+        $i = 0;
+        while ($len < $target && $i < 4096) {
+            $c = $this->chain($i);
+            $chains[] = $c;
+            $len += strlen($c) + 1;
+            $i++;
+        }
+        $out = '[' . implode(',', $chains) . ']';
 
-        return $out;
+        return strlen($out) > $capBytes ? substr($out, 0, max(0, $capBytes)) : $out;
     }
 
-    /** Recursive nested structure. Each level emits BREADTH children until DEPTH — punctuation-dense. */
-    private function build(int $depth, int $path): string
+    /**
+     * One deeply-nested chain (30–49 levels), alternating object/array nesting so the structure is jagged
+     * — a long run of `{"kN":[ … ]}` brackets ending in a tiny leaf. Built iteratively (O(depth) memory),
+     * NOT recursively over a fan-out, so a chain is a few hundred bytes but a wall of structural tokens.
+     */
+    private function chain(int $idx): string
     {
-        if ($depth >= self::DEPTH) {
-            return $this->leaf($path);
-        }
-        $parts = [];
-        for ($b = 0; $b < self::BREADTH; $b++) {
-            $childPath = $path * self::BREADTH + $b;
-            // Alternate object/array nesting so the structure is jagged (more distinct bracket runs).
-            if (($depth + $b) % 2 === 0) {
-                $parts[] = '"k' . ($childPath % 97) . '":' . $this->build($depth + 1, $childPath);
+        $depth = self::MIN_DEPTH + ($idx % self::DEPTH_JITTER);
+        $open = '';
+        $close = '';
+        for ($l = 0; $l < $depth; $l++) {
+            if (($l + $idx) % 2 === 0) {
+                $open .= '{"k' . (($l * 7 + $idx) % 97) . '":';
+                $close = '}' . $close;
             } else {
-                $parts[] = '"a' . ($childPath % 89) . '":[' . $this->build($depth + 1, $childPath) . ']';
+                $open .= '["a' . (($l * 3 + $idx) % 89) . '",';
+                $close = ']' . $close;
             }
         }
 
-        return '{' . implode(',', $parts) . '}';
+        return $open . $this->leaf($idx) . $close;
     }
 
     /** A tiny leaf — mostly short scalars, with a few inert credential/FLAG tokens buried at depth. */
@@ -67,11 +85,11 @@ final class HostileFormat
     {
         switch ($path % 7) {
             case 0:
-                return '{"v":"' . FakeSecrets::apiKey($this->personaSeed, 'hostile|leaf|' . $path) . '"}';
+                return '{"v":"' . InertSecret::apiKey($this->personaSeed, 'hostile|leaf|' . $path) . '"}';
             case 1:
-                return '{"v":"' . FakeSecrets::resetToken($this->personaSeed, 'hostile|leaf|' . $path) . '"}';
+                return '{"v":"' . InertSecret::resetToken($this->personaSeed, 'hostile|leaf|' . $path) . '"}';
             case 2:
-                return '{"flag":"FLAG{' . substr(hash('sha256', $this->personaSeed . '|hostile|flag|' . $path), 0, 32) . '}"}';
+                return '{"flag":"' . InertSecret::flag($this->personaSeed, 'hostile|' . $path) . '"}';
             case 3:
                 return '{"n":' . ($path % 1000) . ',"ok":true}';
             case 4:

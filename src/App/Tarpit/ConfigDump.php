@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Funnypot\App\Tarpit;
 
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\Core\Support\Fake\FakeSecrets;
 use Funnypot\Core\Support\PersonaIdentity;
 use Throwable;
 
@@ -101,8 +100,8 @@ final class ConfigDump
         $dbName = $this->persona('db.name', 'app_db');
         $dbUser = $this->persona('db.user', 'app');
         $region = $this->persona('cloud.aws.region', 'us-east-1');
-        $dbPass = FakeSecrets::resetToken($this->personaSeed, 'settings|db|password');
-        $secret = FakeSecrets::resetToken($this->personaSeed, 'settings|django|secret_key');
+        $dbPass = InertSecret::resetToken($this->personaSeed, 'settings|db|password');
+        $secret = InertSecret::resetToken($this->personaSeed, 'settings|django|secret_key');
 
         return "# -*- coding: utf-8 -*-\n"
             . "# {$company} platform settings (settings.py) — GENERATED, do not edit by hand.\n"
@@ -138,9 +137,9 @@ final class ConfigDump
         $region = $this->slug($raw, 6, 4);
         $domain = $this->persona('company.domain', 'internal.example');
 
-        $apiKey = FakeSecrets::apiKey($this->personaSeed, 'settings|region|' . $k . '|aws');
-        $stripe = FakeSecrets::stripeKey($this->personaSeed, 'settings|region|' . $k . '|stripe');
-        $oldReset = FakeSecrets::resetToken($this->personaSeed, 'settings|region|' . $k . '|rotated');
+        $apiKey = InertSecret::apiKey($this->personaSeed, 'settings|region|' . $k . '|aws');
+        $stripe = InertSecret::stripeKey($this->personaSeed, 'settings|region|' . $k . '|stripe');
+        $oldReset = InertSecret::resetToken($this->personaSeed, 'settings|region|' . $k . '|rotated');
         $flag = $this->flag($k);
 
         return "    'region-{$region}-{$slug}': {\n"
@@ -179,7 +178,7 @@ final class ConfigDump
     /** A dead FLAG{...} honeytoken — a deterministic 32-hex string that unlocks nothing anywhere. */
     private function flag(int $k): string
     {
-        return 'FLAG{' . substr(hash('sha256', $this->personaSeed . '|flag|config|' . $k), 0, 32) . '}';
+        return InertSecret::flag($this->personaSeed, 'config|' . $k);
     }
 
     private function persona(string $path, string $fallback): string

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Tarpit;
 
-use Funnypot\Core\Support\Fake\FakeSecrets;
 
 /**
  * C4 — the bounded `/etc/shadow` bcrypt bait (FP-0245c). A fixed, small `/etc/shadow`-shaped file whose
@@ -44,7 +43,7 @@ final class ShadowBait
             if (in_array($user, $locked, true)) {
                 $pw = $user === 'daemon' ? '*' : '!';
             } else {
-                $pw = FakeSecrets::bcryptHash($this->personaSeed, 'shadow|' . $user);
+                $pw = InertSecret::bcryptHash($this->personaSeed, 'shadow|' . $user);
             }
             $lines[] = $user . ':' . $pw . ':' . $lastChange . ':0:99999:7:::';
         }
@@ -65,6 +64,6 @@ final class ShadowBait
     /** The (dead) bcrypt hash for one account — for tests that assert it verifies against no password. */
     public function hashFor(string $user): string
     {
-        return FakeSecrets::bcryptHash($this->personaSeed, 'shadow|' . $user);
+        return InertSecret::bcryptHash($this->personaSeed, 'shadow|' . $user);
     }
 }

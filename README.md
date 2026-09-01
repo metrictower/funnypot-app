@@ -94,7 +94,19 @@ LLM-only hint on the login-success funnel, and every interior link is emitted th
 (a prose compute step, a base64/hex path to decode, or a whitespace-split path in an HTML comment) so an
 `href`-regex crawler finds nothing to follow — only an agent that reads and reasons descends. Every hit
 is gated by `TarpitBudget` first (the only per-IP guard on this gate-exempt route), and it is mounted
-only when `FUNNYPOT_TARPIT` is on. The context-polluters are a separate, later layer.
+only when `FUNNYPOT_TARPIT` is on.
+
+Alongside it are the **front-loaded context-polluters** (`src/App/Http/PolluterController.php`, under
+`/admin/export/*`): four synthetic "leaked export" artifacts an AI attacker pays dearly to ingest while
+they cost us almost nothing to emit — a bloated, deeply-nested `settings.py` (streamed, O(section)
+memory), a multi-thousand-line `app.log` whose credential lines sit at deep offsets past head/tail
+sampling (supports `Range`, O(window)), a token-hostile deep-nested JSON (small bytes, large token
+count), and a bounded `/etc/shadow` of **dead** bcrypt hashes (a hash-crack tarpit that authenticates to
+nothing). A flag economy of inert `FLAG{…}`/`FakeSecrets` tokens is scattered throughout — every
+credential-shaped value is a `FakeSecrets` shape that unlocks nothing, and each body passes the
+fingerprint gate. The labyrinth front-loads LLM-only links to the config/log so a big blob lands early
+and is re-billed on every later step. Same discipline as the labyrinth: `TarpitBudget::guard()` first,
+byte-capped, released in a `finally`, off unless `FUNNYPOT_TARPIT` is on, and never listed in robots.txt.
 
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.

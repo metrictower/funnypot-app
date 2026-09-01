@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Funnypot\App\Tarpit;
 
 use Funnypot\App\AiApi\StreamEmitter;
-use Funnypot\Core\Support\Fake\FakeSecrets;
 
 /**
  * A4 — the log rabbit-hole (FP-0245c context-polluter). A synthetic multi-thousand-line `app.log`
@@ -17,8 +16,8 @@ use Funnypot\Core\Support\Fake\FakeSecrets;
  *   - FIXED-WIDTH lines ⇒ the byte at any offset is a pure function of its line index, so the log is
  *     fully OFFSET-ADDRESSABLE: {@see bytesAt()} builds only the lines spanning a window, and a
  *     `Range: bytes=X-Y` around the deep key is served in O(window) memory — the fable A4 property
- *     (the key at "line ~1.4M" costs nothing extra to reach). Normal filler is drawn from
- *     {@see SeededStream} (deterministic, O(block)); the juicy lines are injected at fixed indices.
+ *     (the key at "line ~1.4M" costs nothing extra to reach). Each line's filler is a cheap per-line
+ *     hash (deterministic); the juicy credential lines are injected at fixed, seed-derived indices.
  *   - STREAMED + HARD BYTE-CAPPED for a full-body GET: fabricated line-by-line, flushed, never
  *     materialised; connection_aborted() halts fabrication.
  *   - INERT: the juicy tokens are {@see FakeSecrets} shapes (AWS/Stripe/reset/JWT) that authenticate to
@@ -36,11 +35,14 @@ final class LogRabbitHole
     /** How many juicy (credential-bearing) lines are injected. */
     private const JUICY = 4;
 
-    private SeededStream $stream;
+    /** @var list<int>|null memoised juicy line indices */
+    private ?array $juicy = null;
 
-    public function __construct(private int $personaSeed, private ?SeededStream $seeded = null)
+    /** @var array<int,int>|null memoised line-index => juicy rank, for O(1) secretForLine() */
+    private ?array $juicyRank = null;
+
+    public function __construct(private int $personaSeed)
     {
-        $this->stream = $seeded ?? new SeededStream();
     }
 
     /** The log's total logical byte size (LINES * LINE_WIDTH). */
@@ -58,6 +60,9 @@ final class LogRabbitHole
      */
     public function juicyLineIndices(): array
     {
+        if ($this->juicy !== null) {
+            return $this->juicy;
+        }
         $lo = intdiv(self::LINES, 4);
         $span = intdiv(self::LINES, 2);
         $out = [];
@@ -66,8 +71,10 @@ final class LogRabbitHole
             $out[] = $lo + (int) ($h % $span);
         }
         sort($out);
+        $this->juicy = array_values(array_unique($out));
+        $this->juicyRank = array_flip($this->juicy);
 
-        return array_values(array_unique($out));
+        return $this->juicy;
     }
 
     /**
@@ -77,19 +84,20 @@ final class LogRabbitHole
      */
     public function secretForLine(int $i): string
     {
-        $idx = array_search($i, $this->juicyLineIndices(), true);
-        if ($idx === false) {
+        $this->juicyLineIndices(); // ensure the rank lookup is built
+        $idx = $this->juicyRank[$i] ?? null;
+        if ($idx === null) {
             return '';
         }
         switch ($idx % 4) {
             case 0:
-                return FakeSecrets::apiKey($this->personaSeed, 'applog|leak|' . $i);
+                return InertSecret::apiKey($this->personaSeed, 'applog|leak|' . $i);
             case 1:
-                return FakeSecrets::stripeKey($this->personaSeed, 'applog|leak|' . $i);
+                return InertSecret::stripeKey($this->personaSeed, 'applog|leak|' . $i);
             case 2:
-                return FakeSecrets::resetToken($this->personaSeed, 'applog|leak|' . $i);
+                return InertSecret::resetToken($this->personaSeed, 'applog|leak|' . $i);
             default:
-                return 'FLAG{' . substr(hash('sha256', $this->personaSeed . '|applog|flag|' . $i), 0, 32) . '}';
+                return InertSecret::flag($this->personaSeed, 'applog|' . $i);
         }
     }
 
@@ -193,16 +201,13 @@ final class LogRabbitHole
         return gmdate('Y-m-d\TH:i:s', $t) . '.000Z';
     }
 
-    /** A fixed-width lowercase-hex token, deterministic in ($label). Inert text. */
+    /**
+     * A fixed-width lowercase-hex token, deterministic in ($label). One sha256 per token (cheap) — the
+     * log stays offset-addressable because {@see lineAt()} is itself deterministic and fixed-width, so
+     * bytesAt() needs no 4 KiB block model to seek; keeping a full log serve well under the slot TTL.
+     */
     private function hexToken(string $label, int $len): string
     {
-        $raw = $this->stream->bytesAt($this->personaSeed, $label, 0, $len * 2);
-        $hex = 'abcdef0123456789';
-        $out = '';
-        for ($i = 0; $i < $len; $i++) {
-            $out .= $hex[ord($raw[$i % strlen($raw)]) % 16];
-        }
-
-        return $out;
+        return substr(hash('sha256', $this->personaSeed . '|' . $label), 0, $len);
     }
 }
