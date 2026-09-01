@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Http;
 
+use Funnypot\App\Admin\AdminAuth;
+use Funnypot\App\Admin\ConfigAdmin;
 use Funnypot\App\Config\AppConfig;
+use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\AnalyticsStore;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
@@ -34,8 +37,23 @@ final class DashboardController
         // so a HitStore test double without rollups can still construct the controller (analytics
         // then degrades to empty widgets, never a 500 — the operator-only view just shows nothing).
         private ?AnalyticsStore $analytics = null,
+        // Operator auth (FP-0242b). Nullable so existing test doubles / wirings still construct, same
+        // backward-compatible pattern as $analytics. When null the admin gate is fail-CLOSED (every
+        // action denied) and the public-visibility check treats the request as unauthenticated.
+        private ?AdminAuth $auth = null,
+        // The runtime config store, for the config-admin panel. Nullable for the same reason.
+        private ?ConfigStore $configStore = null,
     ) {
     }
+
+    /**
+     * Mutating admin actions — these require a valid session AND a valid per-session CSRF token. Reads
+     * (analytics, vulns, llm-cache, blocked, config-list, config-audit) require the session only.
+     */
+    private const MUTATING = [
+        'prune', 'clear', 'import', 'geoip', 'vulns-save', 'block-ip', 'unblock-ip',
+        'llm-cache-delete', 'llm-cache-clear', 'config-set', 'config-reset',
+    ];
 
     /**
      * Live JSON feed. Modes via $_GET:
@@ -44,6 +62,27 @@ final class DashboardController
      */
     public function feed(): void
     {
+        // Public-visibility enforcement (FP-0242b) — the UNAUTHENTICATED path only. An authenticated
+        // operator always gets the full feed; an unauthenticated visitor gets what dashboard.public_view
+        // allows: 'none' ⇒ a 404 decoy with NO feed bytes; 'minimal' ⇒ an empty payload (no event rows);
+        // 'full' ⇒ today's feed. Fails toward LESS exposure (publicView() maps the default + any unknown
+        // value to 'none').
+        if (!$this->authed()) {
+            $view = $this->publicView();
+            if ($view === 'none') {
+                http_response_code(404);
+
+                return;
+            }
+            if ($view === 'minimal') {
+                header('Content-Type: application/json');
+                header('Cache-Control: no-store');
+                echo json_encode(['reset' => false, 'rows' => [], 'cursor' => 0, 'stats' => [], 'widgets' => []]);
+
+                return;
+            }
+        }
+
         header('Content-Type: application/json');
         header('Cache-Control: no-store');
 
@@ -92,27 +131,60 @@ final class DashboardController
     }
 
     /**
-     * Password-gated admin actions. The VIEW stays public; the mutating actions (retention prune,
-     * clear, DB backfill, catalog edits) AND the operator-only analytics read (FP-0243b) all require
-     * FUNNYPOT_ADMIN_PASSWORD. Disabled if that env is unset.
+     * Session-gated admin actions (FP-0242b — upgrades the retired shared-password pop-box). The gate:
+     *   1. `login` / `logout` run first — login needs no session (it is the one un-authenticated,
+     *      state-mutating admin path, reachable ONLY on the dashboard path via the Router);
+     *   2. every other action requires a valid AdminAuth session (fail-CLOSED: no auth wired or no/
+     *      expired session ⇒ a denied {"error":...} body, no payload);
+     *   3. mutating actions additionally require a valid per-session CSRF token (hash_equals).
+     * The operator-only analytics read (FP-0243b) and every former pop-box action ride this same gate.
+     * Under the phpunit CLI SAPI http_response_code() is a no-op, so the JSON BODY is the auth signal —
+     * the denied branch emits {"error":...} with NO action payload (see DashboardAnalyticsTest idiom).
      */
     public function admin(string $action): void
     {
         header('Content-Type: application/json');
         header('Cache-Control: no-store');
 
-        $pass = $this->config->adminPassword;
-        $given = (string) ($_SERVER['HTTP_X_ADMIN_TOKEN'] ?? ($_POST['key'] ?? ''));
-        if ($pass === '' || !hash_equals($pass, $given)) {
+        if ($action === 'login') {
+            $this->handleLogin();
+
+            return;
+        }
+        if ($action === 'logout') {
+            $this->auth?->logout();
+            echo json_encode(['ok' => true]);
+
+            return;
+        }
+
+        // Fail-CLOSED session gate. No auth wired, or no/expired session ⇒ denied, no payload.
+        if ($this->auth === null || !$this->auth->check()) {
             http_response_code(403);
-            echo json_encode(['error' => $pass === '' ? 'admin disabled (set FUNNYPOT_ADMIN_PASSWORD)' : 'forbidden']);
+            echo json_encode(['error' => 'forbidden']);
+
+            return;
+        }
+
+        // Mutating actions require a valid CSRF token in the POST body (a session alone is not enough —
+        // else a logged-in operator's browser could be driven cross-site to flip a knob).
+        if (in_array($action, self::MUTATING, true) && !$this->auth->verifyCsrf((string) ($_POST['csrf'] ?? ''))) {
+            http_response_code(403);
+            echo json_encode(['error' => 'bad csrf token']);
+
+            return;
+        }
+
+        // Config-admin panel actions (FP-0242b) — delegate to ConfigAdmin over the ConfigStore.
+        if (in_array($action, ['config-list', 'config-set', 'config-reset', 'config-audit'], true)) {
+            $this->handleConfig($action);
 
             return;
         }
 
         // Operator-only analytics (FP-0243b). Reads the O(buckets) rollup API + retention-bounded
-        // top-N. Runs ONLY behind the admin auth above (same adminPassword/X-Admin-Token gate as
-        // every other action), so it is no more reachable than the rest of the admin surface and, in
+        // top-N. Runs ONLY behind the AdminAuth session gate above (the same upgraded gate as every
+        // other action), so it is no more reachable than the rest of the admin surface and, in
         // stealth mode, rides the hidden dashboard path — never the deception surface (spec §9).
         // Every store call is wrapped so any query fault degrades to an empty widget and a 200, never
         // a 500 tell (spec §9; mirrors demo/index.php's "only ever a 404, never a 500" invariant).
@@ -295,6 +367,134 @@ final class DashboardController
         echo json_encode(['error' => 'unknown action']);
     }
 
+    /** POST ?admin=login — verify credentials + mint a session (runs the lockout path). No prior session. */
+    private function handleLogin(): void
+    {
+        if ($this->auth === null) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'auth unavailable']);
+
+            return;
+        }
+        $user = (string) ($_POST['user'] ?? ($_POST['username'] ?? ''));
+        $pass = (string) ($_POST['pass'] ?? ($_POST['password'] ?? ''));
+        $ip = HoneypotController::clientIp($this->config->trustedProxies);
+        echo json_encode($this->auth->login($user, $pass, $ip));
+    }
+
+    /** config-list / config-audit (reads) and config-set / config-reset (already CSRF-checked). */
+    private function handleConfig(string $action): void
+    {
+        if ($this->configStore === null) {
+            echo json_encode(['ok' => false, 'error' => 'config store unavailable']);
+
+            return;
+        }
+        $admin = new ConfigAdmin($this->configStore);
+        if ($action === 'config-list') {
+            echo json_encode($admin->listPayload(), JSON_UNESCAPED_SLASHES);
+
+            return;
+        }
+        if ($action === 'config-audit') {
+            echo json_encode($admin->auditPayload(), JSON_UNESCAPED_SLASHES);
+
+            return;
+        }
+        $actor = (string) ($this->auth?->currentUser() ?? 'operator');
+        $ip = HoneypotController::clientIp($this->config->trustedProxies);
+        $key = (string) ($_POST['key'] ?? '');
+        if ($action === 'config-set') {
+            echo json_encode($admin->set($key, (string) ($_POST['value'] ?? ''), $actor, $ip), JSON_UNESCAPED_SLASHES);
+
+            return;
+        }
+        // config-reset
+        echo json_encode($admin->reset($key, $actor, $ip), JSON_UNESCAPED_SLASHES);
+    }
+
+    /** Is this request bound to a valid operator session? (Null auth ⇒ treated as unauthenticated.) */
+    private function authed(): bool
+    {
+        return $this->auth !== null && $this->auth->check();
+    }
+
+    /**
+     * The enforced public-visibility level for an UNAUTHENTICATED visitor. Reads the resolved
+     * dashboard.public_view and maps it through a switch whose default is 'none' — so a config-read
+     * fault (which yields the registry baseline 'none') AND any unknown value both fail toward the
+     * least-exposed view. Never widens exposure.
+     */
+    private function publicView(): string
+    {
+        switch ($this->config->dashboardPublicView) {
+            case 'full':
+                return 'full';
+            case 'minimal':
+                return 'minimal';
+            case 'none':
+            default:
+                return 'none';
+        }
+    }
+
+    /**
+     * The login form (GET ?admin=login). Served regardless of public_view so the operator can always
+     * reach a way in even under 'none' (a known-query knock, not a visible tell — a bare GET of the
+     * dashboard path still 404s under 'none'). A tiny standalone page: username/password → POST
+     * ?admin=login, then reload to the now-authenticated shell.
+     */
+    public function loginForm(string $base = '/'): void
+    {
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store');
+        $css = (string) @file_get_contents($this->assetsDir . '/app.css');
+        $baseJs = json_encode($base, JSON_UNESCAPED_SLASHES);
+        echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
+        echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
+        echo "<title>funnypot</title><style>{$css}"
+            . '.lf{max-width:320px;margin:12vh auto;padding:24px;border:1px solid var(--line,#333);border-radius:10px}'
+            . '.lf input{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:8px}'
+            . '.lf .err{color:#e66;min-height:1.2em;font-size:13px}</style></head><body><div class=wrap>';
+        echo '<form class=lf id=lf onsubmit="return false">';
+        echo '<h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>';
+        echo '<input id=lf_user placeholder=username autocomplete=username autofocus>';
+        echo '<input id=lf_pass type=password placeholder=password autocomplete=current-password>';
+        echo '<div class=err id=lf_err></div>';
+        echo '<button class=btn id=lf_go type=submit>Sign in</button>';
+        echo '</form>';
+        echo '<script>window.FP_BASE=' . $baseJs . ';</script>';
+        echo '<script>(function(){var b=window.FP_BASE||"/";'
+            . 'function q(id){return document.getElementById(id);}'
+            . 'q("lf").addEventListener("submit",async function(){'
+            . 'q("lf_err").textContent="";'
+            . 'var body="user="+encodeURIComponent(q("lf_user").value)+"&pass="+encodeURIComponent(q("lf_pass").value);'
+            . 'try{var r=await fetch(b+"?admin=login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});'
+            . 'var j=await r.json();'
+            . 'if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}'
+            . '}catch(e){q("lf_err").textContent="login failed";}'
+            . 'return false;});})();</script>';
+        echo '</div></body></html>';
+    }
+
+    /**
+     * The reduced chrome-only page for an unauthenticated visitor when dashboard.public_view=minimal:
+     * the header/lead/stats shell with NO live table, no map, no widgets, no admin controls and no
+     * polling JS (so it leaks no event data). The authed operator never sees this — they get shell().
+     */
+    private function minimalShell(): void
+    {
+        header('Content-Type: text/html; charset=utf-8');
+        $css = (string) @file_get_contents($this->assetsDir . '/app.css');
+        echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
+        echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
+        echo "<title>funnypot</title><style>{$css}</style></head><body><div class=wrap>";
+        echo '<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1></div>';
+        echo '<p class=lead>This host is a honeypot. Each request is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted.</p>';
+        echo '<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time.</footer>';
+        echo '</div></body></html>';
+    }
+
     /**
      * The dashboard shell: static HTML + the extracted CSS/JS, inlined so there is one response.
      * $base is the path the feed/admin endpoints live under ("/" in public mode, the hidden
@@ -302,6 +502,25 @@ final class DashboardController
      */
     public function shell(string $base = '/'): void
     {
+        // Public-visibility enforcement (FP-0242b), UNAUTHENTICATED path only. An authed operator ALWAYS
+        // gets the full shell. Else: 'none' ⇒ a 404 decoy with NO dashboard bytes (login stays reachable
+        // via the GET ?admin=login knock, routed separately); 'minimal' ⇒ the chrome-only page. Fails
+        // toward less exposure (publicView() defaults + unknown ⇒ 'none').
+        $authed = $this->authed();
+        if (!$authed) {
+            $view = $this->publicView();
+            if ($view === 'none') {
+                http_response_code(404);
+
+                return;
+            }
+            if ($view === 'minimal') {
+                $this->minimalShell();
+
+                return;
+            }
+        }
+
         header('Content-Type: text/html; charset=utf-8');
 
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
@@ -377,7 +596,12 @@ final class DashboardController
         echo "<table><thead><tr><th>time</th><th>ip</th><th>request</th><th>verdict</th><th>fake?</th></tr></thead>";
         echo "<tbody id=rows><tr><td colspan=5 class=empty>connecting&hellip;</td></tr></tbody></table>";
         echo "<div class=controls><button id=older class=btn>load older</button>";
-        echo "<span class=admin><button id=analytics class=btn title='operator analytics — protocol breakdown, events over time, top-N (auth-gated)'>analytics</button><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=blocked class=btn title='view + manage manually blocked IPs'>blocked</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button></span></div>";
+        echo "<span class=admin><button id=analytics class=btn title='operator analytics — protocol breakdown, events over time, top-N (auth-gated)'>analytics</button><button id=emul class=btn title='choose which vulnerabilities + services funnypot emulates'>emulations</button><button id=config class=btn title='runtime config — edit knobs, reset to env/default, view the change audit log'>config</button><button id=llmcache class=btn title='browse + delete LLM-generated fake responses'>llm cache</button><button id=blocked class=btn title='view + manage manually blocked IPs'>blocked</button><button id=prune class=btn title='keep newest 1000 events'>prune</button><button id=clear class=btn>clear</button>";
+        // Login/logout control — the server renders exactly one, from the resolved session state.
+        echo $authed
+            ? "<button id=alogout class=btn title='sign out of the operator session'>logout</button>"
+            : "<button id=alogin class=btn title='operator sign in'>login</button>";
+        echo "</span></div>";
         echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map &copy; OpenStreetMap, CARTO</footer>";
         echo "<div id=vmodal class=modal hidden><div class=modal-box>";
         echo "<div class=modal-head><b>Emulations</b><input id=vsearch class=filter placeholder='search&hellip;'><span class=grow></span><button id=vclose class=x title=close>&times;</button></div>";
@@ -418,8 +642,21 @@ final class DashboardController
         echo "<div class=acard><h4>top tools</h4><div id=t_tool class=atop></div></div>";
         echo "<div class=acard><h4>top paths</h4><div id=t_path class=atop></div></div>";
         echo "</div></div></div></div>";
+        // Config-admin panel (FP-0242b). Opened behind the session via app.js; lists ConfigRegistry
+        // grouped with resolved value + source, edits via ConfigStore::set/reset (registry-validated),
+        // and shows the config_audit log. Secret values are never rendered (set/unset only).
+        echo "<div id=cmodal class='modal amodal' hidden><div class=modal-box>";
+        echo "<div class=modal-head><b>Config</b><span class=note style='margin:0'>operator-only &middot; runtime knobs</span><input id=csearch class=filter placeholder='filter keys&hellip;'><span class=grow></span>";
+        echo "<button id=caudit class=btn title='show the change audit log'>audit</button><button id=crefresh class=btn>refresh</button><button id=cclose class=x title=close>&times;</button></div>";
+        echo "<div class=abody><div id=cstat class=note style='margin:0 0 8px'></div><div id=clist></div><div id=cauditbox class=vlist hidden></div></div>";
+        echo "</div></div>";
         echo "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' crossorigin></script>";
         echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
+        // Session state for the JS: whether this viewer is authenticated, and (only then) the
+        // per-session CSRF token to attach to mutating POSTs. FP_CSRF is empty for an unauthenticated
+        // viewer — a token is never emitted to a page that has no session.
+        echo '<script>window.FP_AUTHED=' . ($authed ? 'true' : 'false')
+            . ';window.FP_CSRF=' . json_encode($authed ? (string) $this->auth->csrfToken() : '', JSON_UNESCAPED_SLASHES) . ';</script>';
         echo "<script>{$uplotJs}</script>";
         echo "<script>{$js}</script>";
         echo "<script>{$analyticsJs}</script>";

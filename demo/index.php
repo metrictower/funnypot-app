@@ -21,6 +21,7 @@ use Funnypot\App\AiApi\AiChatPromptBuilder;
 use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
+use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Docker\DockerApiResponder;
@@ -240,9 +241,19 @@ if ($config->aiApiEnabled) {
 }
 
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock);
+// Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
+// admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
+// decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
+// the first 'admin' user from FUNNYPOT_ADMIN_PASSWORD only while no user exists, then goes inert.
+$adminBase = rtrim($config->mode === 'stealth' ? $config->dashboardPath : $config->funnypotPath, '/');
+$adminSecure = (($_SERVER['HTTPS'] ?? '') !== '' && ($_SERVER['HTTPS'] ?? '') !== 'off')
+    || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+$adminAuth = new AdminAuth(dirname($config->dbPath) . '/admin.sqlite', $adminBase, $adminSecure);
+$adminAuth->bootstrap($config->adminPassword);
 // $store is a SqliteHitStore, which implements both HitStore and AnalyticsStore — the analytics
-// view (FP-0243b) reads the rollup tables through the SAME instance (last arg).
-$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store);
+// view (FP-0243b) reads the rollup tables through the SAME instance. $adminAuth + $configStore power
+// the FP-0242b session gate and the config-admin panel.
+$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath.
 $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist);

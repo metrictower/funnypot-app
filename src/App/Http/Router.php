@@ -87,6 +87,14 @@ final class Router
 
         // Operator dashboard on the hidden path (feed / admin / shell).
         if ($p === $dash) {
+            // Login-form knock (FP-0242b): a GET ?admin=login renders the login form even when
+            // dashboard.public_view=none 404s the bare dashboard GET, so the operator always has a way
+            // in. Bound INSIDE this dashboard-path guard — never on the decoy surface.
+            if ($method === 'GET' && ($_GET['admin'] ?? '') === 'login') {
+                $this->dashboard->loginForm($this->config->dashboardPath);
+
+                return;
+            }
             if ($method === 'POST' && isset($_GET['admin'])) {
                 $this->dashboard->admin((string) $_GET['admin']);
 
@@ -195,6 +203,13 @@ final class Router
         // so the path then falls through to the honeypot like any probe.
         $fp = rtrim($this->config->funnypotPath, '/');
         if (!$this->config->hideMainPage && $fp !== '' && rtrim($path, '/') === $fp) {
+            // Login-form knock (FP-0242b) — see the stealth branch. Bound inside this dashboard-path
+            // guard, so a ?admin=login on any other path never reaches loginForm/admin.
+            if ($method === 'GET' && ($_GET['admin'] ?? '') === 'login') {
+                $this->dashboard->loginForm($this->config->funnypotPath);
+
+                return;
+            }
             if ($method === 'POST' && isset($_GET['admin'])) {
                 $this->dashboard->admin((string) $_GET['admin']);
 

@@ -109,12 +109,14 @@ async function loadOlder(){
     b.style.display=d.more?'':'none';
   }finally{b.disabled=false;}
 }
-function token(){let t=sessionStorage.getItem('fp_admin');if(!t){t=prompt('Admin password')||'';if(t)sessionStorage.setItem('fp_admin',t);}return t;}
+// Admin auth (FP-0242b): a server-side session cookie (sent automatically, same-origin) + a
+// per-session CSRF token embedded as window.FP_CSRF. Mutating POSTs carry the token in the body; the
+// server ignores it on reads. On a 403 an unauthenticated viewer is bounced to the login knock.
+function adminBody(body){const c='csrf='+encodeURIComponent(window.FP_CSRF||'');return body?(body+'&'+c):c;}
 async function adminReq(action,body){
-  const t=token();if(!t)return null;
-  const r=await fetch(BASE+'?admin='+action,{method:'POST',headers:{'X-Admin-Token':t,'Content-Type':'application/x-www-form-urlencoded'},body:body||''});
-  if(r.status===403){sessionStorage.removeItem('fp_admin');alert('Admin disabled server-side, or wrong password.');return null;}
-  return r.json();
+  const r=await fetch(BASE+'?admin='+action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:adminBody(body),cache:'no-store'});
+  if(r.status===403){if(!window.FP_AUTHED){location.href=BASE+'?admin=login';}else{alert('Action denied — session expired or CSRF mismatch. Reloading.');location.reload();}return null;}
+  try{return await r.json();}catch(e){return null;}
 }
 async function admin(action,body){const j=await adminReq(action,body);if(!j)return;alert(JSON.stringify(j));cursor=0;older=0;seen.clear();tick();}
 // --- emulation catalog panel: read the catalog + toggle what funnypot serves ---
@@ -188,10 +190,64 @@ async function unblockIp(ip){
   const j=await adminReq('unblock-ip','ip='+encodeURIComponent(ip));
   if(j&&j.ok)openBlocked();else alert('unblock failed');
 }
+// --- runtime config panel (FP-0242b): list registry knobs grouped, edit via ConfigStore::set/reset,
+//     view the change audit log. Secret values are shown set/unset only, never rendered. ---
+function cfgRow(r){
+  const badge=`<span class="badge ${esc(r.source)}">${esc(r.source)}</span>`;
+  const live=r.live?'<span class="badge served">live</span>':'<span class="badge miss">restart</span>';
+  let input;
+  if(r.secret){input=`<span class=ids>${r.is_set?'set':'unset'}</span>`;}
+  else if(r.enum){input=`<select data-k="${esc(r.key)}">`+r.enum.map(o=>`<option${o===r.value?' selected':''}>${esc(o)}</option>`).join('')+`</select>`;}
+  else if(r.type==='bool'){const on=r.value==='1';input=`<select data-k="${esc(r.key)}"><option value="1"${on?' selected':''}>on</option><option value="0"${on?'':' selected'}>off</option></select>`;}
+  else{input=`<input data-k="${esc(r.key)}" value="${esc(r.value==null?'':r.value)}">`;}
+  const rst=r.source==='stored'?`<button class="btn creset" data-k="${esc(r.key)}" title="reset to env/default">reset</button>`:'';
+  const setBtn=r.secret?'':`<button class="btn cset" data-k="${esc(r.key)}">set</button>`;
+  return `<div class="vrow cfg" data-key="${esc(r.key)}"><div class=vt><div class=vn>${esc(r.key)} ${live}</div><div class=vm>${badge} &middot; ${esc(r.type)}${r.env?' &middot; '+esc(r.env):''}</div></div>${input}${setBtn}${rst}</div>`;
+}
+async function openConfig(){
+  const j=await adminReq('config-list');if(!j||!j.ok)return;
+  $('cauditbox').hidden=true;$('clist').hidden=false;
+  let html='';
+  Object.keys(j.groups).forEach(g=>{
+    html+=`<div class=vgroup><span>${esc(g)}</span></div>`;
+    (j.groups[g]||[]).forEach(r=>{html+=cfgRow(r);});
+  });
+  $('clist').innerHTML=html||'<p class=empty>No config keys.</p>';
+  $('cstat').textContent='';
+  $('clist').querySelectorAll('.cset').forEach(b=>b.onclick=()=>cfgSet(b));
+  $('clist').querySelectorAll('.creset').forEach(b=>b.onclick=()=>cfgReset(b));
+  $('cmodal').hidden=false;
+}
+function cfgFieldValue(row){const el=row.querySelector('select[data-k],input[data-k]');return el?el.value:'';}
+async function cfgSet(b){
+  const val=cfgFieldValue(b.closest('.vrow'));
+  const j=await adminReq('config-set','key='+encodeURIComponent(b.dataset.k)+'&value='+encodeURIComponent(val));
+  if(j&&j.ok){$('cstat').textContent='set '+b.dataset.k;openConfig();}else{$('cstat').textContent=(j&&j.error)||'set failed';}
+}
+async function cfgReset(b){
+  if(!confirm('Reset '+b.dataset.k+' to env/default?'))return;
+  const j=await adminReq('config-reset','key='+encodeURIComponent(b.dataset.k));
+  if(j&&j.ok){$('cstat').textContent='reset '+b.dataset.k;openConfig();}else{$('cstat').textContent=(j&&j.error)||'reset failed';}
+}
+async function openConfigAudit(){
+  const j=await adminReq('config-audit');if(!j||!j.ok)return;
+  const a=j.audit||[];
+  $('cauditbox').innerHTML=a.length?a.map(x=>`<div class=lrow><code>${esc(x.key)}</code> <span class=ids>${esc((x.ts||'').replace('T',' ').slice(0,19))} &middot; ${esc(x.actor)}${x.source_ip?' &middot; '+esc(x.source_ip):''}</span> <span class=vm>${x.old_value==null?'&empty;':esc(x.old_value)} &rarr; ${x.new_value==null?'&empty;':esc(x.new_value)}</span></div>`).join(''):'<p class=empty>No config changes recorded.</p>';
+  $('clist').hidden=true;$('cauditbox').hidden=false;
+}
 $('older').onclick=loadOlder;
 $('prune').onclick=()=>{if(confirm('Prune to the newest 1000 events?'))admin('prune','keep=1000');};
 $('clear').onclick=()=>{if(confirm('Delete ALL captured data? This cannot be undone.'))admin('clear');};
 $('emul').onclick=openVulns;
+// Config panel + session controls (FP-0242b). Guarded: these ride the same shell but stay inert if a
+// build ever omits them.
+if($('config'))$('config').onclick=openConfig;
+if($('cclose'))$('cclose').onclick=()=>{$('cmodal').hidden=true;};
+if($('crefresh'))$('crefresh').onclick=openConfig;
+if($('caudit'))$('caudit').onclick=openConfigAudit;
+if($('csearch'))$('csearch').oninput=e=>{const q=e.target.value.toLowerCase();$('clist').querySelectorAll('.vrow.cfg').forEach(r=>{r.style.display=r.textContent.toLowerCase().includes(q)?'':'none';});};
+if($('alogin'))$('alogin').onclick=()=>{location.href=BASE+'?admin=login';};
+if($('alogout'))$('alogout').onclick=async()=>{await adminReq('logout');location.href=BASE;};
 $('vclose').onclick=()=>{$('vmodal').hidden=true;};
 $('vsave').onclick=saveVulns;
 $('vsearch').oninput=e=>{const q=e.target.value.toLowerCase();$('vlist').querySelectorAll('.vrow').forEach(r=>{r.style.display=r.textContent.toLowerCase().includes(q)?'':'none';});};

@@ -1,0 +1,402 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Funnypot\App\Admin;
+
+use Funnypot\App\Storage\Sqlite;
+use PDO;
+use Throwable;
+
+/**
+ * Operator authentication for the colocated admin section (FP-0242b). Upgrades the retired shared
+ * FUNNYPOT_ADMIN_PASSWORD + hash_equals pop-box into a real login: an Argon2id password hash, a
+ * server-side session cookie, a per-session CSRF token, and a per-IP login rate-limit / lockout.
+ *
+ * Owns its own SQLite file (admin.sqlite, on the persisted data volume) via the shared
+ * {@see Sqlite::open()} WAL/busy_timeout idiom — kept SEPARATE from config.sqlite so auth state never
+ * rides the config store's fail-SAFE read path. This class is FAIL-CLOSED throughout: any error
+ * resolving a session or a credential yields "not authenticated" / "denied", never a partial grant
+ * (spec §6.2). That is the deliberate opposite of the config read path, which fails safe.
+ *
+ *   admin_users(username PK, pw_hash, created_at)            — the operator credentials
+ *   admin_sessions(id PK, username, created_at, last_seen, csrf) — live server-side sessions
+ *   login_attempts(id PK, ip, ts, result)                    — the auth audit log + lockout source
+ *
+ * Session id + CSRF token are each 256 bits of CSPRNG hex. The cookie is Secure (over HTTPS),
+ * HttpOnly, SameSite=Strict, scoped to the dashboard path so it is never sent on the decoy surface.
+ */
+final class AdminAuth
+{
+    public const COOKIE = 'fp_admin_sid';
+
+    private ?PDO $db = null;
+
+    /** Per-instance memo of the resolved session so feed()+shell()+admin() don't each re-query. */
+    private ?bool $checked = null;
+    private ?string $currentUser = null;
+    private ?string $currentCsrf = null;
+
+    /**
+     * @param string $dbPath          path to admin.sqlite (its dir is created on first write)
+     * @param string $cookiePath      Path= attribute for the session cookie (the dashboard base) so the
+     *                                cookie is scoped to the dashboard surface, never the decoy paths
+     * @param bool   $secure          set the cookie Secure flag (derive from HTTPS/X-Forwarded-Proto)
+     * @param int    $maxFailures     failed logins from one IP within the window before lockout
+     * @param int    $lockoutWindowS  the rolling lockout window, seconds
+     * @param int    $idleTimeoutS    a session expires this long after its last request
+     * @param int    $absoluteTimeoutS a session expires this long after login regardless of activity
+     */
+    public function __construct(
+        private string $dbPath,
+        private string $cookiePath = '/',
+        private bool $secure = false,
+        private int $maxFailures = 5,
+        private int $lockoutWindowS = 900,
+        private int $idleTimeoutS = 1800,
+        private int $absoluteTimeoutS = 43200,
+    ) {
+    }
+
+    // ---------------------------------------------------------------- bootstrap / users ------------
+
+    /**
+     * One-time bootstrap seed (Open Q3). If NO operator exists yet AND $envPassword is non-empty,
+     * create the first user ('admin') from it — so an existing deploy that set FUNNYPOT_ADMIN_PASSWORD
+     * is not locked out on first boot. Once any user exists this is inert: the env password becomes a
+     * dead value and there is no standing shared-secret backdoor. Best-effort (never throws on the
+     * boot path): a failure here just leaves the panel unreachable until the recovery CLI runs.
+     */
+    public function bootstrap(string $envPassword): void
+    {
+        if ($envPassword === '') {
+            return;
+        }
+        try {
+            if ($this->hasUsers()) {
+                return;
+            }
+            $this->createOrResetUser('admin', $envPassword);
+        } catch (Throwable $e) {
+            error_log('AdminAuth bootstrap: ' . $e->getMessage());
+        }
+    }
+
+    public function hasUsers(): bool
+    {
+        try {
+            return (int) $this->db()->query('SELECT COUNT(*) FROM admin_users')->fetchColumn() > 0;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Create or reset an operator credential (idempotent upsert). Used by the bootstrap seed and by the
+     * recovery CLI (demo/admin-user.php). Fail-CLOSED: throws on a write error so the CLI reports it.
+     */
+    public function createOrResetUser(string $username, string $password): void
+    {
+        $username = trim($username);
+        if ($username === '' || $password === '') {
+            throw new \RuntimeException('username and password are both required');
+        }
+        $st = $this->db()->prepare(
+            'INSERT INTO admin_users (username, pw_hash, created_at) VALUES (:u, :h, :t)
+             ON CONFLICT(username) DO UPDATE SET pw_hash = :h'
+        );
+        $st->execute([':u' => $username, ':h' => self::hashPassword($password), ':t' => gmdate('c')]);
+    }
+
+    // ---------------------------------------------------------------- login / lockout --------------
+
+    /**
+     * Attempt a login. Order matters and is security-load-bearing:
+     *   1. lockout check FIRST — a locked-out IP is denied even with the correct password (Argon2id
+     *      slows but does not stop online guessing; the lockout does);
+     *   2. credential verify;
+     *   3. on success mint a fresh session + CSRF token and set the cookie.
+     * Every attempt (lockout / fail / ok) is written to login_attempts (the auth audit log). Only 'fail'
+     * rows count toward the lockout, so a locked attempt does not itself extend the window indefinitely.
+     * Fail-CLOSED: any error returns denied.
+     *
+     * @return array{ok:bool,error?:string,csrf?:string}
+     */
+    public function login(string $username, string $password, string $ip): array
+    {
+        $username = trim($username);
+        try {
+            if ($this->isLockedOut($ip)) {
+                $this->record($ip, 'lockout');
+
+                return ['ok' => false, 'error' => 'too many attempts — locked out, try again later'];
+            }
+            $hash = $this->lookupHash($username);
+            if ($hash === null || !self::verifyPassword($password, $hash)) {
+                $this->record($ip, 'fail');
+
+                return ['ok' => false, 'error' => 'invalid credentials'];
+            }
+            $id = bin2hex(random_bytes(32));
+            $csrf = bin2hex(random_bytes(32));
+            $now = time();
+            $st = $this->db()->prepare(
+                'INSERT INTO admin_sessions (id, username, created_at, last_seen, csrf)
+                 VALUES (:id, :u, :c, :s, :x)'
+            );
+            $st->execute([':id' => $id, ':u' => $username, ':c' => $now, ':s' => $now, ':x' => $csrf]);
+            $this->record($ip, 'ok');
+            $this->setCookie($id, $now + $this->absoluteTimeoutS);
+            // Make the just-minted session usable within this same request (the cookie only arrives on
+            // the NEXT request), so a login handler that immediately renders the authed shell works.
+            $_COOKIE[self::COOKIE] = $id;
+            $this->checked = true;
+            $this->currentUser = $username;
+            $this->currentCsrf = $csrf;
+
+            return ['ok' => true, 'csrf' => $csrf];
+        } catch (Throwable $e) {
+            error_log('AdminAuth login: ' . $e->getMessage());
+
+            return ['ok' => false, 'error' => 'login unavailable'];
+        }
+    }
+
+    public function logout(): void
+    {
+        $id = (string) ($_COOKIE[self::COOKIE] ?? '');
+        if ($id !== '') {
+            try {
+                $this->db()->prepare('DELETE FROM admin_sessions WHERE id = :id')->execute([':id' => $id]);
+            } catch (Throwable $e) {
+                // best-effort: the cookie is cleared below regardless
+            }
+        }
+        $this->setCookie('', time() - 3600);
+        unset($_COOKIE[self::COOKIE]);
+        $this->checked = false;
+        $this->currentUser = null;
+        $this->currentCsrf = null;
+    }
+
+    // ---------------------------------------------------------------- session resolution -----------
+
+    /**
+     * Is the current request bound to a valid, unexpired session? Resolves the cookie once per instance
+     * and memoises the result. Enforces both an idle timeout (last_seen) and an absolute timeout
+     * (created_at); an expired session is deleted. Rotates last_seen on a live hit. FAIL-CLOSED: a
+     * missing cookie, an unknown/expired session, or ANY db error ⇒ false.
+     */
+    public function check(): bool
+    {
+        if ($this->checked !== null) {
+            return $this->checked;
+        }
+        $this->checked = false;
+        $id = (string) ($_COOKIE[self::COOKIE] ?? '');
+        // A session id is 64 hex chars; reject anything else without touching the db.
+        if (strlen($id) !== 64 || !ctype_xdigit($id)) {
+            return false;
+        }
+        try {
+            $st = $this->db()->prepare('SELECT username, created_at, last_seen, csrf FROM admin_sessions WHERE id = :id');
+            $st->execute([':id' => $id]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if ($row === false) {
+                return false;
+            }
+            $now = time();
+            $created = (int) $row['created_at'];
+            $lastSeen = (int) $row['last_seen'];
+            if (($now - $created) > $this->absoluteTimeoutS || ($now - $lastSeen) > $this->idleTimeoutS) {
+                $this->db()->prepare('DELETE FROM admin_sessions WHERE id = :id')->execute([':id' => $id]);
+
+                return false;
+            }
+            // Rotate last_seen so an active session slides its idle window forward.
+            $this->db()->prepare('UPDATE admin_sessions SET last_seen = :s WHERE id = :id')
+                ->execute([':s' => $now, ':id' => $id]);
+            $this->currentUser = (string) $row['username'];
+            $this->currentCsrf = (string) $row['csrf'];
+
+            return $this->checked = true;
+        } catch (Throwable $e) {
+            error_log('AdminAuth check: ' . $e->getMessage());
+
+            return false;
+        }
+    }
+
+    public function currentUser(): ?string
+    {
+        $this->check();
+
+        return $this->currentUser;
+    }
+
+    public function csrfToken(): ?string
+    {
+        $this->check();
+
+        return $this->currentCsrf;
+    }
+
+    /**
+     * Verify a synchroniser token against the current session's CSRF token. Requires a valid session
+     * (so an unauthenticated caller can never satisfy it) and a non-empty token compared with
+     * hash_equals (constant time). FAIL-CLOSED.
+     */
+    public function verifyCsrf(string $token): bool
+    {
+        if (!$this->check() || $this->currentCsrf === null) {
+            return false;
+        }
+
+        return $token !== '' && hash_equals($this->currentCsrf, $token);
+    }
+
+    /** @return list<array{ts:string,ip:string,result:string}> recent auth attempts, newest first */
+    public function attempts(int $limit = 100): array
+    {
+        try {
+            $st = $this->db()->prepare('SELECT ts, ip, result FROM login_attempts ORDER BY id DESC LIMIT :n');
+            $st->bindValue(':n', max(1, $limit), PDO::PARAM_INT);
+            $st->execute();
+
+            return array_map(static fn (array $r): array => [
+                'ts' => gmdate('c', (int) $r['ts']),
+                'ip' => (string) $r['ip'],
+                'result' => (string) $r['result'],
+            ], $st->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    // ---------------------------------------------------------------- internals --------------------
+
+    private function isLockedOut(string $ip): bool
+    {
+        if ($ip === '') {
+            return false;
+        }
+        $cut = time() - $this->lockoutWindowS;
+        $st = $this->db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE ip = :ip AND result = 'fail' AND ts >= :cut");
+        $st->execute([':ip' => $ip, ':cut' => $cut]);
+
+        return (int) $st->fetchColumn() >= $this->maxFailures;
+    }
+
+    private function record(string $ip, string $result): void
+    {
+        try {
+            $this->db()->prepare('INSERT INTO login_attempts (ip, ts, result) VALUES (:ip, :ts, :r)')
+                ->execute([':ip' => $ip, ':ts' => time(), ':r' => $result]);
+        } catch (Throwable $e) {
+            error_log('AdminAuth record: ' . $e->getMessage());
+        }
+    }
+
+    private function lookupHash(string $username): ?string
+    {
+        if ($username === '') {
+            return null;
+        }
+        $st = $this->db()->prepare('SELECT pw_hash FROM admin_users WHERE username = :u');
+        $st->execute([':u' => $username]);
+        $h = $st->fetchColumn();
+
+        return $h === false ? null : (string) $h;
+    }
+
+    /**
+     * Hash a password with Argon2id. Prefers PHP's password_hash(PASSWORD_ARGON2ID) (present in the
+     * base php:8.3-fpm-alpine image, built --with-password-argon2); falls back to ext-sodium's
+     * sodium_crypto_pwhash_str (also Argon2id, required by composer.json) if the constant is absent on
+     * some other base. Both emit the same $argon2id$ PHC string, so a hash from either verifies with
+     * either — the fallback is safe across an image swap.
+     */
+    public static function hashPassword(string $password): string
+    {
+        if (defined('PASSWORD_ARGON2ID')) {
+            $h = password_hash($password, PASSWORD_ARGON2ID);
+            if (is_string($h)) {
+                return $h;
+            }
+        }
+        if (function_exists('sodium_crypto_pwhash_str')) {
+            return sodium_crypto_pwhash_str(
+                $password,
+                SODIUM_CRYPTO_PWHASH_OPSLIMIT_INTERACTIVE,
+                SODIUM_CRYPTO_PWHASH_MEMLIMIT_INTERACTIVE
+            );
+        }
+        throw new \RuntimeException('no Argon2id backend available (need PASSWORD_ARGON2ID or ext-sodium)');
+    }
+
+    public static function verifyPassword(string $password, string $hash): bool
+    {
+        if ($hash === '') {
+            return false;
+        }
+        // password_verify reads the algorithm from the PHC prefix and verifies an Argon2id string when
+        // the algo is compiled in — true on the base image, whichever backend wrote the hash.
+        if (defined('PASSWORD_ARGON2ID') && password_verify($password, $hash)) {
+            return true;
+        }
+        if (function_exists('sodium_crypto_pwhash_str_verify')) {
+            try {
+                return sodium_crypto_pwhash_str_verify($hash, $password);
+            } catch (Throwable $e) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private function setCookie(string $id, int $expires): void
+    {
+        // Under the CLI/phpunit SAPI headers are already "sent" (stdout), so setcookie() is a no-op
+        // there; suppress its warning. The security attributes are the load-bearing part in prod.
+        @setcookie(self::COOKIE, $id, [
+            'expires' => $expires,
+            'path' => $this->cookiePath !== '' ? $this->cookiePath : '/',
+            'secure' => $this->secure,
+            'httponly' => true,
+            'samesite' => 'Strict',
+        ]);
+    }
+
+    private function db(): PDO
+    {
+        if ($this->db !== null) {
+            return $this->db;
+        }
+        if (!extension_loaded('pdo_sqlite')) {
+            throw new \RuntimeException('AdminAuth needs ext-pdo_sqlite');
+        }
+        $db = Sqlite::open($this->dbPath); // shared WAL/busy_timeout/chmod idiom (docs/DATA-LAYER-DECISION.md)
+        $db->exec('CREATE TABLE IF NOT EXISTS admin_users (
+            username   TEXT PRIMARY KEY,
+            pw_hash    TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )');
+        $db->exec('CREATE TABLE IF NOT EXISTS admin_sessions (
+            id         TEXT PRIMARY KEY,
+            username   TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_seen  INTEGER NOT NULL,
+            csrf       TEXT NOT NULL
+        )');
+        $db->exec('CREATE TABLE IF NOT EXISTS login_attempts (
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip     TEXT NOT NULL,
+            ts     INTEGER NOT NULL,
+            result TEXT NOT NULL
+        )');
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_ts ON login_attempts (ip, ts)');
+
+        return $this->db = $db;
+    }
+}
