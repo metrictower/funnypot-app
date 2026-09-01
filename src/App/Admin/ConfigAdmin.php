@@ -117,9 +117,26 @@ final class ConfigAdmin
         }
     }
 
-    /** @return array{ok:bool,audit:list<array<string,mixed>>} */
+    /**
+     * The change audit log. A secret knob's old/new VALUES are redacted here too (to set/unset),
+     * mirroring listPayload(): the invariant is "never emit a secret in the list, the audit, OR the
+     * JSON". Harmless today (no knob is registered secret) but the guard stays true for a future one.
+     *
+     * @return array{ok:bool,audit:list<array<string,mixed>>}
+     */
     public function auditPayload(int $limit = 200): array
     {
-        return ['ok' => true, 'audit' => $this->store->audits($limit)];
+        $registry = $this->store->registry();
+        $audit = [];
+        foreach ($this->store->audits($limit) as $row) {
+            $entry = $registry->get((string) ($row['key'] ?? ''));
+            if ($entry !== null && ($entry['secret'] ?? false)) {
+                $row['old_value'] = $row['old_value'] === null ? null : 'set';
+                $row['new_value'] = $row['new_value'] === null ? null : 'set';
+            }
+            $audit[] = $row;
+        }
+
+        return ['ok' => true, 'audit' => $audit];
     }
 }

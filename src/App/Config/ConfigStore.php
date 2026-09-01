@@ -259,7 +259,7 @@ final class ConfigStore
         // empty override would SILENTLY MASK a set env var (the env value is lost, the coded default
         // wins) with no way to tell from the resolved value that an override even exists. Clearing an
         // override is a distinct, explicit operation: reset(). This guards every type, not just strings.
-        if (is_string($rawValue) ? trim($rawValue) === '' : ($rawValue === null || $rawValue === '')) {
+        if (is_string($rawValue) ? trim($rawValue) === '' : $rawValue === null) {
             throw new RuntimeException("config set failed: empty value for '{$key}' is not allowed (use reset to clear an override)");
         }
         [$ok, $coerced] = $this->registry->validate($key, $rawValue);

@@ -91,6 +91,19 @@ final class AdminAuth
         }
     }
 
+    /** Whether a specific operator username already exists (for the CLI's create-vs-reset message). */
+    public function userExists(string $username): bool
+    {
+        try {
+            $st = $this->db()->prepare('SELECT 1 FROM admin_users WHERE username = :u');
+            $st->execute([':u' => trim($username)]);
+
+            return $st->fetchColumn() !== false;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     /**
      * Create or reset an operator credential (idempotent upsert). Used by the bootstrap seed and by the
      * recovery CLI (demo/admin-user.php). Fail-CLOSED: throws on a write error so the CLI reports it.
@@ -132,7 +145,13 @@ final class AdminAuth
                 return ['ok' => false, 'error' => 'too many attempts — locked out, try again later'];
             }
             $hash = $this->lookupHash($username);
-            if ($hash === null || !self::verifyPassword($password, $hash)) {
+            // Verify against a FIXED dummy hash when the username is unknown, so an unknown user pays the
+            // same ~Argon2id cost as a known user with a wrong password — otherwise the timing gap
+            // (~0ms vs ~50-100ms) leaks which usernames exist. The lockout check above still runs first.
+            $ok = $hash === null
+                ? (self::verifyPassword($password, self::dummyHash()) && false)
+                : self::verifyPassword($password, $hash);
+            if (!$ok) {
                 $this->record($ip, 'fail');
 
                 return ['ok' => false, 'error' => 'invalid credentials'];
@@ -332,6 +351,22 @@ final class AdminAuth
             );
         }
         throw new \RuntimeException('no Argon2id backend available (need PASSWORD_ARGON2ID or ext-sodium)');
+    }
+
+    /**
+     * A fixed dummy Argon2id hash, computed once per process, for the unknown-user timing defence in
+     * {@see login()}. Verifying against it costs the same as a real (failed) verify, so an unknown
+     * username is indistinguishable by timing from a known one with a wrong password. Its plaintext is
+     * a random value never accepted as a password.
+     */
+    private static function dummyHash(): string
+    {
+        static $h = null;
+        if ($h === null) {
+            $h = self::hashPassword(bin2hex(random_bytes(16)));
+        }
+
+        return $h;
     }
 
     public static function verifyPassword(string $password, string $hash): bool

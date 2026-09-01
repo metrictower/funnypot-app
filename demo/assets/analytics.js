@@ -1,8 +1,8 @@
 // Operator analytics view (FP-0243b). Rollup-backed breakdowns, events-over-time (vendored uPlot,
 // same-origin — no CDN), top-N tables and at-a-glance tiles. The panel is gated OPEN behind the
-// admin token, exactly like the emulations / llm-cache modals: it fetches ?admin=analytics through
-// adminReq(), so it is served only to an operator holding FUNNYPOT_ADMIN_PASSWORD and never on the
-// deception surface. Clicking a breakdown bar or a top-N row drills the existing raw-log feed via
+// operator session, exactly like the emulations / llm-cache modals: it fetches ?admin=analytics
+// through adminReq(), so it is served only to a logged-in operator (Argon2id session, FP-0242b) and
+// never on the deception surface. Clicking a breakdown bar or a top-N row drills the existing raw-log feed via
 // the shared serverFilter path (defined in app.js); brushing the time-series adds a ts range. No
 // new log view, no new external fetch. Helper/state names live inside this IIFE; the cross-file
 // bindings it reaches (serverFilter, cursor, older, seen, tick, markers, $, esc, adminReq) are the

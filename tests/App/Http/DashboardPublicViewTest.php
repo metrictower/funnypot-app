@@ -29,6 +29,9 @@ final class DashboardPublicViewTest extends TestCase
     /** @var string[] */
     private array $tmp = [];
 
+    /** @var string[] recording fixture files written into the real recordings dir, cleaned up after */
+    private array $recFixtures = [];
+
     protected function setUp(): void
     {
         if (!extension_loaded('pdo_sqlite')) {
@@ -46,11 +49,31 @@ final class DashboardPublicViewTest extends TestCase
             @rmdir($f); // breakStore() may have left a directory at the db path
             @unlink(dirname($f) . '/config.gen');
         }
+        foreach ($this->recFixtures as $f) {
+            @unlink($f);
+        }
         $this->tmp = [];
+        $this->recFixtures = [];
         putenv('FUNNYPOT_PUBLIC_VIEW');
-        unset($_GET, $_POST, $_COOKIE[AdminAuth::COOKIE]);
+        unset($_GET, $_POST, $_SERVER['HTTP_RANGE'], $_COOKIE[AdminAuth::COOKIE]);
         $_GET = [];
         $_POST = [];
+    }
+
+    /**
+     * Write a minimal .ulaw recording into the (hardcoded) recordings dir recording() reads, and return
+     * its id. The dir is the real demo/storage/recordings; the file is a random id, removed in tearDown.
+     */
+    private function recordingFixture(): string
+    {
+        $id = 'pvtest_' . bin2hex(random_bytes(6));
+        $dir = dirname(__DIR__, 3) . '/demo/storage/recordings';
+        @mkdir($dir, 0777, true);
+        $file = $dir . '/' . $id . '.ulaw';
+        file_put_contents($file, str_repeat("\x7f", 160)); // 20ms of mu-law silence
+        $this->recFixtures[] = $file;
+
+        return $id;
     }
 
     private function path(string $tag): string
@@ -159,6 +182,39 @@ final class DashboardPublicViewTest extends TestCase
 
         $feed = json_decode($this->body(fn () => $c->feed()), true);
         self::assertArrayHasKey('stats', $feed, 'full feed carries the stats payload');
+    }
+
+    // --- recording() obeys the same public-visibility gate (captured audio is sensitive) ---
+
+    public function test_none_hides_recordings_from_an_unauthenticated_visitor(): void
+    {
+        $id = $this->recordingFixture();
+        $config = $this->configFor('none');
+        $c = $this->controller($config, $this->auth_noSession());
+
+        // Even though the recording FILE exists, an unauthenticated visitor under 'none' gets a bare
+        // 404 with NO audio bytes.
+        self::assertSame('', $this->body(fn () => $c->recording($id)), 'no audio may leak to an unauth visitor under none');
+    }
+
+    public function test_authenticated_operator_is_served_the_recording_under_none(): void
+    {
+        $id = $this->recordingFixture();
+        $config = $this->configFor('none');
+        $c = $this->controller($config, $this->authedAuth());
+
+        $body = $this->body(fn () => $c->recording($id));
+        self::assertStringStartsWith('RIFF', $body, 'the operator is served the WAV audio regardless of public_view');
+    }
+
+    public function test_full_serves_recordings_to_the_public(): void
+    {
+        $id = $this->recordingFixture();
+        $config = $this->configFor('full');
+        $c = $this->controller($config, $this->auth_noSession());
+
+        // Under explicit full, the public recording behaviour is unchanged (served).
+        self::assertStringStartsWith('RIFF', $this->body(fn () => $c->recording($id)));
     }
 
     // --- T-PV-2: fail-safe direction ---

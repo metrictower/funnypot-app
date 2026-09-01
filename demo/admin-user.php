@@ -35,7 +35,7 @@ if ($password === '') {
     } else {
         fwrite(STDERR, "password for '{$username}': ");
         // Best-effort no-echo prompt; falls back to a plain read if stty is unavailable.
-        $hidden = @shell_exec('stty -echo 2>/dev/null');
+        @shell_exec('stty -echo 2>/dev/null');
         $password = rtrim((string) fgets(STDIN), "\r\n");
         @shell_exec('stty echo 2>/dev/null');
         fwrite(STDERR, "\n");
@@ -52,7 +52,7 @@ $storageDir = dirname(ConfigStore::defaultDbPath(__DIR__));
 $auth = new AdminAuth($storageDir . '/admin.sqlite');
 
 try {
-    $existed = $auth->hasUsers();
+    $existed = $auth->userExists($username);
     $auth->createOrResetUser($username, $password);
 } catch (Throwable $e) {
     fwrite(STDERR, 'admin-user: ' . $e->getMessage() . "\n");

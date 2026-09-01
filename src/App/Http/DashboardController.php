@@ -665,6 +665,16 @@ final class DashboardController
 
     public function recording(string $id): void
     {
+        // Public-visibility gate (FP-0242b). Captured SIP call audio is sensitive; it must obey the
+        // SAME unauthenticated-visibility rule as feed()/shell(). An authenticated operator always gets
+        // it; an unauthenticated visitor gets it ONLY under explicit public_view=full — under 'none'/
+        // 'minimal' it is a 404 decoy with no audio bytes (fails toward less exposure).
+        if (!$this->authed() && $this->publicView() !== 'full') {
+            http_response_code(404);
+
+            return;
+        }
+
         $id = preg_replace('/[^a-zA-Z0-9_-]/', '', $id);
         if ($id === '') {
             http_response_code(400);
