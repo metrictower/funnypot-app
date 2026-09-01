@@ -50,9 +50,10 @@ final class SleepProbe
         if (preg_match("~waitfor\\s+delay\\s+'\\d+:\\d+:(\\d+(?:\\.\\d+)?)~", $surface, $m) === 1) {
             return self::clamp($m[1]);
         }
-        // Command-injection time-based: ;sleep n / | sleep n / && sleep n (a shell sleep takes a bare arg,
-        // no paren — distinct from the SQL sleep(n) above).
-        if (preg_match('~[;&|]\s*sleep\s+(\d+(?:\.\d+)?)~', $surface, $m) === 1) {
+        // Command-injection time-based: a shell sleep takes a bare space-separated arg (no paren, unlike
+        // the SQL sleep(n) above), reached through an injection context — ;sleep n / | sleep n / &&sleep n
+        // / $(sleep n) / `sleep n`. The leading metachar keeps it off benign prose ("...sleep 8 hours").
+        if (preg_match('~(?:[;&|]|\$\(|\x60)\s*sleep\s+(\d+(?:\.\d+)?)~', $surface, $m) === 1) {
             return self::clamp($m[1]);
         }
         // MySQL CPU-burn: benchmark(count, expr) — not seconds-linear; honour as a fixed small nominal.

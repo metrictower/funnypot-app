@@ -120,6 +120,20 @@ clamped ≤ 2000 ms and applied **only while a `TarpitBudget` slot is held** (`a
 hourly budget) is shed immediately, never delayed. The slept time is charged to the wall ledger, so an
 IP's total server latency is itself budget-bounded, and a store fault adds no latency (never a 500).
 
+A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
+SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
+vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a recognised SQLi/RCE
+probe carrying a time-based structure (`SLEEP(n)`, `pg_sleep`, `WAITFOR DELAY`, `dbms_pipe`, `BENCHMARK`,
+`$(sleep n)`) is answered after a delay of `min(n, cap)` seconds (`FUNNYPOT_SLEEP_PER_REQ_CAP_MS`, default
+`2000`, hard-clamped ≤ 2000 ms), so the small `{0,1,2}` calibration set correlates ≈ 1 and the scanner
+confirms; large `n` clamps to the cap (an accepted residual tell). It reuses the SAME `TarpitBudget`: the
+sleep runs **only while holding a slot** (≤ `MAX_CONCURRENT` workers ever sleeping) and the honoured time
+is charged to the SAME per-IP hourly **wall ledger** — so once an IP has burned its `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S`
+allowance (the operator's ~60 s cumulative budget), further probes are served immediately with zero delay.
+No second budget, structure-only parsing (the payload is never echoed, the body is byte-identical), and a
+store fault degrades to no delay — never a 500. The decoy classifies the sleep structure independently, so
+it fires on every serve path (the served attack fake included), not just the 404 fall-through.
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 
