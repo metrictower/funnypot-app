@@ -32,6 +32,14 @@ final class CorporateController
         private AppConfig $config,
         private string $assetsDir,
         private ?Blocklist $blocklist = null,
+        /** FP-0245e: the same LLM-only labyrinth ENTRY hint HomeController carries in public mode (an
+         *  HTML comment with a base64 root + a construct instruction), planted on the STEALTH
+         *  credential-submission (login POST) response below ONLY when the tarpit is on — the composition
+         *  root passes LabyrinthController::entryHint() then, else null. Stealth serves / and /login here,
+         *  so without this the merged labyrinth is inert in a stealth deployment. It is NOT a plain href
+         *  and NOT in robots/sitemap, so a crawler cannot discover the maze; a GET-only crawler never
+         *  POSTs, so it never even sees this response; an LLM that submitted the login decodes it. */
+        private ?string $labyrinthEntryHint = null,
     ) {
     }
 
@@ -52,13 +60,19 @@ final class CorporateController
     {
         header('Content-Type: text/html; charset=utf-8');
         $error = '';
+        $hint = '';
         if ($method === 'POST') {
             $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
             $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
             $this->log($clientIp, 'POST', '/login', 'login', 'high', 'globex-login', 'user=' . $user . ' pass=' . $pass);
             $error = '<p class=err>Invalid username or password.</p>';
+            // FP-0245e: the LLM-only labyrinth entry hint rides the credential-submission (POST) response
+            // — the stealth analogue of HomeController's public login-success funnel. A crawler is GET-only
+            // so never reaches this branch; the hint is an HTML comment (no href), so a regex link
+            // extractor finds nothing to follow, while an LLM that "logged in" decodes the base64 root.
+            $hint = $this->labyrinthEntryHint ?? '';
         }
-        echo $this->page('Sign in — Globex Corporation', $this->loginForm($error));
+        echo $this->page('Sign in — Globex Corporation', $this->loginForm($error)) . $hint;
     }
 
     /**

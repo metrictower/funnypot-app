@@ -53,16 +53,6 @@ final class LlmOnlyLink
     }
 
     /**
-     * Shape 4 — a trivial hex decode (a second decode variant so the maze is not single-shaped). The
-     * next path is shown as lowercase hex in visible prose.
-     */
-    public static function hexStep(string $label, string $path): string
-    {
-        return '<p class="lab-nav lab-nav-hex">' . self::esc($label) . ' <code>'
-            . self::esc(bin2hex($path)) . '</code></p>';
-    }
-
-    /**
      * Shape 3 — a comment-split URL. The path is placed inside an HTML comment AND broken by whitespace
      * so it is doubly crawler-hostile: a comment-stripping parser never sees it, and a naive
      * `href|src`-or-bare-URL extractor that does read comment text grabs only a truncated, invalid token.
@@ -76,6 +66,16 @@ final class LlmOnlyLink
         $broken = implode(' ', array_map([self::class, 'esc'], $pieces));
 
         return "<!-- archive continues at: " . $broken . " (join the segments) -->";
+    }
+
+    /**
+     * Shape 4 — a trivial hex decode (a second decode variant so the maze is not single-shaped). The
+     * next path is shown as lowercase hex in visible prose.
+     */
+    public static function hexStep(string $label, string $path): string
+    {
+        return '<p class="lab-nav lab-nav-hex">' . self::esc($label) . ' <code>'
+            . self::esc(bin2hex($path)) . '</code></p>';
     }
 
     /**

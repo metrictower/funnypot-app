@@ -61,6 +61,7 @@ final class MisbehavingCrawlerTest extends TestCase
         }
         $this->tmp = [];
         putenv('FUNNYPOT_TARPIT');
+        putenv('FUNNYPOT_MODE');
         $_GET = [];
         $_POST = [];
     }
@@ -74,13 +75,16 @@ final class MisbehavingCrawlerTest extends TestCase
     }
 
     /**
-     * The real Router, public mode, tarpit ARMED (labyrinth mounted + the entry hint planted on the
-     * login-success funnel) — exactly the demo/index.php wiring, minus the LLM sidecar.
+     * The real Router, tarpit ARMED (labyrinth mounted + the entry hint planted on the mode's
+     * login-success funnel) — exactly the demo/index.php wiring, minus the LLM sidecar. In public mode
+     * the hint rides HomeController's login-success (/), in stealth mode CorporateController's
+     * credential-submission response (POST /login) — the FP-0245e seam.
      */
-    private function router(): Router
+    private function router(string $mode = 'public'): Router
     {
+        putenv('FUNNYPOT_MODE=' . $mode);
         $config = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame('public', $config->mode);
+        self::assertSame($mode, $config->mode);
         self::assertTrue($config->tarpitEnabled, 'the tarpit must be armed for this test');
 
         $store = new SqliteHitStore($this->path('hit'));
@@ -101,10 +105,12 @@ final class MisbehavingCrawlerTest extends TestCase
         );
         $labyrinth = new LabyrinthController($store, $geo, $budget, $config->personaSeed, $config->tarpitBytesPerRespMb);
 
+        $hint = LabyrinthController::entryHint();
         $honeypot = new HoneypotController($store, $geo, $config, $decoys);
         $dashboard = new DashboardController($store, $geo, $config, $assets, null, null, $store, new AdminAuth($this->path('auth')), new ConfigStore($this->path('cfg')));
-        $corporate = new CorporateController($store, $geo, $config, $assets);
-        $home = new HomeController($store, $geo, $config, $assets, null, LabyrinthController::entryHint());
+        // Wire the hint into the controller that fronts login in this mode, exactly as demo/index.php does.
+        $corporate = new CorporateController($store, $geo, $config, $assets, null, $mode === 'stealth' ? $hint : null);
+        $home = new HomeController($store, $geo, $config, $assets, null, $mode === 'public' ? $hint : null);
 
         return new Router($config, $honeypot, $dashboard, $corporate, $home, null, null, null, null, $labyrinth);
     }
@@ -300,5 +306,108 @@ final class MisbehavingCrawlerTest extends TestCase
         self::assertNotNull($recPath, 'the LLM decoded a base64 record-detail path from the page prose');
         $recBody = $this->fetch($router, (string) $recPath, 'GET', '198.51.100.64');
         self::assertStringContainsString('Audit Record', $recBody, 'the decoded record leaf served a real page');
+    }
+
+    // --- FP-0245e: the same proof on the STEALTH path (corporate front owns / and /login) --------------
+
+    public function test_stealth_regex_crawler_seeded_from_every_disallow_never_reaches_the_labyrinth(): void
+    {
+        // Same BFS as the public proof but through the STEALTH route table: / and /login are the corporate
+        // disguise (which also dangles the spider trap), so the crawler roams the corporate + honeypot
+        // surface. The labyrinth still has ZERO inbound href, so no crawl reaches it.
+        $router = $this->router('stealth');
+        $seeds = $this->robotsSeeds($router);
+
+        $queue = array_map(static fn (string $s): array => [$s, 0], array_merge(['/', '/login'], $seeds));
+        $visited = [];
+        $fetches = 0;
+        $maxDepth = 4;
+        $maxFetch = 120;
+
+        while ($queue !== [] && $fetches < $maxFetch) {
+            [$path, $depth] = array_shift($queue);
+            $path = substr($path, 0, strcspn($path, "?#"));
+            if ($path === '' || isset($visited[$path])) {
+                continue;
+            }
+            $visited[$path] = true;
+            $fetches++;
+
+            self::assertFalse(
+                str_starts_with($path, LabyrinthController::ENTRY_BASE),
+                "a regex crawler reached labyrinth surface ({$path}) in stealth mode — the maze is not crawler-undiscoverable"
+            );
+
+            $body = $this->fetch($router, $path, 'GET', '198.51.100.' . (($fetches % 200) + 1));
+
+            foreach (self::extractHrefs($body) as $href) {
+                self::assertStringNotContainsString(
+                    'audit-archive',
+                    $href,
+                    "a plain href resolved to labyrinth surface from {$path} (stealth) — crawler-amplification defect"
+                );
+                $next = self::toPath($href);
+                if ($next !== null && !isset($visited[$next]) && $depth + 1 <= $maxDepth) {
+                    $queue[] = [$next, $depth + 1];
+                }
+            }
+        }
+
+        self::assertNotEmpty($visited, 'the crawler ran');
+        self::assertArrayHasKey('/login', $visited, 'the crawler did GET the corporate login form (the GET seam has no hint)');
+        foreach (array_keys($visited) as $p) {
+            self::assertFalse(str_starts_with($p, LabyrinthController::ENTRY_BASE));
+        }
+    }
+
+    public function test_stealth_entry_hint_rides_only_the_corporate_login_post_never_a_get_crawl(): void
+    {
+        $router = $this->router('stealth');
+
+        // A crawler is GET-only. Neither the corporate homepage nor the GET login form carries the hint.
+        $getHome = $this->fetch($router, '/', 'GET');
+        self::assertStringNotContainsString('audit-archive', $getHome, 'the stealth GET homepage must not carry the entry hint');
+        $getLogin = $this->fetch($router, '/login', 'GET');
+        self::assertStringNotContainsString('audit-archive', $getLogin, 'the stealth GET login form must not carry the entry hint');
+
+        // Positive control: the credential-submission (POST /login) response DOES carry the hint — as an
+        // HTML comment (no href into the maze), so it is LLM-constructable yet invisible to a link extractor.
+        $_POST = ['username' => 'admin', 'password' => 'hunter2'];
+        $postLogin = $this->fetch($router, '/login', 'POST', '198.51.100.70');
+        $mazeHrefs = array_filter(self::extractHrefs($postLogin), static fn (string $h): bool => str_contains($h, 'audit-archive'));
+        self::assertSame([], $mazeHrefs, 'the stealth entry hint is never a followable href');
+        // The hint's base path lives in an HTML comment, never in a href/src attribute.
+        self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $postLogin, $m), 'stealth login-success carries the base64 entry hint inside an HTML comment');
+        self::assertSame('/admin/audit-archive', base64_decode($m[1]), 'the stealth hint decodes to the labyrinth root');
+    }
+
+    public function test_stealth_llm_shaped_navigator_reconstructs_the_links_and_descends_past_depth_8(): void
+    {
+        $router = $this->router('stealth');
+
+        // 1) The LLM "logged in" on the corporate portal and read the hint on the POST response; it decodes
+        //    the base64 root and constructs the first deep path (a crawler cannot — there is no href).
+        $_POST = ['username' => 'root', 'password' => 'toor'];
+        $login = $this->fetch($router, '/login', 'POST', '198.51.100.71');
+        self::assertSame(1, preg_match('~base64\):\s*([A-Za-z0-9+/=]+)~', $login, $m), 'stealth login-success carries the base64 entry hint');
+        $root = base64_decode($m[1]);
+        $url = $root . '/page-000001';
+
+        // 2) Descend the linear stream by REPAIRING each page's comment-split next-page URL — the same
+        //    reasoning a crawler's regex cannot do — proving the stealth-planted maze is traversable.
+        $visited = [];
+        $ip = '198.51.100.72';
+        for ($hop = 0; $hop < 12; $hop++) {
+            $body = $this->fetch($router, $url, 'GET', $ip);
+            self::assertStringContainsString('Audit Archive', $body, "hop {$hop}: served a real labyrinth page ({$url})");
+            $visited[$url] = true;
+
+            self::assertSame(1, preg_match('~archive continues at:(.*?)\(join the segments\)~s', $body, $c), "hop {$hop}: a comment-split next link is present");
+            $joined = preg_replace('/\s+/', '', html_entity_decode($c[1], ENT_QUOTES, 'UTF-8'));
+            self::assertSame(1, preg_match('~(/admin/audit-archive\S*?page-\d{6})~', (string) $joined, $n), "hop {$hop}: repaired a valid next-page URL");
+            $url = $n[1];
+        }
+
+        self::assertGreaterThanOrEqual(9, count($visited), 'the navigator walked > 8 distinct labyrinth pages from the stealth entry');
     }
 }

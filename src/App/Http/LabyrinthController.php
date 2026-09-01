@@ -438,8 +438,12 @@ final class LabyrinthController
                 'matched' => true,
                 'served' => $bytes > 0,
                 'severity' => 'info',
+                // FP-0245e (fable #2): `path` is coarse (.../page|record), so the reconstructed label
+                // (page|<shard>|<page> / record|<record>) rides `body` too, making the spec §5 "distinct
+                // labyrinth pages" rollup derivable from the log. Inert text — a seeded token, no real data.
                 'body' => sprintf(
-                    'technique=labyrinth depth=%d bytes=%d wall_ms=%d llm_nav=%s',
+                    'technique=labyrinth label=%s depth=%d bytes=%d wall_ms=%d llm_nav=%s',
+                    $route['label'],
                     $route['depth'],
                     $bytes,
                     $wallMs,

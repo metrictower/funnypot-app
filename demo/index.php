@@ -256,7 +256,6 @@ $adminAuth->bootstrap($config->adminPassword);
 // view (FP-0243b) reads the rollup tables through the SAME instance. $adminAuth + $configStore power
 // the FP-0242b session gate and the config-admin panel.
 $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore);
-$corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
 // LLM-only labyrinth (FP-0245b) — the deep-engagement decoy. Master switch OFF by default (opt-in via
 // FUNNYPOT_TARPIT); when off, $labyrinth is null so the Router never mounts the seam (the paths fall
 // through to the honeypot) and no entry hint is planted. Its own TarpitBudget over tarpit.sqlite is the
@@ -279,11 +278,12 @@ if ($config->tarpitEnabled) {
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
 // the tarpit is on, the login-SUCCESS response carries the LLM-only labyrinth entry hint (never a href).
-// NB (FP-0245b review): the hint is planted ONLY on HomeController's public-mode login-success. In
-// stealth mode (CorporateController fronts /), no page plants the hint, so the labyrinth is reachable
-// only by out-of-band path knowledge — the deep-engagement decoy is effectively public-mode-only today.
-// Extending the hint to the corporate login flow is a tracked fast-follow (FP-0245e).
 $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null);
+// The stealth-mode corporate front (fronts / and /login when FUNNYPOT_MODE=stealth). FP-0245e: it carries
+// the SAME LLM-only labyrinth entry hint on its credential-submission (login POST) response when the
+// tarpit is on, so the deep-engagement decoy engages in a stealth deployment too — never a href, never in
+// robots. Off (null) otherwise, exactly like HomeController, so nothing plants the hint when the tarpit is off.
+$corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
 // Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.
 $console = new ConsoleRouter(
