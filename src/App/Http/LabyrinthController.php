@@ -136,10 +136,11 @@ final class LabyrinthController
                 $html = substr($html, 0, $cap);
             }
             $bytes = strlen($html);
+            // No X-Robots-Tag / robots directive here: robots/nofollow are advisory-only and the ticket
+            // forbids relying on them — containment is TarpitBudget + the crawler-undiscoverable design.
             $this->emit(200, [
                 'Content-Type' => 'text/html; charset=utf-8',
                 'Cache-Control' => 'no-store',
-                'X-Robots-Tag' => 'noindex, nofollow',
             ], $html);
         } catch (Throwable $e) {
             // Headers not yet sent on the fault path (render builds the whole string first), so shed to a
@@ -376,7 +377,6 @@ final class LabyrinthController
     private function document(string $title, string $body): string
     {
         return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            . '<meta name="robots" content="noindex, nofollow">'
             . '<title>' . $this->esc($title) . '</title>'
             . '<style>' . $this->css() . '</style></head><body class="lab-body">'
             . '<main class="lab-wrap">' . $body . '</main></body></html>';

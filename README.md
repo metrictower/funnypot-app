@@ -81,8 +81,20 @@ uncapped tarpit would self-DoS, so every tarpit response is gated by a cross-wor
 a small global concurrency cap (default 4), per-IP = 1, and hourly byte / wall-time / page budgets,
 **fails closed** to a bounded 404 on any breach or storage fault, and self-reaps crashed holders on a
 short (~15 s) TTL. It is **off by default** (`FUNNYPOT_TARPIT=0`) and every cap is env-tunable
-(`FUNNYPOT_TARPIT_*` — see `demo/README.md`); the flagship LLM-only labyrinth and context-polluters
-that ride on it are separate, later layers.
+(`FUNNYPOT_TARPIT_*` — see `demo/README.md`).
+
+Riding on that foundation is the flagship **LLM-only labyrinth** (`src/App/Http/LabyrinthController.php`):
+an endless tree of deterministic, interlinked "audit archive" pages that makes an AI agent burn
+tokens/iterations on a maze that never ends, while each page is cheap for us (a **fixed** rows-per-page,
+so a deep page does no more work than page 1 — the infinite-ness lives in the *number* of pages, never
+the size of one). Its hard rule is that it is **crawler-undiscoverable and LLM-only-constructable**: it
+is **never** listed in robots.txt or a sitemap (robots.txt is advisory-only and, as the operator learned
+from a Baidu self-DoS, an *attractant* — never a boundary), its entry is only constructable from an
+LLM-only hint on the login-success funnel, and every interior link is emitted through `LlmOnlyLink`
+(a prose compute step, a base64/hex path to decode, or a whitespace-split path in an HTML comment) so an
+`href`-regex crawler finds nothing to follow — only an agent that reads and reasons descends. Every hit
+is gated by `TarpitBudget` first (the only per-IP guard on this gate-exempt route), and it is mounted
+only when `FUNNYPOT_TARPIT` is on. The context-polluters are a separate, later layer.
 
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
