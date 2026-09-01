@@ -58,10 +58,9 @@ untouched; the worker, not ingestion, pays for analytics. It is on by default an
 `_RETAIN_MIN_H`/`_HOUR_D`/`_DAY_D`). Rollups are derived data, kept off the attacker surface.
 
 An **operator analytics view** reads that rollup: an `analytics` panel on the dashboard —
-**auth-gated** behind the same admin password (`FUNNYPOT_ADMIN_PASSWORD`, sent as the
-`X-Admin-Token` header) that every other admin action uses, so it is no more reachable than the rest
-of the admin surface and, in stealth mode, rides the hidden dashboard path — never the deception
-surface. It shows protocol/status/severity/event breakdowns (house-style bars), an events-over-time
+**auth-gated** behind the operator session login (see [Admin panel & operator auth](#admin-panel--operator-auth))
+that every other admin action uses, so it is no more reachable than the rest of the admin surface and,
+in stealth mode, rides the hidden dashboard path — never the deception surface. It shows protocol/status/severity/event breakdowns (house-style bars), an events-over-time
 multi-series chart (per protocol; charting is [uPlot](https://github.com/leeoniya/uPlot), MIT,
 **vendored same-origin** — no CDN, so it adds no external fetch to the served page), top-N tables
 (source IP, ASN, country, tool, path) and at-a-glance tiles (events/sec, unique IPs,
@@ -355,8 +354,57 @@ writes are **fail-closed** — an invalid value is rejected so the operator sees
 optional (the read path works without it, just with one small SQLite `SELECT` per request); the demo
 image installs it (`demo/apcu.ini`).
 
-> A dedicated, off-attacker-surface admin UI over this store is FP-0242b (not in this layer). Until it
-> lands, edit the store via the CLI above or `sqlite3`.
+The store is editable from the CLI above or `sqlite3`, and — since FP-0242b — from the **admin panel**
+on the dashboard itself (below).
+
+## Admin panel & operator auth
+
+The operator controls live on the dashboard page itself, behind a real login (FP-0242b — it replaces
+the old shared `FUNNYPOT_ADMIN_PASSWORD` + `X-Admin-Token` compare). The panel and every mutating
+endpoint appear **only** on the dashboard path (the hidden `FUNNYPOT_DASHBOARD_PATH` in stealth mode,
+`FUNNYPOT_APP_PATH` in public mode) — never on the attacker-facing decoy surface. Everything else on
+the box routes to the honeypot, so a scanner can never reach the panel or a config write.
+
+**Auth.** An operator logs in with a username + password; the password is stored as an **Argon2id**
+hash in `storage/admin.sqlite` (its own DB, separate from the config store). A successful login mints
+a server-side session (a `Secure; HttpOnly; SameSite=Strict` cookie scoped to the dashboard path) with
+a per-session **CSRF token** that every mutating action must present. Repeated failed logins from an
+IP trigger a temporary **lockout** (a correct password is still refused inside the window), and every
+attempt is recorded. Auth is **fail-closed**: any doubt denies.
+
+**Creating the first operator.** On first boot, if no operator exists yet and `FUNNYPOT_ADMIN_PASSWORD`
+is set, the first user `admin` is seeded from it — then that env value goes **inert** (no standing
+shared-secret backdoor). If you never set it (or need to reset the password), create/reset the operator
+from the box without a redeploy:
+
+```bash
+php demo/admin-user.php admin 'a-strong-password'    # or omit the password to be prompted
+```
+
+**Logging in.** Browse to the dashboard path and use the **login** button, or knock directly with
+`?admin=login` (a GET that always serves the login form, even when the public view is `none`).
+
+**The config panel.** Once logged in, the **config** button opens the runtime config store: every
+registry knob grouped by area, its resolved value and source (stored / env / default), a live-vs-restart
+badge, inline edit (validated against the registry bounds, written through the store's audit +
+generation bump), a **reset** to fall a knob back to env/default, and the change **audit log**. Secret
+knobs are shown as set/unset only — a secret value is never rendered. (An empty value is rejected: to
+clear an override use reset, so an empty string can never silently mask a set env var.)
+
+**Public visibility (`dashboard.public_view`).** A knob controls what an **unauthenticated** visitor
+who finds the dashboard path sees — `full` (the live feed), `minimal` (header/lead/stats chrome only,
+no event table or controls), or `none` (a 404 decoy — nothing). An **authenticated operator always
+sees the full view** regardless. The default is **`none`** (the most secure, least-exposed value):
+out of the box an unauthenticated visitor on the dashboard path sees nothing, and the operator raises
+it to `minimal`/`full` from the panel if wanted. This is **fail-safe by design** — the config store
+returns the registry default on a read fault, so the least-exposed value has to be the baseline, and
+the enforcement maps any unknown value to `none` too.
+
+> **Fail-safe caveat (do this):** leave `FUNNYPOT_PUBLIC_VIEW` **unset** (or set it to the least-exposed
+> level you would ever want). `AppConfig` falls back to the env var if the config store is briefly
+> unreadable, so a stored tighter override (`none`) combined with a looser env value
+> (`FUNNYPOT_PUBLIC_VIEW=full`) would resolve to the looser env value on a store fault — MORE exposure
+> than you configured. With the env unset, a store fault can only ever fall to the safe baseline.
 
 ## Safety and invariants
 
