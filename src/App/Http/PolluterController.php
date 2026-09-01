@@ -112,6 +112,10 @@ final class PolluterController
         $path = substr($ctx->path, 0, strcspn($ctx->path, "?#"));
         $cap = max(1, $this->bytesPerRespMb) * 1024 * 1024;
         $startNs = hrtime(true);
+        // FP-0245d server latency: one bounded sleep, applied ONLY now that a slot is held (a shed
+        // request 404s above without ever reaching here), before the first byte — never a per-byte
+        // drip. Off by default; the slept ms is inside the wall window so it is charged to the ledger.
+        $this->budget->applyLatency();
         $bytes = 0;
         $technique = 'config';
         $started = false;

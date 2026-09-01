@@ -56,6 +56,14 @@ final class LabyrinthController
      *  off-by-default master switch + the per-IP/global TarpitBudget caps, never obscurity of the path. */
     public const ENTRY_BASE = '/admin/audit-archive';
 
+    /**
+     * FP-0245d client-pacing service-worker path (under the maze prefix, so {@see matches()} already
+     * routes it here). Served as a tiny STATIC asset — no TarpitBudget slot, no server latency — only
+     * when the client-pacing layer is armed (server-latency knob > 0). A browser registers it to pace
+     * the "export" download on its own CPU; a non-browser agent (curl/LLM fetch) simply ignores it.
+     */
+    public const PACING_SW_PATH = self::ENTRY_BASE . '/tarpit-sw.js';
+
     /** FIXED rows per page — the genuine O(page) bound (SHOULD-FIX 6). Never derived from the byte cap. */
     private const ROWS_PER_PAGE = 25;
 
@@ -79,6 +87,8 @@ final class LabyrinthController
         private ?Blocklist $blocklist = null,
         ?Closure $emitter = null,
         private ?SeededStream $stream = null,
+        private int $latencyMs = 0,
+        private string $pacingScript = '',
     ) {
         $this->stream = $stream ?? new SeededStream();
         $this->emitter = $emitter ?? static function (int $status, array $headers, string $body): void {
@@ -121,6 +131,22 @@ final class LabyrinthController
      */
     public function handle(RequestContext $ctx, string $clientIp): void
     {
+        // FP-0245d client pacing: the service worker is a tiny STATIC asset a browser fetches once, so it
+        // is served WITHOUT a TarpitBudget slot and WITHOUT server latency — pacing runs on the client's
+        // CPU, never ours. Only served when the client-pacing layer is armed; otherwise this path falls
+        // through to a normal (budget-gated) maze page like any other segment.
+        if ($this->clientPacingOn() && $this->pathOf($ctx->path) === self::PACING_SW_PATH) {
+            $this->emit(200, [
+                'Content-Type' => 'application/javascript; charset=utf-8',
+                // Broaden the SW scope to /admin/ so it can intercept the /admin/export/* polluter
+                // downloads (its own path only grants /admin/audit-archive/ by default).
+                'Service-Worker-Allowed' => '/admin/',
+                'Cache-Control' => 'no-store',
+            ], $this->pacingScript);
+
+            return;
+        }
+
         $slot = $this->budget->guard($clientIp);
         if ($slot === null) {
             $this->bounded404();
@@ -129,6 +155,11 @@ final class LabyrinthController
         }
 
         $startNs = hrtime(true);
+        // FP-0245d server latency: a single bounded sleep, applied ONLY now that a slot is held (so the
+        // number of latency-sleeping workers can never exceed MAX_CONCURRENT — a shed request never
+        // reaches here). Off by default. Measured inside the wall window below, so it is charged to the
+        // per-IP/global wall ledger and repeated hits eventually trip overBudget() → then served fast.
+        $this->budget->applyLatency();
         $bytes = 0;
         $route = $this->parse($ctx->path);
         try {
@@ -407,7 +438,38 @@ final class LabyrinthController
         return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             . '<title>' . $this->esc($title) . '</title>'
             . '<style>' . $this->css() . '</style></head><body class="lab-body">'
-            . '<main class="lab-wrap">' . $body . '</main></body></html>';
+            . '<main class="lab-wrap">' . $body . '</main>' . $this->pacingRegistration() . '</body></html>';
+    }
+
+    /** True when the FP-0245d client-pacing layer is armed (server-latency knob on AND a SW to serve). */
+    private function clientPacingOn(): bool
+    {
+        return $this->latencyMs > 0 && $this->pacingScript !== '';
+    }
+
+    /**
+     * The FP-0245d client-pacing registration — a FIXED constant snippet (same bytes on every page, so
+     * the O(page) byte-identity bound is preserved) that registers the tarpit service worker so a real
+     * browser paces the "export" download on its OWN CPU. It is NOT a followable link: no href/src
+     * attribute, and the SW path rides only a single-quoted JS string a `href|src` regex never matches
+     * (the crawler-undiscoverability invariant). Degrades gracefully: absent Service Worker support (or
+     * any error) it is a no-op and a normal browser renders the page unchanged. Empty when disarmed.
+     */
+    private function pacingRegistration(): string
+    {
+        if (!$this->clientPacingOn()) {
+            return '';
+        }
+        $sw = self::PACING_SW_PATH . '?i=' . max(0, min(TarpitBudget::LATENCY_HARD_CAP_MS, $this->latencyMs));
+
+        return '<script>(function(){if(!("serviceWorker" in navigator)){return;}'
+            . 'try{navigator.serviceWorker.register(' . json_encode($sw) . ',{scope:"/admin/"});}catch(e){}})();</script>';
+    }
+
+    /** Path with any query/fragment stripped (the matcher's canonical form). */
+    private function pathOf(string $path): string
+    {
+        return substr($path, 0, strcspn($path, "?#"));
     }
 
     private function css(): string

@@ -44,10 +44,21 @@ final class TarpitBudget
     public const FULL = 'full';               // global concurrency cap reached (or fail-closed) — shed
     public const PER_IP_FULL = 'per_ip_full'; // this IP already holds its allowance — shed
 
+    /**
+     * Hard ceiling on the optional server latency (FP-0245d), enforced HERE regardless of what the
+     * config passed — a second wall behind AppConfig's own clamp so an operator typo (or a future
+     * caller) can never pin a worker anywhere near nginx's 15 s fastcgi_read_timeout. 2000 ms ≪ 15 s,
+     * and ≪ the 15 s slot-reap TTL, so a latency-sleeping worker never outlives its own slot.
+     */
+    public const LATENCY_HARD_CAP_MS = 2000;
+
     private ?PDO $db = null;
 
     /** @var callable():int */
     private $clock;
+
+    /** @var callable(int):void the latency sleeper (ms → sleep); injectable so tests don't really sleep. */
+    private $sleeper;
 
     /**
      * @param bool $enabled       master switch (FUNNYPOT_TARPIT); OFF => guard() is inert (always null)
@@ -59,6 +70,9 @@ final class TarpitBudget
      * @param int  $pagesPerIpHr  tarpit pages/responses one IP may fetch per hour
      * @param int  $slotTtlSecs   crashed-holder slot TTL (SHORT, ~nginx read-timeout) — NOT the wall budget
      * @param callable():int|null $clock injectable unix-time source for tests (defaults to time())
+     * @param int  $latencyMs     optional server latency (FP-0245d) applied by {@see applyLatency()} ONLY
+     *                            while a slot is held; 0 = off (default), hard-clamped ≤ LATENCY_HARD_CAP_MS
+     * @param callable(int):void|null $sleeper injectable sleeper (ms) for tests; defaults to real usleep
      *
      * NOTE for the 0245b/c/d wiring (flagged by the FP-0245a review): the SHORT slotTtlSecs means a
      * LEGITIMATE holder whose response streams longer than the TTL will have its slot reaped out from
@@ -77,9 +91,48 @@ final class TarpitBudget
         private int $globalBytesHr = 1024 * 1024 * 1024,
         private int $pagesPerIpHr = 2000,
         private int $slotTtlSecs = 15,
-        ?callable $clock = null
+        ?callable $clock = null,
+        private int $latencyMs = 0,
+        ?callable $sleeper = null
     ) {
         $this->clock = $clock ?? static fn (): int => time();
+        $this->sleeper = $sleeper ?? static function (int $ms): void {
+            usleep($ms * 1000);
+        };
+    }
+
+    /**
+     * The optional server latency (FP-0245d), applied as a SINGLE bounded sleep on the calling worker.
+     *
+     * THE SELF-DoS INVARIANT: this holds a php-fpm worker for its whole duration, so it is only ever
+     * safe because the caller reaches it ONLY after a non-null {@see guard()} — i.e. while holding one
+     * of the small (default 4) TarpitBudget slots. A request that could not win a slot (or is over its
+     * hourly budget, or hit the master switch) gets guard() === null and is shed to a bounded 404
+     * WITHOUT ever calling this, so the number of workers ever sleeping at once can never exceed
+     * MAX_CONCURRENT. Never call this outside a held slot — that would reintroduce the 16-worker DoS.
+     *
+     * It is a single sleep BEFORE the first byte (never a per-byte drip), hard-clamped ≤
+     * LATENCY_HARD_CAP_MS regardless of config (defence behind AppConfig's clamp), and fail-safe: a
+     * sleeper fault adds NO latency and never propagates (a tarpit must never fail slow, never 500).
+     * Returns the ms actually slept so the caller charges it to the per-IP/global wall ledger — which is
+     * how an IP's repeated latency accrues until it trips overBudget() and then gets served immediately.
+     */
+    public function applyLatency(): int
+    {
+        if (!$this->enabled) {
+            return 0; // master switch off — inert (defence in depth; a caller only reaches here on WON)
+        }
+        $ms = max(0, min(self::LATENCY_HARD_CAP_MS, $this->latencyMs));
+        if ($ms <= 0) {
+            return 0; // default-off / disabled
+        }
+        try {
+            ($this->sleeper)($ms);
+
+            return $ms;
+        } catch (Throwable $e) {
+            return 0; // fail-safe: no latency, never a slow/500 failure mode
+        }
     }
 
     /**
