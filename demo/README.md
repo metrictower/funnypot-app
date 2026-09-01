@@ -78,7 +78,7 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S` | `120` | server wall-time one IP may consume across tarpit hits per hour (clamped 1–3600) |
 | `FUNNYPOT_TARPIT_GLOBAL_BYTES_HR_MB` | `1024` | aggregate tarpit egress ceiling per hour; over it, shed all tarpit to 404 (clamped 1–1048576) |
 | `FUNNYPOT_TARPIT_PAGES_PER_IP_HR` | `2000` | tarpit pages/responses one IP may fetch per hour (clamped 1–1000000) |
-| `FUNNYPOT_TARPIT_LATENCY_MS` | `0` | optional server latency while holding a slot (0 = off; clamped ≤ 2000 ms, well under nginx's 15 s read-timeout) |
+| `FUNNYPOT_TARPIT_LATENCY_MS` | `0` | optional tarpit latency (FP-0245d). `0` = off. A single bounded server sleep applied **only while holding a slot** (so ≤ `MAX_CONCURRENT` workers ever sleep at once), clamped ≤ 2000 ms (well under nginx's 15 s read-timeout) and charged to the wall ledger; also arms the client-side pacing service worker that paces the `/admin/export/*` download in a real browser (the attacker's CPU, not ours) |
 | `FUNNYPOT_TARPIT_DECOMP_CAP_MB` | `16` | decompression cap if gzip is ever used (decompressed ≤ this, ratio ≤ 100:1 — a nuisance, never a bomb; clamped 1–64) |
 
 The dashboard polls a delta feed (`/?feed=1&after=<cursor>`) that returns only rows appended since

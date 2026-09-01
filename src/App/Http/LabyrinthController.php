@@ -463,7 +463,7 @@ final class LabyrinthController
         $sw = self::PACING_SW_PATH . '?i=' . max(0, min(TarpitBudget::LATENCY_HARD_CAP_MS, $this->latencyMs));
 
         return '<script>(function(){if(!("serviceWorker" in navigator)){return;}'
-            . 'try{navigator.serviceWorker.register(' . json_encode($sw) . ',{scope:"/admin/"});}catch(e){}})();</script>';
+            . 'try{navigator.serviceWorker.register(' . json_encode($sw, JSON_UNESCAPED_SLASHES) . ',{scope:"/admin/"});}catch(e){}})();</script>';
     }
 
     /** Path with any query/fragment stripped (the matcher's canonical form). */

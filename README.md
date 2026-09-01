@@ -108,6 +108,18 @@ fingerprint gate. The labyrinth front-loads LLM-only links to the config/log so 
 and is re-billed on every later step. Same discipline as the labyrinth: `TarpitBudget::guard()` first,
 byte-capped, released in a `finally`, off unless `FUNNYPOT_TARPIT` is on, and never listed in robots.txt.
 
+A thin **latency layer** rides on top (opt-in, `FUNNYPOT_TARPIT_LATENCY_MS`, default `0`). Deep
+server-side slow-drip is deliberately **not** shipped — on synchronous php-fpm it pins a worker per slow
+client (the `DownloadRouter` lesson), so 16 slow clients would be a full outage. Instead the believable
+slowness runs on the **attacker's own CPU**: when the knob is on, the labyrinth registers a tiny tarpit
+service worker (`src/App/Tarpit/tarpit-sw.js`) that re-paces the already-fast, byte-capped `/admin/export/*`
+download in the browser (registered via a no-`href` snippet so it stays crawler-undiscoverable; a no-op
+if Service Workers are unavailable). The optional *server* latency is a **single bounded sleep**, hard-
+clamped ≤ 2000 ms and applied **only while a `TarpitBudget` slot is held** (`applyLatency()`), so at most
+`MAX_CONCURRENT` workers can ever be sleeping at once — a request that can't win a slot (or is over its
+hourly budget) is shed immediately, never delayed. The slept time is charged to the wall ledger, so an
+IP's total server latency is itself budget-bounded, and a store fault adds no latency (never a 500).
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 
