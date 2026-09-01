@@ -33,6 +33,12 @@ final class HomeController
         private AppConfig $config,
         private string $assetsDir,
         private ?Blocklist $blocklist = null,
+        /** FP-0245b: an LLM-only labyrinth ENTRY hint (an HTML comment carrying a base64 path + a
+         *  construct instruction), planted on the login-SUCCESS funnel below ONLY when the tarpit is
+         *  on (the composition root passes LabyrinthController::entryHint() then, else null). It is NOT
+         *  a plain href and NOT in robots, so a crawler cannot discover the maze; an LLM that submitted
+         *  the login decodes it. A crawler never POSTs, so it never even sees this response. */
+        private ?string $labyrinthEntryHint = null,
     ) {
     }
 
@@ -55,7 +61,10 @@ final class HomeController
         header('Content-Type: text/html; charset=utf-8');
         header('Location: ' . self::ADMIN_PANEL_PATH, true, 302);
         echo '<!doctype html><meta http-equiv="refresh" content="0;url=' . self::ADMIN_PANEL_PATH . '">'
-            . '<title>Redirecting&hellip;</title>';
+            . '<title>Redirecting&hellip;</title>'
+            // FP-0245b: the LLM-only labyrinth entry hint rides the login-SUCCESS response (a crawler
+            // never POSTs, so never reaches here; it is a comment, so carries no followable href).
+            . ($this->labyrinthEntryHint ?? '');
     }
 
     // --- views ---

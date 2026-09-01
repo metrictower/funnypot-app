@@ -27,6 +27,7 @@ final class Router
         private ?ConsoleRouter $console = null,
         private ?DownloadRouter $download = null,
         private ?DockerApiRouter $docker = null,
+        private ?LabyrinthController $labyrinth = null,
     ) {
     }
 
@@ -76,6 +77,14 @@ final class Router
         // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
         if ($this->docker !== null && $this->docker->matches($path)) {
             $this->docker->handle($ctx, $clientIp);
+
+            return;
+        }
+        // LLM-only labyrinth (FP-0245b). GET-only, gate-exempt (so the per-IP velocity gate never
+        // 404-pins a descending LLM), mounted only when the tarpit master switch is on; otherwise these
+        // paths fall through to the honeypot like any probe. Every hit is guarded by TarpitBudget first.
+        if ($method === 'GET' && $this->labyrinth !== null && $this->labyrinth->matches($path)) {
+            $this->labyrinth->handle($ctx, $clientIp);
 
             return;
         }
@@ -180,6 +189,14 @@ final class Router
         // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
         if ($this->docker !== null && $this->docker->matches($path)) {
             $this->docker->handle($ctx, $clientIp);
+
+            return;
+        }
+        // LLM-only labyrinth (FP-0245b). GET-only, gate-exempt (so the per-IP velocity gate never
+        // 404-pins a descending LLM), mounted only when the tarpit master switch is on; otherwise these
+        // paths fall through to the honeypot like any probe. Every hit is guarded by TarpitBudget first.
+        if ($method === 'GET' && $this->labyrinth !== null && $this->labyrinth->matches($path)) {
+            $this->labyrinth->handle($ctx, $clientIp);
 
             return;
         }

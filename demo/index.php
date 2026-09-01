@@ -33,6 +33,7 @@ use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Llm\CircuitBreaker;
 use Funnypot\App\Llm\LlmClient;
@@ -52,6 +53,7 @@ use Funnypot\App\Storage\FakePersistenceStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteHitStore;
+use Funnypot\App\Storage\TarpitBudget;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -255,8 +257,29 @@ $adminAuth->bootstrap($config->adminPassword);
 // the FP-0242b session gate and the config-admin panel.
 $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore);
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
-// The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath.
-$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist);
+// LLM-only labyrinth (FP-0245b) — the deep-engagement decoy. Master switch OFF by default (opt-in via
+// FUNNYPOT_TARPIT); when off, $labyrinth is null so the Router never mounts the seam (the paths fall
+// through to the honeypot) and no entry hint is planted. Its own TarpitBudget over tarpit.sqlite is the
+// ONLY per-IP guard on the gate-exempt route; the caps are the anti-self-DoS backstop, not robots.txt.
+$labyrinth = null;
+if ($config->tarpitEnabled) {
+    $tarpitBudget = new TarpitBudget(
+        $config->tarpitDbPath,
+        true,
+        $config->tarpitMaxConcurrent,
+        $config->tarpitMaxPerIp,
+        $config->tarpitBytesPerIpHrMb * 1024 * 1024,
+        $config->tarpitWallPerIpHrS * 1000,
+        $config->tarpitGlobalBytesHrMb * 1024 * 1024,
+        $config->tarpitPagesPerIpHr,
+        15, // SHORT slot-reap TTL, aligned to nginx fastcgi_read_timeout 15s (NOT the 120s/hr wall budget)
+    );
+    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist);
+}
+
+// The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
+// the tarpit is on, the login-SUCCESS response carries the LLM-only labyrinth entry hint (never a href).
+$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
 // Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.
 $console = new ConsoleRouter(
@@ -292,4 +315,4 @@ if ($config->dockerApiEnabled) {
     $docker = new DockerApiRouter(new DockerApiResponder($store, $config->personaSeed, $abuse));
 }
 
-(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth))->dispatch($context, $clientIp, $tokenVerdict);
