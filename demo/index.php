@@ -279,6 +279,10 @@ if ($config->tarpitEnabled) {
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
 // the tarpit is on, the login-SUCCESS response carries the LLM-only labyrinth entry hint (never a href).
+// NB (FP-0245b review): the hint is planted ONLY on HomeController's public-mode login-success. In
+// stealth mode (CorporateController fronts /), no page plants the hint, so the labyrinth is reachable
+// only by out-of-band path knowledge — the deep-engagement decoy is effectively public-mode-only today.
+// Extending the hint to the corporate login flow is a tracked fast-follow (FP-0245e).
 $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
 // Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.

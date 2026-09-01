@@ -49,7 +49,10 @@ use Throwable;
  */
 final class LabyrinthController
 {
-    /** The labyrinth root prefix. A made-up path no scanner probes by name — only LLM-constructable. */
+    /** The labyrinth root prefix. Not linked anywhere a crawler can reach it; the entry is only ever
+     *  LLM-constructable (base64 in a login-success HTML comment). NB: this constant is public in an
+     *  open-source repo, so a funnypot-aware scanner could GET it by name — the real containment is the
+     *  off-by-default master switch + the per-IP/global TarpitBudget caps, never obscurity of the path. */
     public const ENTRY_BASE = '/admin/audit-archive';
 
     /** FIXED rows per page — the genuine O(page) bound (SHOULD-FIX 6). Never derived from the byte cap. */
@@ -196,8 +199,10 @@ final class LabyrinthController
             : 'page|' . $shard . '|' . $page;
 
         // depth = how far a reasoning agent has walked: pagination index plus a shard bump, so a shard
-        // leaf reads as "deeper" than a shallow page for the wasted-budget telemetry.
-        $depth = $kind === 'record' ? self::MAX_PAGE : ($page + ($shard !== '' ? 1000 : 0));
+        // leaf reads as "deeper" than a shallow page for the wasted-budget telemetry. A record leaf gets
+        // a modest flat bump (deeper than a shard leaf) — NOT MAX_PAGE, which would poison the spec §5
+        // max-depth rollup by making one record fetch dwarf a genuine multi-page descent (FP-0245b review).
+        $depth = $kind === 'record' ? 2000 : ($page + ($shard !== '' ? 1000 : 0));
 
         return ['kind' => $kind, 'page' => $page, 'shard' => $shard, 'record' => $record, 'label' => $label, 'depth' => $depth];
     }
