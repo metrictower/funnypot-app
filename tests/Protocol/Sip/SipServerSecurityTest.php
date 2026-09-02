@@ -254,6 +254,58 @@ final class SipServerSecurityTest extends TestCase
         $this->assertTrue(end($logged)['reportable'], 'ACK confirming two-way call setup must be reportable');
     }
 
+    /**
+     * FP-0247 anti-spoof (re-review blocking): a REGISTER nonce is bound to the source IP it was
+     * issued to. An attacker at IP-A harvests a nonce from a real 401, then sends ONE spoofed UDP
+     * REGISTER with source = victim IP-B carrying that nonce — that must NOT validate the round-trip
+     * and must report reportable=false. A nonce used from the SAME UDP source still reports, and is
+     * one-shot (a captured nonce cannot be replayed).
+     */
+    public function test_register_nonce_is_bound_to_issuing_source_ip(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+        $refProp = new \ReflectionProperty($server, 'activeNonces');
+        $refProp->setAccessible(true);
+
+        // IP-A sends a real first-leg REGISTER and is issued a nonce (bound to IP-A).
+        $reg1 = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n1\r\nCSeq: 1 REGISTER\r\n\r\n");
+        self::assertNotNull($reg1);
+        $server->dispatchMessage($reg1, '203.0.113.10', 5060, 'udp');   // IP-A
+        $nonceA = (string) array_key_last($refProp->getValue($server));
+        self::assertNotSame('', $nonceA, 'a 401 challenge must issue a nonce');
+
+        // Attacker replays that nonce in ONE spoofed UDP REGISTER whose source is the victim (IP-B).
+        $spoof = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n2\r\nCSeq: 2 REGISTER\r\n"
+            . "Authorization: Digest username=\"101\", realm=\"asterisk\", nonce=\"{$nonceA}\", uri=\"sip:target\", response=\"resp\"\r\n\r\n");
+        self::assertNotNull($spoof);
+        $server->dispatchMessage($spoof, '198.51.100.23', 5060, 'udp');   // spoofed source = victim
+        self::assertFalse(end($logged)['reportable'], 'a nonce issued to IP-A must not validate a spoofed REGISTER from IP-B');
+
+        // Positive control: a fresh nonce issued to IP-C, replayed by IP-C itself over UDP, still reports.
+        $reg3 = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n3\r\nCSeq: 1 REGISTER\r\n\r\n");
+        self::assertNotNull($reg3);
+        $server->dispatchMessage($reg3, '203.0.113.44', 5060, 'udp');   // IP-C
+        $nonceC = (string) array_key_last($refProp->getValue($server));
+        self::assertNotSame('', $nonceC);
+        self::assertNotSame($nonceA, $nonceC, 'each challenge issues a distinct nonce');
+
+        $reg4 = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n4\r\nCSeq: 2 REGISTER\r\n"
+            . "Authorization: Digest username=\"101\", realm=\"asterisk\", nonce=\"{$nonceC}\", uri=\"sip:target\", response=\"resp\"\r\n\r\n");
+        self::assertNotNull($reg4);
+        $server->dispatchMessage($reg4, '203.0.113.44', 5060, 'udp');   // same source IP-C
+        self::assertTrue(end($logged)['reportable'], 'a nonce used from the same UDP source it was issued to still reports');
+
+        // One-shot: the nonce is consumed on first use, so a replay (even from IP-C) is no longer valid.
+        $reg5 = SipMessage::parse("REGISTER sip:target SIP/2.0\r\nCall-ID: n5\r\nCSeq: 3 REGISTER\r\n"
+            . "Authorization: Digest username=\"101\", realm=\"asterisk\", nonce=\"{$nonceC}\", uri=\"sip:target\", response=\"resp\"\r\n\r\n");
+        self::assertNotNull($reg5);
+        $server->dispatchMessage($reg5, '203.0.113.44', 5060, 'udp');
+        self::assertFalse(end($logged)['reportable'], 'a consumed one-shot nonce cannot be replayed');
+    }
+
     public function test_no_rtp_reflection_without_return_routable_ack(): void
     {
         $logged = [];

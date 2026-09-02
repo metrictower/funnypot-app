@@ -53,7 +53,14 @@ final class SipServer
     /** @var array<string, SipSession> Active sessions keyed by callId + peerAddr */
     private array $sessions = [];
 
-    /** @var array<string, string> Nonce store: nonce => issued timestamp */
+    /**
+     * Nonce store: nonce => ['ip' => issuing peer IP, 'ts' => issued unix time]. The issuing IP binds
+     * each UDP nonce to the address it was challenged to (FP-0247 anti-spoof): a nonce harvested from a
+     * real 401 must not validate a spoofed REGISTER replayed from a different (victim) source. Nonces
+     * are one-shot (consumed on first response) and expire after 300s.
+     *
+     * @var array<string, array{ip: string, ts: int}>
+     */
     private array $activeNonces = [];
 
     /**
@@ -689,7 +696,9 @@ final class SipServer
         if (empty($auth)) {
             // Step 1: Challenge with 401 Unauthorized
             $nonce = bin2hex(random_bytes(16));
-            $this->activeNonces[$nonce] = (string) time();
+            // Bind the nonce to the address it is issued to: over spoofable UDP it is valid only when
+            // replayed from this same source (FP-0247 anti-spoof). Keep the 300s expiry on 'ts'.
+            $this->activeNonces[$nonce] = ['ip' => $peerIp, 'ts' => time()];
 
             $res = $req->buildUnauthorized($toTag, $this->config->realm, $nonce, $this->config->userAgent);
             $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
@@ -715,8 +724,18 @@ final class SipServer
         $responseHash = $auth['response'] ?? '';
         $nonce = $auth['nonce'] ?? '';
 
-        // Verify nonce was issued by us (proves two-way round-trip!)
-        $validRoundTrip = isset($this->activeNonces[$nonce]) || $transport === 'tcp';
+        // Verify the nonce was issued by us AND — over spoofable UDP — that this response comes from
+        // the SAME address the nonce was challenged to. A single spoofed UDP REGISTER carrying a nonce
+        // harvested from a real 401 (issued to the attacker's own IP) would otherwise report the
+        // spoofed victim as reportable=true. TCP is source-verified by the handshake, so it stays an
+        // accepted path regardless of the stored IP. The nonce is consumed on first response (one-shot)
+        // so a captured nonce cannot be replayed — from any source — for the 300s expiry window.
+        $nonceEntry = $this->activeNonces[$nonce] ?? null;
+        $nonceMatchesSource = is_array($nonceEntry) && ($nonceEntry['ip'] ?? '') === $peerIp;
+        $validRoundTrip = $nonceMatchesSource || $transport === 'tcp';
+        if ($nonceEntry !== null) {
+            unset($this->activeNonces[$nonce]);   // one-shot: a challenge nonce is spent on first use
+        }
 
         // Credential capture for an already-known AOR.
         // Once any credential has been latched for (IP, extension) we ACCEPT every subsequent
@@ -1589,10 +1608,11 @@ final class SipServer
             }
         }
 
-        // Clean nonces older than 300s
+        // Clean nonces older than 300s. Entries are ['ip'=>..,'ts'=>..]; tolerate a legacy scalar too.
         $expireTime = time() - 300;
-        foreach ($this->activeNonces as $nonce => $ts) {
-            if ((int) $ts < $expireTime) {
+        foreach ($this->activeNonces as $nonce => $entry) {
+            $ts = is_array($entry) ? (int) ($entry['ts'] ?? 0) : (int) $entry;
+            if ($ts < $expireTime) {
                 unset($this->activeNonces[$nonce]);
             }
         }
