@@ -13,6 +13,7 @@ use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
+use Funnypot\App\ThreatIntel\ReportComment;
 use Funnypot\Core\RequestContext;
 use Throwable;
 
@@ -292,7 +293,12 @@ class AiChatHandler
     private function report(RequestContext $ctx, string $ip): void
     {
         // Web-app-attack category; the self-guard (FUNNYPOT_SELF_IPS) lives inside enqueue().
-        $this->abuse?->enqueue($ip, AttackClassifier::AI_API_RECON . ' ' . substr($ctx->path, 0, 200), '21');
+        // FP-0247 (Fix H / fable #3b): the path is attacker-controlled and AbuseIPDB comments are
+        // PUBLIC — a Gemini-dialect request carries `?key=AIza...`, so republishing it verbatim leaks a
+        // Google API key. Route it through ReportComment::build() to redact secrets, strip a
+        // third-party host, and drop control bytes/blobs.
+        $comment = ReportComment::build(AttackClassifier::AI_API_RECON, $ctx->path);
+        $this->abuse?->enqueue($ip, $comment, '21');
     }
 
     /** A do-nothing request for the error/fallback paths, where the dialect ignores its fields. */

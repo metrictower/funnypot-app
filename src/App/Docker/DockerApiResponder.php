@@ -7,6 +7,7 @@ namespace Funnypot\App\Docker;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
+use Funnypot\App\ThreatIntel\ReportComment;
 use Funnypot\Core\RequestContext;
 
 /**
@@ -183,9 +184,13 @@ class DockerApiResponder
     {
         // Web-app-attack category; the self-guard (FUNNYPOT_SELF_IPS) lives inside enqueue(). A create
         // carries the image the attacker tried to deploy, which is the useful bit of the report.
+        // FP-0247 (Fix H / fable #3b): both the image ref and the path are attacker-controlled and
+        // AbuseIPDB comments are PUBLIC — an `image=` ref routinely names a third-party registry host
+        // and a path can carry secrets. Route the attacker-controlled detail through
+        // ReportComment::build() to strip hosts/secrets/control bytes.
         $comment = $kind === 'create' && $image !== ''
-            ? AttackClassifier::DOCKER_API . ' container-create image=' . substr($image, 0, 160)
-            : AttackClassifier::DOCKER_API . ' ' . $ctx->method . ' ' . substr($ctx->path, 0, 160);
+            ? ReportComment::build(AttackClassifier::DOCKER_API . ' container-create', 'image=' . $image)
+            : ReportComment::build(AttackClassifier::DOCKER_API . ' ' . $ctx->method, $ctx->path);
         $this->abuse?->enqueue($ip, $comment, '21');
     }
 }
