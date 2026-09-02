@@ -64,4 +64,22 @@ final class Reader
 
         return $s === '' ? [] : explode(',', $s);
     }
+
+    /**
+     * Read an mpint (RFC 4251 §5) and return its unsigned big-endian magnitude. A zero value is the
+     * empty string; a negative value (top bit of the first byte set, i.e. no 0x00 sign byte) is
+     * rejected — sshd's BN_is_negative check — so a peer public value is always a positive integer.
+     */
+    public function mpint(): string
+    {
+        $s = $this->string();
+        if ($s === '') {
+            return '';
+        }
+        if (ord($s[0]) & 0x80) {
+            throw new \RuntimeException('ssh: negative mpint');
+        }
+
+        return ltrim($s, "\x00");
+    }
 }

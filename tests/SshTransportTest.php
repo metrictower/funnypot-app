@@ -7,7 +7,7 @@ namespace Funnypot\Tests;
 use Funnypot\Protocol\Ssh\Buf;
 use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
 use Funnypot\Protocol\Ssh\Ctr;
-use Funnypot\Protocol\Ssh\HostKey;
+use Funnypot\Protocol\Ssh\HostKey\Ed25519;
 use Funnypot\Protocol\Ssh\Reader;
 use Funnypot\Protocol\Ssh\Transport;
 use PHPUnit\Framework\TestCase;
@@ -118,11 +118,11 @@ final class SshTransportTest extends TestCase
         self::assertNotFalse($path);
         unlink($path);
         try {
-            $hostKey = HostKey::load($path);
+            $hostKey = Ed25519::load($path);
             self::assertFileExists($path, 'host key is persisted on first use');
 
             // Reloading the same path yields a stable key (no client host-key warnings).
-            $again = HostKey::load($path);
+            $again = Ed25519::load($path);
             self::assertSame($hostKey->publicBlob(), $again->publicBlob());
 
             $hash = random_bytes(32);

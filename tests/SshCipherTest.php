@@ -11,7 +11,6 @@ use Funnypot\Protocol\Ssh\Cipher\CtrHmac;
 use Funnypot\Protocol\Ssh\Cipher\Gcm;
 use Funnypot\Protocol\Ssh\Cipher\Poly1305;
 use Funnypot\Protocol\Ssh\Ctr;
-use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\Reader;
 use Funnypot\Protocol\Ssh\SshConnection;
 use Funnypot\Protocol\Ssh\Transport;
@@ -410,7 +409,7 @@ final class SshCipherTest extends TestCase
     public function test_served_kexinit_hassh_is_unchanged(): void
     {
         $server = new SshConnection(
-            $this->hostKey(),
+            SshHostKeyFixture::set(),
             new ProtocolSession(1),
             static function (): void {
             },
@@ -465,15 +464,5 @@ final class SshCipherTest extends TestCase
         $recv->enableRecv(CipherSuite::build($cipher, $mac, $key, $iv, $macKey));
 
         return [$send, $recv];
-    }
-
-    private function hostKey(): HostKey
-    {
-        $path = tempnam(sys_get_temp_dir(), 'fpc');
-        if ($path !== false) {
-            @unlink($path);
-        }
-
-        return HostKey::load($path ?: sys_get_temp_dir() . '/fpc');
     }
 }

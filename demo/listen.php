@@ -24,7 +24,7 @@ use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Protocol\Listener;
 use Funnypot\Protocol\ProtocolTemplateSet;
-use Funnypot\Protocol\Ssh\HostKey;
+use Funnypot\Protocol\Ssh\HostKey\HostKeySet;
 use Funnypot\Protocol\Ssh\SshServer;
 use Funnypot\Protocol\Vnc\VncConfig;
 use Funnypot\Protocol\Vnc\VncServer;
@@ -130,7 +130,7 @@ $fsSeed = $config->personaSeed;
 // SSH-2.0 handshake and drops the attacker into the same fake shell telnet uses.
 if ($protocol === 'ssh') {
     $keyPath = getenv('FUNNYPOT_SSH_HOSTKEY') ?: __DIR__ . '/storage/ssh_host_ed25519';
-    (new SshServer(HostKey::load($keyPath), $log, identitySeed: $fsSeed, secret: $fsSecret))->run($bind);
+    (new SshServer(HostKeySet::load($keyPath), $log, identitySeed: $fsSeed, secret: $fsSecret))->run($bind);
     exit(0);
 }
 
