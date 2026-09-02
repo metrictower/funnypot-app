@@ -6,6 +6,7 @@ namespace Funnypot\Tests;
 
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Ssh\Buf;
+use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
 use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\Reader;
 use Funnypot\Protocol\Ssh\SshConnection;
@@ -333,8 +334,8 @@ final class SshTestClient
 
     public function enableEncryption(): void
     {
-        $this->transport->enableSend($this->keyC2S, $this->ivC2S, $this->macC2S);
-        $this->transport->enableRecv($this->keyS2C, $this->ivS2C, $this->macS2C);
+        $this->transport->enableSend(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyC2S, $this->ivC2S, $this->macC2S));
+        $this->transport->enableRecv(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyS2C, $this->ivS2C, $this->macS2C));
     }
 
     /** Frame + hand a payload to the server. */

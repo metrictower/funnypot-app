@@ -57,19 +57,21 @@ final class Kex
         $h = hash('sha256', $hashInput, true);
         $sig = $hostKey->sign($h);
 
-        // session_id == H for the first (and only) key exchange.
-        $derive = static fn (string $letter): string => hash('sha256', $kMpint . $h . $letter . $h, true);
+        // session_id == H for the first (and only) key exchange. Sizes are the aes256-ctr +
+        // hmac-sha2-256 material this ticket negotiates; FP-0291 replaces them with the negotiated
+        // CipherSuite sizes. For need <= 32 this is bit-identical to the former one-shot formula.
+        $k = KeyDerivation::deriveAll('sha256', $kMpint, $h, $h, 16, 32, 32);
 
         return new self(
             $qS,
             $h,
             $sig,
-            substr($derive('A'), 0, 16), // IV client->server (AES block)
-            substr($derive('B'), 0, 16), // IV server->client
-            substr($derive('C'), 0, 32), // key client->server (AES-256)
-            substr($derive('D'), 0, 32), // key server->client
-            $derive('E'),                // MAC key client->server (hmac-sha2-256)
-            $derive('F')                 // MAC key server->client
+            $k['ivC2S'],  // IV client->server (AES block)
+            $k['ivS2C'],  // IV server->client
+            $k['keyC2S'], // key client->server (AES-256)
+            $k['keyS2C'], // key server->client
+            $k['macC2S'], // MAC key client->server (hmac-sha2-256)
+            $k['macS2C']  // MAC key server->client
         );
     }
 }
