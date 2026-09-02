@@ -7,7 +7,6 @@ namespace Funnypot\Tests;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Ssh\Buf;
 use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
-use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\Reader;
 use Funnypot\Protocol\Ssh\SshConnection;
 use Funnypot\Protocol\Ssh\Transport;
@@ -61,7 +60,7 @@ final class SshHandshakeTest extends TestCase
 
     public function test_unsupported_client_version_is_dropped(): void
     {
-        $server = new SshConnection($this->hostKey(), new ProtocolSession(1), static function (): void {
+        $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(1), static function (): void {
         });
         $server->onConnect();
         $server->takeOut();
@@ -150,7 +149,7 @@ final class SshHandshakeTest extends TestCase
     private function handshake(array &$log, int $seed = 99, int $authRejectBudget = 0): array
     {
         $server = new SshConnection(
-            $this->hostKey(),
+            SshHostKeyFixture::set(),
             new ProtocolSession($seed),
             static function (string $event, string $detail) use (&$log): void {
                 $log[] = $event . ':' . $detail;
@@ -231,16 +230,6 @@ final class SshHandshakeTest extends TestCase
         }
 
         return $data;
-    }
-
-    private function hostKey(): HostKey
-    {
-        $path = tempnam(sys_get_temp_dir(), 'fph');
-        if ($path !== false) {
-            @unlink($path);
-        }
-
-        return HostKey::load($path ?: sys_get_temp_dir() . '/fph');
     }
 }
 

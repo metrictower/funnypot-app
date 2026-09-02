@@ -6,6 +6,7 @@ namespace Funnypot\Protocol\Ssh;
 
 use Funnypot\Protocol\MalformedStream;
 use Funnypot\Protocol\ProtocolSession;
+use Funnypot\Protocol\Ssh\HostKey\HostKeySet;
 
 /**
  * Zero-dependency, single-process TCP server for the pure-PHP SSH honeypot. Like the plain
@@ -36,7 +37,7 @@ final class SshServer
      *                 every login).
      */
     public function __construct(
-        private HostKey $hostKey,
+        private HostKeySet $hostKeys,
         private $logger,
         private string $serverVersion = '',
         ?int $rejectBudget = null,
@@ -163,7 +164,7 @@ final class SshServer
         $session = new ProtocolSession(crc32($ip));
         $session->peerIp = $ip;
         $conn = new SshConnection(
-            $this->hostKey,
+            $this->hostKeys,
             $session,
             fn (string $event, string $detail) => $this->log($ip, $port, $event, $detail),
             $this->serverVersion,

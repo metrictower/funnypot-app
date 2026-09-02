@@ -6,7 +6,6 @@ namespace Funnypot\Tests;
 
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\ProtocolTemplateSet;
-use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\SshConnection;
 use PHPUnit\Framework\TestCase;
 
@@ -280,16 +279,10 @@ final class ProtocolHoneypotEvasionTest extends TestCase
     /** @param array<int,string> $log */
     private function freshSshConnection(array &$log): SshConnection
     {
-        $path = tempnam(sys_get_temp_dir(), 'fph');
-        if ($path !== false) {
-            @unlink($path);
-        }
-        $hostKey = HostKey::load($path !== false ? $path : sys_get_temp_dir() . '/fph');
-
         // No explicit server-version arg: this pins the real production default
         // ('SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10') rather than a test-only stand-in.
         return new SshConnection(
-            $hostKey,
+            SshHostKeyFixture::set(),
             new ProtocolSession(1),
             static function (string $event, string $detail) use (&$log): void {
                 $log[] = $event . ':' . $detail;

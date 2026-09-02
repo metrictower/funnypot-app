@@ -6,13 +6,16 @@ namespace Funnypot\Protocol\Ssh;
 
 use Funnypot\Protocol\MalformedStream;
 use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
+use Funnypot\Protocol\Ssh\HostKey\HostKeySet;
+use Funnypot\Protocol\Ssh\Kex\KexAlgorithm;
+use Funnypot\Protocol\Ssh\Kex\KexSuite;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Shell\FakeShell;
 use Funnypot\Protocol\TrollStream;
 
 /**
  * One attacker's SSH-2.0 session, driven purely by inbound bytes. It walks the transport handshake
- * (version exchange → KEXINIT → curve25519 kex → NEWKEYS), accepts any login (a honeypot wants
+ * (version exchange → KEXINIT → the negotiated kex → NEWKEYS), accepts any login (a honeypot wants
  * attackers in, not out), and opens a session channel whose shell is the shared {@see FakeShell} —
  * the very same fake shell telnet uses, so a real `ssh` client lands at a believable prompt with
  * every command logged. An optional anti-fingerprint reject (off by default; see the constructor)
@@ -34,8 +37,12 @@ final class SshConnection
     private const MSG_SERVICE_ACCEPT = 6;
     private const MSG_KEXINIT = 20;
     private const MSG_NEWKEYS = 21;
+    // 30 is shared by KEX_ECDH_INIT / KEXDH_INIT / (unsupported) GEX_REQUEST_OLD — routed by the
+    // negotiated kex object, never decoded here. 32/34 are the two GEX inbound messages we route.
     private const MSG_KEX_ECDH_INIT = 30;
     private const MSG_KEX_ECDH_REPLY = 31;
+    private const MSG_KEX_DH_GEX_INIT = 32;
+    private const MSG_KEX_DH_GEX_REQUEST = 34;
     private const MSG_USERAUTH_REQUEST = 50;
     private const MSG_USERAUTH_FAILURE = 51;
     private const MSG_USERAUTH_SUCCESS = 52;
@@ -72,7 +79,9 @@ final class SshConnection
     private string $clientVersion = '';
     private string $serverKexInit = '';
     private string $clientKexInit = '';
-    private ?Kex $kex = null;
+    private ?KexAlgorithm $kex = null;
+    /** @var array{ivC2S:string,ivS2C:string,keyC2S:string,keyS2C:string,macC2S:string,macS2C:string}|null */
+    private ?array $keys = null;
 
     private bool $authed = false;
     private int $authTries = 0;
@@ -100,7 +109,7 @@ final class SshConnection
      *        before auth is accepted. Every attempt, rejected ones included, is still logged.
      */
     public function __construct(
-        private HostKey $hostKey,
+        private HostKeySet $hostKeys,
         private ProtocolSession $session,
         private $logger,
         private string $serverVersion = 'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10',
@@ -204,19 +213,21 @@ final class SshConnection
                 $this->clientKexInit = $payload;
                 $this->negotiate($payload);
                 break;
-            case self::MSG_KEX_ECDH_INIT:
-                $this->doKex($payload);
+            case self::MSG_KEX_ECDH_INIT:        // 30 — also KEXDH_INIT / (unsupported) GEX_REQUEST_OLD
+            case self::MSG_KEX_DH_GEX_INIT:      // 32
+            case self::MSG_KEX_DH_GEX_REQUEST:   // 34
+                $this->kexMessage($msg, $payload);
                 break;
             case self::MSG_NEWKEYS:
                 // The client's NEWKEYS is the last plaintext inbound packet; only now does the
                 // receive side switch to ciphertext, using the client->server keys from the kex.
-                if ($this->kex !== null) {
+                if ($this->keys !== null) {
                     $this->transport->enableRecv(CipherSuite::build(
                         'aes256-ctr',
                         'hmac-sha2-256',
-                        $this->kex->keyC2S,
-                        $this->kex->ivC2S,
-                        $this->kex->macC2S
+                        $this->keys['keyC2S'],
+                        $this->keys['ivC2S'],
+                        $this->keys['macC2S']
                     ));
                 }
                 break;
@@ -255,8 +266,17 @@ final class SshConnection
                 break;
             default:
                 // Unknown/unsupported message — acknowledge per spec, stay up.
-                $this->send((new Buf())->byte(self::MSG_UNIMPLEMENTED)->uint32(0)->get());
+                $this->sendUnimplemented();
         }
+    }
+
+    /**
+     * SSH_MSG_UNIMPLEMENTED (RFC 4253 §11.4). The uint32 should be the offending packet's sequence
+     * number; today it is a fixed 0 (a pre-existing nit tracked for FP-0290).
+     */
+    private function sendUnimplemented(): void
+    {
+        $this->send((new Buf())->byte(self::MSG_UNIMPLEMENTED)->uint32(0)->get());
     }
 
     private function buildKexInit(): string
@@ -294,51 +314,70 @@ final class SshConnection
         $encS2C = $r->nameList();
         $macC2S = $r->nameList();
         $macS2C = $r->nameList();
+        $kexName = self::pick($kex, self::KEX_ALGOS);
+        $hostName = self::pick($host, self::HOSTKEY_ALGOS);
         if (
-            self::pick($kex, self::KEX_ALGOS) === null
-            || self::pick($host, self::HOSTKEY_ALGOS) === null
+            $kexName === null
+            || $hostName === null
             || self::pick($encC2S, self::CIPHERS) === null
             || self::pick($encS2C, self::CIPHERS) === null
             || self::pick($macC2S, self::MACS) === null
             || self::pick($macS2C, self::MACS) === null
         ) {
             $this->disconnect('no common algorithm');
-        }
-    }
 
-    private function doKex(string $payload): void
-    {
-        $r = new Reader($payload);
-        $r->byte();
-        $qC = $r->string();
-        $kex = Kex::curve25519(
+            return;
+        }
+        // Build the kex object from the negotiated names; it — not this class — owns what msg 30
+        // means. With today's unchanged lists this is always Ecdh('curve25519-sha256') + Ed25519.
+        $this->kex = KexSuite::create(
+            $kexName,
             $this->clientVersion,
             $this->serverVersion,
             $this->clientKexInit,
             $this->serverKexInit,
-            $this->hostKey,
-            $qC
+            $this->hostKeys->forAlgorithm($hostName)
         );
+    }
 
-        $reply = (new Buf())
-            ->byte(self::MSG_KEX_ECDH_REPLY)
-            ->string($this->hostKey->publicBlob())
-            ->string($kex->serverEphemeralPublic)
-            ->string($kex->signature)
-            ->get();
-        $this->send($reply);
+    /**
+     * A kex-phase message (30/32/34), routed to the negotiated kex object which alone knows what the
+     * shared number 30 means. A message before KEXINIT, or one the kex does not expect in its
+     * current state (30 under GEX, 34 under ECDH, 32 before 34, anything after completion), draws
+     * SSH_MSG_UNIMPLEMENTED — mirroring sshd's kex_protocol_error. A malformed expected message
+     * throws and is caught by feed() as a protocol error (disconnect), exactly as before.
+     */
+    private function kexMessage(int $msg, string $payload): void
+    {
+        if ($this->kex === null) {
+            $this->sendUnimplemented(); // a kex message before KEXINIT
+            return;
+        }
+        $replies = $this->kex->handle($msg, $payload);
+        if ($replies === null) {
+            $this->sendUnimplemented(); // wrong message for this kex / this state
+            return;
+        }
+        foreach ($replies as $reply) {
+            $this->send($reply);
+        }
+        $result = $this->kex->result();
+        if ($result === null) {
+            return; // GEX: GROUP sent, waiting for the client's INIT
+        }
         $this->send((new Buf())->byte(self::MSG_NEWKEYS)->get());
 
+        // aes256-ctr + hmac-sha2-256 sizes; FP-0291: CipherSuite sizes of the negotiated names.
+        $this->keys = $result->keys(16, 32, 32);
         // Our outbound half switches to ciphertext right after our NEWKEYS; the inbound half waits
         // for the client's NEWKEYS (still plaintext), handled in the MSG_NEWKEYS case.
         $this->transport->enableSend(CipherSuite::build(
             'aes256-ctr',
             'hmac-sha2-256',
-            $kex->keyS2C,
-            $kex->ivS2C,
-            $kex->macS2C
+            $this->keys['keyS2C'],
+            $this->keys['ivS2C'],
+            $this->keys['macS2C']
         ));
-        $this->kex = $kex;
     }
 
     private function serviceRequest(string $payload): void

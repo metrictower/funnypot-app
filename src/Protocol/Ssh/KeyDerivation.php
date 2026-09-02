@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Funnypot\Protocol\Ssh;
 
 /**
- * RFC 4253 §7.2 key derivation, with the key-expansion extension the one-shot formula in
- * {@see Kex} lacks. Each key is HASH(K ‖ H ‖ letter ‖ session_id) truncated to the needed length;
+ * RFC 4253 §7.2 key derivation, with the key-expansion extension a one-shot formula lacks. It is
+ * driven by {@see Kex\KexResult::keys()}. Each key is HASH(K ‖ H ‖ letter ‖ session_id) truncated to the needed length;
  * when more bytes are needed than one hash produces (a 64-byte hmac-sha2-512 or chacha20-poly1305
  * key under a SHA-256 exchange hash), the output is extended with Kn = HASH(K ‖ H ‖ K1 ‖ … ‖ Kn−1).
  *
