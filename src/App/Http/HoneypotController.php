@@ -11,6 +11,7 @@ use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
+use Funnypot\App\ThreatIntel\ReportComment;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
@@ -297,12 +298,14 @@ final class HoneypotController
             return;
         }
         $port = (int) ($_SERVER['SERVER_PORT'] ?? 0);
-        $httpsVal = (string) ($_SERVER['HTTPS'] ?? '');
-        $https = ($httpsVal !== '' && $httpsVal !== 'off') || $port === 443;
-        $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
-        $url = ($host !== '' ? ($https ? 'https' : 'http') . '://' . $host : '') . $context->path;
+        // FP-0247 (Fix H): NEVER put the attacker-controlled Host header in a public report — it can
+        // name an innocent third-party domain. Report our port + method + PATH only; ReportComment
+        // additionally strips a scheme://host from an absolute-URI request line and redacts secrets.
         $class = $payloadClass !== null ? ' [' . $payloadClass . ']' : '';
-        $comment = sprintf('funnypot web honeypot, port %d:%s %s %s', $port, $class, $context->method, substr($url, 0, 180));
+        $comment = ReportComment::build(
+            sprintf('funnypot web honeypot, port %d:%s %s', $port, $class, $context->method),
+            $context->path
+        );
         $this->abuse?->enqueue($clientIp, $comment, '21');         // web app attack
         $this->threatIntel?->enqueue($clientIp, $comment, '21');
     }

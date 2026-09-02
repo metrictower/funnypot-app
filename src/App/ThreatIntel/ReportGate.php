@@ -53,9 +53,14 @@ final class ReportGate
         }
         $ip = (string) $entry['ip'];
         $event = (string) ($entry['event'] ?? '');
-        $data = trim(substr((string) ($entry['path'] ?? $entry['body'] ?? ''), 0, 100));
+        $data = (string) ($entry['path'] ?? $entry['body'] ?? '');
         $categories = (string) ($entry['categories'] ?? $defaultCategories);
-        $comment = sprintf('funnypot %s honeypot, port %d: %s %s', strtoupper($protocol), $port, $event, $data);
+        // FP-0247 (Fix H): the payload is attacker-controlled and the report is public — sanitise it
+        // (drop third-party host, redact creds/emails/blobs, strip control bytes) before republishing.
+        $comment = ReportComment::build(
+            sprintf('funnypot %s honeypot, port %d: %s', strtoupper($protocol), $port, $event),
+            $data
+        );
         $abuse?->enqueue($ip, $comment, $categories);
         $threatIntel?->enqueue($ip, $comment, $categories);
     }
