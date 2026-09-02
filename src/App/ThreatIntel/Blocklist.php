@@ -92,7 +92,7 @@ final class Blocklist
      *
      * @param callable(string):?string|null $fetch
      * @param string[]|null                 $sources
-     * @return array{sources:int,ips:int,ranges:int}
+     * @return array{sources:int,ips:int,ranges:int,skipped:bool}
      */
     public function import(?callable $fetch = null, ?array $sources = null): array
     {
@@ -136,6 +136,15 @@ final class Blocklist
         }
 
         $db = $this->db();
+
+        // FP-0247 (Fix B): a total feed outage must NOT wipe corroborated intel. The old code ran an
+        // unconditional DELETE after the fetch loop, so if every feed failed (or returned garbage that
+        // parsed to zero tokens) the transaction committed an empty table — one DNS/proxy blip erased
+        // all known-attacker intel until the next good refresh. Keep the existing data instead.
+        if ($ok === 0 || ($exact === [] && $ranges === [])) {
+            return ['sources' => $ok, 'ips' => 0, 'ranges' => 0, 'skipped' => true];
+        }
+
         $db->beginTransaction();
         $db->exec('DELETE FROM blocklist');
         $db->exec('DELETE FROM blocklist_ranges');
@@ -147,9 +156,39 @@ final class Blocklist
         foreach ($ranges as [$lo, $hi, $c]) {
             $ri->execute([':lo' => $lo, ':hi' => $hi, ':l' => $c]);
         }
+        // Stamp the successful refresh time inside the same transaction, so refreshedAt()/isStale()
+        // reflect only real, non-empty imports.
+        $db->prepare("INSERT INTO blocklist_meta (k, v) VALUES ('refreshed_at', :t) "
+            . 'ON CONFLICT(k) DO UPDATE SET v = :t')->execute([':t' => gmdate('c')]);
         $db->commit();
 
-        return ['sources' => $ok, 'ips' => count($exact), 'ranges' => count($ranges)];
+        return ['sources' => $ok, 'ips' => count($exact), 'ranges' => count($ranges), 'skipped' => false];
+    }
+
+    /** ISO-8601 UTC time of the last successful (non-empty) import, or null if never refreshed. */
+    public function refreshedAt(): ?string
+    {
+        try {
+            $st = $this->db()->query("SELECT v FROM blocklist_meta WHERE k = 'refreshed_at'");
+            $v = $st->fetchColumn();
+
+            return ($v === false || $v === null || $v === '') ? null : (string) $v;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** True if the data is older than $maxAgeHours. Fail-safe: a never-refreshed / unreadable store
+     *  reads as stale, so the operator log surfaces the condition rather than hiding it. */
+    public function isStale(int $maxAgeHours = 48): bool
+    {
+        $at = $this->refreshedAt();
+        if ($at === null) {
+            return true;
+        }
+        $ts = strtotime($at);
+
+        return $ts === false || $ts < time() - $maxAgeHours * 3600;
     }
 
     /**
@@ -193,6 +232,7 @@ final class Blocklist
         $db->exec('CREATE TABLE IF NOT EXISTS blocklist (ip TEXT PRIMARY KEY, lists INTEGER NOT NULL DEFAULT 1)');
         $db->exec('CREATE TABLE IF NOT EXISTS blocklist_ranges (lo INTEGER NOT NULL, hi INTEGER NOT NULL, lists INTEGER NOT NULL DEFAULT 1)');
         $db->exec('CREATE INDEX IF NOT EXISTS idx_bl_ranges ON blocklist_ranges(lo, hi)');
+        $db->exec('CREATE TABLE IF NOT EXISTS blocklist_meta (k TEXT PRIMARY KEY, v TEXT)');   // FP-0247 (Fix B): refresh staleness
 
         return $this->db = $db;
     }

@@ -127,4 +127,61 @@ final class BlocklistTest extends TestCase
         self::assertFalse($bl->isKnown('1.2.3.4'));
         self::assertSame(0, $bl->count());
     }
+
+    public function test_total_feed_outage_keeps_existing_data(): void
+    {
+        // FP-0247 (Fix B): every feed fails to fetch on the next refresh — the prior intel must survive.
+        $db = $this->dbPath();
+        $bl = new Blocklist($db, 1);
+        $bl->import(static fn (string $u): ?string => "1.2.3.4\n203.0.113.0/24\n", ['ok']);
+        self::assertTrue($bl->isKnown('1.2.3.4'));
+        self::assertSame(1, $bl->count());
+
+        $r = $bl->import(static fn (string $u): ?string => null, ['a', 'b', 'c']);   // total outage
+        self::assertTrue($r['skipped']);
+        self::assertSame(0, $r['sources']);
+        self::assertTrue($bl->isKnown('1.2.3.4'), 'existing exact IP must survive an outage');
+        self::assertTrue($bl->isKnown('203.0.113.50'), 'existing range must survive an outage');
+        self::assertSame(1, $bl->count());
+    }
+
+    public function test_zero_parsed_tokens_keeps_existing_data(): void
+    {
+        // Feeds reachable but returning comment-only / garbage bodies (error HTML) parse to zero valid
+        // tokens — that must NOT replace corroborated data with an empty table.
+        $db = $this->dbPath();
+        $bl = new Blocklist($db, 1);
+        $bl->import(static fn (string $u): ?string => "9.9.9.9\n", ['ok']);
+        self::assertTrue($bl->isKnown('9.9.9.9'));
+
+        $garbage = "# just a comment\n; another\n<html><body>502 Bad Gateway</body></html>\n";
+        $r = $bl->import(static fn (string $u): ?string => $garbage, ['x', 'y']);
+        self::assertTrue($r['skipped']);
+        self::assertSame(2, $r['sources']);         // fetched, but nothing parseable
+        self::assertTrue($bl->isKnown('9.9.9.9'), 'existing data must survive a zero-token refresh');
+    }
+
+    public function test_refreshed_at_set_only_on_successful_import(): void
+    {
+        $db = $this->dbPath();
+        $bl = new Blocklist($db, 1);
+        self::assertNull($bl->refreshedAt());               // never refreshed
+
+        $bl->import(static fn (string $u): ?string => "1.2.3.4\n", ['ok']);
+        $stamp = $bl->refreshedAt();
+        self::assertNotNull($stamp);
+        self::assertFalse($bl->isStale());                  // just refreshed
+
+        // A subsequent total outage must NOT advance the refresh stamp.
+        $bl->import(static fn (string $u): ?string => null, ['down']);
+        self::assertSame($stamp, $bl->refreshedAt());
+    }
+
+    public function test_stale_when_never_refreshed(): void
+    {
+        // Fail-safe: an instance that has never had a successful import reads as stale.
+        $bl = new Blocklist($this->dbPath(), 1);
+        self::assertTrue($bl->isStale());
+        self::assertTrue($bl->isStale(48));
+    }
 }
