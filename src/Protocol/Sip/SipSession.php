@@ -43,6 +43,14 @@ final class SipSession
     public int $rtpSsrc = 0;
     public int $rtpPacketsSent = 0;
 
+    // FP-0247 anti-spoof: latched true once the session reaches STREAMING via a validated ACK (the
+    // To-tag return-routability check in handleAck). A session created by a spoofed INVITE and then
+    // reaped by setup-stall eviction, or torn down by a spoofed BYE, never sets this — so its
+    // call_end event must not be reported (a single spoofed UDP datagram could otherwise blame an
+    // innocent source). isStreaming() only reflects the CURRENT state; this remembers that the call
+    // ever passed the handshake, which is what endSession needs after the state has moved on.
+    public bool $wasStreaming = false;
+
     public float $startTime = 0.0;
     // A ringing call is answered here (0 = no answer pending). The 200 OK is pre-built and held so
     // the answer time can vary call-to-call without the select loop ever blocking on a sleep; the

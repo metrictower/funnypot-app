@@ -17,6 +17,11 @@ use PHPUnit\Framework\TestCase;
  * Matches an ASSIGNMENT shape (`'reportable' =>` or `$entry['reportable'] ??=`/`=`), never a bare
  * `reportable` substring — SipServer carries comment-only mentions of the flag that a substring check
  * would be fooled by.
+ *
+ * NOTE: this lint proves the PRESENCE of a reportable assertion, not its CORRECTNESS — it cannot tell
+ * a safe gate (`'reportable' => ($transport === 'tcp')`) from an unsafe blanket `'reportable' => true`
+ * on a spoofable UDP path. Per-path correctness is covered by behavioural tests (e.g.
+ * SipServerSecurityTest's anti-spoof cases), not here.
  */
 final class ReportableAssertionLintTest extends TestCase
 {

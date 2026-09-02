@@ -477,7 +477,7 @@ final class SipServer
 
             case 'INFO':
                 // Capture any out-of-band DTMF (application/dtmf-relay or application/dtmf), then ack.
-                $this->captureInfoDtmf($req, $peerIp, $peerPort);
+                $this->captureInfoDtmf($req, $peerIp, $peerPort, $transport);
                 $res = $req->buildOk(SipMessage::asteriskTag(), "<sip:{$this->getServerIp()}:5060>", '', [], $this->config->userAgent);
                 $this->sendResponse($res, $peerIp, $peerPort, $transport, $tcpSock);
                 break;
@@ -1018,6 +1018,7 @@ final class SipServer
             }
 
             $s->state = SipSession::STATE_STREAMING;
+            $s->wasStreaming = true;   // FP-0247: latch — this call passed the ACK To-tag check
             $s->lastRtpSendTime = microtime(true);
             $s->lastInboundTime = microtime(true); // baseline for hangup/idle detection
 
@@ -1458,7 +1459,11 @@ final class SipServer
             'matched' => 1,
             'served' => 1,
             'recording' => $recUrl,
-            'reportable' => true,
+            // FP-0247 anti-spoof: a session created by a spoofed INVITE (then reaped by setup-stall
+            // eviction) or torn down by a spoofed BYE never passed the ACK To-tag check, so its source
+            // is unverified over UDP — report only a return-routable TCP call or one that actually
+            // streamed (wasStreaming latched at the validated ACK).
+            'reportable' => ($s->transport === 'tcp') || $s->wasStreaming,
             // Attribution captured at INVITE — the ending event may fire from the idle loop with no
             // current request, so carry it from the session rather than from logEvent enrichment.
             'ua' => $s->userAgent,
@@ -1781,7 +1786,7 @@ final class SipServer
      * Capture DTMF signalled out of band via SIP INFO — both application/dtmf-relay ("Signal=5")
      * and application/dtmf (a bare digit). The digit is appended to the matching session, if any.
      */
-    private function captureInfoDtmf(SipMessage $req, string $peerIp, int $peerPort): void
+    private function captureInfoDtmf(SipMessage $req, string $peerIp, int $peerPort, string $transport): void
     {
         $ctype = strtolower($req->getHeader('content-type') ?? '');
         if (strpos($ctype, 'dtmf') === false) {
@@ -1800,9 +1805,11 @@ final class SipServer
         }
 
         $match = $this->findSessionByCallId($req->getCallId() ?? '', $peerIp);
+        $streaming = false;
         if ($match) {
             [, $s] = $match;
             $s->dtmfDigits .= $digit;
+            $streaming = $s->isStreaming();
         }
 
         $this->logEvent([
@@ -1814,7 +1821,10 @@ final class SipServer
             'path' => "SIP DTMF '{$digit}' via INFO ({$ctype})",
             'matched' => 1,
             'served' => 1,
-            'reportable' => true,
+            // FP-0247 anti-spoof: a lone forged INFO carrying a DTMF body is one spoofable UDP
+            // datagram — reporting it would blame the forged source. Report only over return-routable
+            // TCP, or when the INFO belongs to a call that passed the ACK To-tag check and is streaming.
+            'reportable' => ($transport === 'tcp') || ($match !== null && $streaming),
         ]);
     }
 

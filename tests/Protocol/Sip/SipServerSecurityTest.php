@@ -287,6 +287,158 @@ final class SipServerSecurityTest extends TestCase
         $this->assertNotSame('', $this->recordedUlawFor($server, 'reflect-1', '198.51.100.9'), 'valid ACK starts streaming');
     }
 
+    /**
+     * FP-0247 anti-spoof (fable #1): a lone forged INFO carrying a DTMF body is one spoofable UDP
+     * datagram with no session behind it. captureInfoDtmf() must NOT mark it reportable — otherwise a
+     * single forged packet would get its spoofed source blocklisted.
+     */
+    public function test_bare_info_dtmf_over_udp_is_never_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $info = SipMessage::parse(
+            "INFO sip:101@target SIP/2.0\r\nCall-ID: lone-info\r\nCSeq: 1 INFO\r\n"
+            . "Content-Type: application/dtmf-relay\r\nContent-Length: 10\r\n\r\n"
+            . "Signal=5\r\n"
+        );
+        self::assertNotNull($info);
+        $server->dispatchMessage($info, '203.0.113.77', 5060, 'udp');
+
+        $dtmf = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf'));
+        self::assertNotEmpty($dtmf, 'the bare INFO must still be logged as intel');
+        self::assertFalse($dtmf[0]['reportable'], 'a lone spoofable UDP INFO/DTMF must never be reportable');
+
+        // The gate drops any reportable=false event, so nothing reaches the abuse queue.
+        foreach ($logged as $e) {
+            self::assertFalse($e['reportable'] ?? false, 'no event from a lone UDP INFO may be reportable');
+        }
+    }
+
+    /** A bare INFO/DTMF over TCP IS reportable — the SYN-ACK proved the source is return-routable. */
+    public function test_bare_info_dtmf_over_tcp_is_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $info = SipMessage::parse(
+            "INFO sip:101@target SIP/2.0\r\nCall-ID: tcp-info\r\nCSeq: 1 INFO\r\n"
+            . "Content-Type: application/dtmf-relay\r\nContent-Length: 10\r\n\r\n"
+            . "Signal=5\r\n"
+        );
+        self::assertNotNull($info);
+        $server->dispatchMessage($info, '203.0.113.77', 5060, 'tcp');
+
+        $dtmf = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf'));
+        self::assertNotEmpty($dtmf);
+        self::assertTrue($dtmf[0]['reportable'], 'a return-routable TCP INFO/DTMF is reportable');
+    }
+
+    /**
+     * FP-0247 anti-spoof (fable #2): a session created by a spoofed UDP INVITE that never ACKs is
+     * reaped by the setup-stall eviction. Its call_end event must NOT be reportable — the source never
+     * passed the ACK To-tag return-routability check, so it may be a spoofed victim.
+     */
+    public function test_unacked_invite_reaped_by_setup_stall_is_never_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $inv = SipMessage::parse(
+            "INVITE sip:101@target SIP/2.0\r\nCall-ID: stall-1\r\nCSeq: 1 INVITE\r\n"
+            . "Content-Type: application/sdp\r\nContent-Length: 30\r\n\r\n"
+            . "v=0\r\nm=audio 53 RTP/AVP 0\r\n"
+        );
+        self::assertNotNull($inv);
+        $server->dispatchMessage($inv, '198.51.100.44', 5060, 'udp');
+
+        // Backdate startTime past INVITE_SETUP_TIMEOUT so the next cleanup reaps the never-ACKed call.
+        $this->backdateSessions($server, 100.0);
+        $this->reapExpired($server);
+
+        $end = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_end'));
+        self::assertNotEmpty($end, 'a reaped setup-stalled call must still emit a call_end for the dashboard');
+        self::assertFalse($end[0]['reportable'], 'a never-ACKed reaped call must never be reportable (spoofable source)');
+    }
+
+    /**
+     * FP-0247 anti-spoof (fable #2): a spoofed BYE tears down a never-streamed session. Its call_end
+     * must NOT be reportable.
+     */
+    public function test_spoofed_bye_ending_unstreamed_call_is_never_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $inv = SipMessage::parse(
+            "INVITE sip:101@target SIP/2.0\r\nCall-ID: bye-1\r\nCSeq: 1 INVITE\r\n"
+            . "Content-Type: application/sdp\r\nContent-Length: 30\r\n\r\n"
+            . "v=0\r\nm=audio 53 RTP/AVP 0\r\n"
+        );
+        self::assertNotNull($inv);
+        $server->dispatchMessage($inv, '198.51.100.55', 5060, 'udp');
+
+        $bye = SipMessage::parse("BYE sip:101@target SIP/2.0\r\nCall-ID: bye-1\r\nCSeq: 2 BYE\r\n\r\n");
+        self::assertNotNull($bye);
+        $server->dispatchMessage($bye, '198.51.100.55', 5060, 'udp');
+
+        $end = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_end'));
+        self::assertNotEmpty($end);
+        self::assertFalse($end[0]['reportable'], 'a spoofed BYE on a never-streamed call must never be reportable');
+    }
+
+    /** A call that completed the ACK handshake IS reportable at end, even after teardown. */
+    public function test_streamed_call_end_is_reportable(): void
+    {
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $inv = SipMessage::parse("INVITE sip:101@target SIP/2.0\r\nCall-ID: good-1\r\nCSeq: 1 INVITE\r\n\r\n");
+        self::assertNotNull($inv);
+        $server->dispatchMessage($inv, '198.51.100.66', 5060, 'udp');
+
+        $tag = $server->dialogToTag('good-1', '198.51.100.66');
+        $ack = SipMessage::parse("ACK sip:101@target SIP/2.0\r\nCall-ID: good-1\r\nTo: <sip:101@target>;tag={$tag}\r\nCSeq: 1 ACK\r\n\r\n");
+        self::assertNotNull($ack);
+        $server->dispatchMessage($ack, '198.51.100.66', 5060, 'udp');
+
+        $bye = SipMessage::parse("BYE sip:101@target SIP/2.0\r\nCall-ID: good-1\r\nCSeq: 2 BYE\r\n\r\n");
+        self::assertNotNull($bye);
+        $server->dispatchMessage($bye, '198.51.100.66', 5060, 'udp');
+
+        $end = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'call_end'));
+        self::assertNotEmpty($end);
+        self::assertTrue($end[0]['reportable'], 'a call that passed the ACK handshake is reportable at end');
+    }
+
+    /** Backdate every live session's startTime so the setup-stall reaper fires deterministically. */
+    private function backdateSessions(SipServer $server, float $secondsAgo): void
+    {
+        $ref = new \ReflectionProperty($server, 'sessions');
+        $ref->setAccessible(true);
+        foreach ($ref->getValue($server) as $s) {
+            $s->startTime = microtime(true) - $secondsAgo;
+        }
+    }
+
+    /** Invoke the private setup-stall / idle reaper (normally driven by runOnce()). */
+    private function reapExpired(SipServer $server): void
+    {
+        $m = new \ReflectionMethod($server, 'cleanupExpiredSessions');
+        $m->setAccessible(true);
+        $m->invoke($server);
+    }
+
     private function recordedUlawFor(SipServer $server, string $callId, string $ip): string
     {
         $ref = new \ReflectionProperty($server, 'sessions');
