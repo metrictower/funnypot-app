@@ -30,8 +30,10 @@ use Funnypot\Protocol\TrollStream;
  * before it); when the client offers ext-info-c we send SSH_MSG_EXT_INFO as the first encrypted
  * packet after NEWKEYS; and, when strict kex is mutually agreed, each direction's sequence number
  * resets at its NEWKEYS with the strict "unexpected packet" discipline enforced during the initial
- * kex. The served KEXINIT name-lists are byte-identical to before, so the strict-kex reset ships
- * dormant (we do not advertise kex-strict-s until FP-0291) — EXT_INFO and the ordering go live now.
+ * kex. The served KEXINIT name-lists, host-key/cipher/MAC/compression choices and EXT_INFO all come
+ * from the banner-keyed {@see SshProfile} (a mis-configured banner throws at construction), and the
+ * per-connection {@see Negotiated} choice sizes each direction's cipher/MAC independently. Delayed
+ * zlib@openssh.com compression, if negotiated, switches on after USERAUTH_SUCCESS.
  */
 final class SshConnection
 {
@@ -72,19 +74,9 @@ final class SshConnection
     private const INITIAL_WINDOW = 1 << 21;
     private const MAX_PACKET = 32768;
 
-    private const KEX_ALGOS = ['curve25519-sha256', 'curve25519-sha256@libssh.org'];
-    private const HOSTKEY_ALGOS = ['ssh-ed25519'];
-    private const CIPHERS = ['aes256-ctr'];
-    private const MACS = ['hmac-sha2-256'];
-    private const COMPRESSION = ['none'];
-
-    // The server-sig-algs value a real OpenSSH 8.9p1 advertises in SSH_MSG_EXT_INFO —
-    // sshkey_alg_list(0, 1, 1) with ENABLE_SK and without WITH_XMSS (the Ubuntu build). A literal
-    // constant, identical for every connection, never derived from attacker bytes and not in HASSH.
-    // FP-0291: per-profile (8.7 has no publickey-hostbound and only nr=1).
-    private const SERVER_SIG_ALGS = 'ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com,webauthn-sk-ecdsa-sha2-nistp256@openssh.com';
-
     private Transport $transport;
+    private SshProfile $profile;         // banner-keyed served lists + EXT_INFO (the single source)
+    private ?Negotiated $negotiated = null;
     private string $in = '';
     private string $out = '';
     private bool $closed = false;
@@ -97,9 +89,6 @@ final class SshConnection
     private ?KexAlgorithm $kex = null;
     /** @var array{ivC2S:string,ivS2C:string,keyC2S:string,keyS2C:string,macC2S:string,macS2C:string}|null */
     private ?array $keys = null;
-    // Negotiated compression per direction ('none' or 'zlib@openssh.com'); enabled after auth (§2.6).
-    private string $compC2S = 'none';
-    private string $compS2C = 'none';
 
     // Handshake-shape state, all set during the initial kex (M1: never recomputed from a rekey
     // KEXINIT). $advertisesStrictKex reflects whether our served kex list carries kex-strict-s — the
@@ -145,10 +134,11 @@ final class SshConnection
         private ?string $secret = null
     ) {
         $this->transport = new Transport();
-        // Two-sided strict-kex gate reads the SAME array buildKexInit() serializes, so the gate can
-        // never disagree with the served bytes. False today (no marker in KEX_ALGOS) → dormant.
-        // FP-0291: compute from the profile's kex list at the point it is serialized, never a second source.
-        $this->advertisesStrictKex = in_array(KexSuite::KEX_STRICT_S, self::KEX_ALGOS, true);
+        // The banner selects the profile; a mis-configured banner fails here (throw), never silently
+        // ships an un-modelled KEXINIT. The two-sided strict-kex gate reads the SAME kex list the
+        // profile serialises into the KEXINIT, so the gate can never disagree with the served bytes.
+        $this->profile = SshProfile::forBanner($serverVersion);
+        $this->advertisesStrictKex = $this->profile->advertisesStrictKex();
         // Seed the reject count per attacker so a source sees a stable K, not a per-attempt coin
         // flip. Timing realism (a human-like pause before the verdict) is intentionally not done
         // here: this engine is one shared non-blocking select loop, so any sleep would stall every
@@ -265,10 +255,10 @@ final class SshConnection
                 // receive side switch to ciphertext, using the client->server keys from the kex.
                 // Under strict kex the inbound sequence number resets to 0 with the switch (the
                 // packet just consumed was the client's NEWKEYS), so its next packet opens at 0.
-                if ($this->keys !== null) {
+                if ($this->keys !== null && $this->negotiated !== null) {
                     $this->transport->enableRecv(CipherSuite::build(
-                        'aes256-ctr',
-                        'hmac-sha2-256',
+                        $this->negotiated->encC2S,
+                        $this->negotiated->macC2S,
                         $this->keys['keyC2S'],
                         $this->keys['ivC2S'],
                         $this->keys['macC2S']
@@ -331,22 +321,7 @@ final class SshConnection
 
     private function buildKexInit(): string
     {
-        return (new Buf())
-            ->byte(self::MSG_KEXINIT)
-            ->raw(random_bytes(16))            // cookie
-            ->nameList(self::KEX_ALGOS)
-            ->nameList(self::HOSTKEY_ALGOS)
-            ->nameList(self::CIPHERS)           // encryption client->server
-            ->nameList(self::CIPHERS)           // encryption server->client
-            ->nameList(self::MACS)              // mac client->server
-            ->nameList(self::MACS)              // mac server->client
-            ->nameList(['none'])                // compression client->server
-            ->nameList(['none'])                // compression server->client
-            ->nameList([])                      // languages client->server
-            ->nameList([])                      // languages server->client
-            ->bool(false)                       // first_kex_packet_follows
-            ->uint32(0)                         // reserved
-            ->get();
+        return $this->profile->kexInit(random_bytes(16));
     }
 
     private function negotiate(string $payload): void
@@ -382,18 +357,25 @@ final class SshConnection
         }
         // Never let a pseudo-algorithm marker be negotiated as a real kex (a no-op today; the guard
         // that stops FP-0291's kex-strict-s from reaching KexSuite::create() if a hostile client lists it).
-        $candidates = array_values(array_filter(self::KEX_ALGOS, static fn (string $n): bool => !KexSuite::isMarker($n)));
+        // Candidates come from the profile's served lists; the pseudo-algorithm markers are filtered
+        // out of the real-kex candidate set so a hostile client listing only kex-strict-s can never
+        // reach KexSuite::create().
+        $candidates = array_values(array_filter($this->profile->kex(), static fn (string $n): bool => !KexSuite::isMarker($n)));
         $kexName = self::pick($kex, $candidates);
-        $hostName = self::pick($host, self::HOSTKEY_ALGOS);
-        $compC2SPick = self::pick($compC2S, self::COMPRESSION);
-        $compS2CPick = self::pick($compS2C, self::COMPRESSION);
+        $hostName = self::pick($host, $this->profile->hostKeys());
+        $encC2SPick = self::pick($encC2S, $this->profile->ciphers());
+        $encS2CPick = self::pick($encS2C, $this->profile->ciphers());
+        $macC2SPick = self::pick($macC2S, $this->profile->macs());
+        $macS2CPick = self::pick($macS2C, $this->profile->macs());
+        $compC2SPick = self::pick($compC2S, $this->profile->compression());
+        $compS2CPick = self::pick($compS2C, $this->profile->compression());
         if (
             $kexName === null
             || $hostName === null
-            || self::pick($encC2S, self::CIPHERS) === null
-            || self::pick($encS2C, self::CIPHERS) === null
-            || self::pick($macC2S, self::MACS) === null
-            || self::pick($macS2C, self::MACS) === null
+            || $encC2SPick === null
+            || $encS2CPick === null
+            || $macC2SPick === null
+            || $macS2CPick === null
             || $compC2SPick === null
             || $compS2CPick === null
         ) {
@@ -401,10 +383,29 @@ final class SshConnection
 
             return;
         }
-        $this->compC2S = $compC2SPick;
-        $this->compS2C = $compS2CPick;
-        // Build the kex object from the negotiated names; it — not this class — owns what msg 30
-        // means. With today's unchanged lists this is always Ecdh('curve25519-sha256') + Ed25519.
+        $this->negotiated = new Negotiated(
+            $kexName,
+            $hostName,
+            $encC2SPick,
+            $encS2CPick,
+            $macC2SPick,
+            $macS2CPick,
+            $compC2SPick,
+            $compS2CPick
+        );
+        // Field intel: which of the served names this client's preferences selected, plus the
+        // client's own hasshClient (a tool fingerprint). Bounded, never reflects the raw client lists.
+        $this->log('kex', sprintf(
+            '%s %s %s/%s %s hassh=%s',
+            $kexName,
+            $hostName,
+            $encC2SPick,
+            $macC2SPick,
+            $compC2SPick,
+            md5(implode(',', $kex) . ';' . implode(',', $encC2S) . ';' . implode(',', $macC2S) . ';' . implode(',', $compC2S))
+        ));
+        // Build the kex object from the negotiated name; it — not this class — owns what msg 30 means.
+        // forAlgorithm()/create() throw on an unadvertised name (kept as the belt behind the §4.3 audit).
         $this->kex = KexSuite::create(
             $kexName,
             $this->clientVersion,
@@ -442,16 +443,17 @@ final class SshConnection
         }
         $this->send((new Buf())->byte(self::MSG_NEWKEYS)->get());
 
-        // aes256-ctr + hmac-sha2-256 sizes; FP-0291: CipherSuite sizes of the negotiated names.
-        $this->keys = $result->keys(16, 32, 32);
+        // Key material sized per the CipherSuite of the negotiated names, per direction (§7.2 A–F).
+        $n = $this->negotiated;
+        $this->keys = $result->keysFor($n->encC2S, $n->macC2S, $n->encS2C, $n->macS2C);
         // Our outbound half switches to ciphertext right after our NEWKEYS; the inbound half waits
         // for the client's NEWKEYS (still plaintext), handled in the MSG_NEWKEYS case. Under strict
         // kex the outbound sequence number resets to 0 with the switch — the packet just framed was
         // our NEWKEYS, so the next packet (EXT_INFO) is numbered 0 (packet.c:1224-1227). Order within
         // this method is load-bearing: send(NEWKEYS) → enableSend → buildExtInfo().
         $this->transport->enableSend(CipherSuite::build(
-            'aes256-ctr',
-            'hmac-sha2-256',
+            $n->encS2C,
+            $n->macS2C,
             $this->keys['keyS2C'],
             $this->keys['ivS2C'],
             $this->keys['macS2C']
@@ -465,17 +467,16 @@ final class SshConnection
         }
     }
 
-    /** SSH_MSG_EXT_INFO (RFC 8308 §2.3) — the exact OpenSSH 8.9p1 shape (kex.c:429-455). */
+    /** SSH_MSG_EXT_INFO (RFC 8308 §2.3) — the per-profile extension set (A/B: nr=2, C: nr=1). */
     private function buildExtInfo(): string
     {
-        return (new Buf())
-            ->byte(self::MSG_EXT_INFO)
-            ->uint32(2)                                       // nr-extensions
-            ->string('server-sig-algs')
-            ->string(self::SERVER_SIG_ALGS)
-            ->string('publickey-hostbound@openssh.com')
-            ->string('0')
-            ->get();
+        $ext = $this->profile->extInfo();
+        $buf = (new Buf())->byte(self::MSG_EXT_INFO)->uint32(count($ext));
+        foreach ($ext as $name => $value) {
+            $buf->string($name)->string($value);
+        }
+
+        return $buf->get();
     }
 
     /**
@@ -501,6 +502,9 @@ final class SshConnection
     private function allowedDuringStrictKex(int $msg): bool
     {
         switch ($msg) {
+            case self::MSG_KEXINIT:              // 20 — a second KEXINIT still dies in negotiate() via
+                                                 // the first-packet rule (lastInSeq !== 0); allowing it
+                                                 // here matches sshd, which drops it one line later (N2).
             case self::MSG_KEX_ECDH_INIT:        // 30
             case self::MSG_KEX_DH_GEX_INIT:      // 32
             case self::MSG_KEX_DH_GEX_REQUEST:   // 34
@@ -580,10 +584,10 @@ final class SshConnection
         // Delayed zlib@openssh.com compression: sshd's userauth_finish enables it in BOTH directions
         // right after the SUCCESS packet is queued (ssh_packet_enable_delayed_compress). The SUCCESS
         // packet itself is uncompressed; the next packet each way is compressed. 'none' → no-op.
-        if ($this->compS2C === 'zlib@openssh.com') {
+        if ($this->negotiated !== null && $this->negotiated->compS2C === 'zlib@openssh.com') {
             $this->transport->enableSendCompression();
         }
-        if ($this->compC2S === 'zlib@openssh.com') {
+        if ($this->negotiated !== null && $this->negotiated->compC2S === 'zlib@openssh.com') {
             $this->transport->enableRecvCompression();
         }
     }
