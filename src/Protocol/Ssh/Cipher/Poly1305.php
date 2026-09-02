@@ -8,7 +8,8 @@ namespace Funnypot\Protocol\Ssh\Cipher;
  * Poly1305 one-time authenticator, RFC 8439 §2.5. Pure PHP because ext-sodium exposes no
  * crypto_onetimeauth and no plain (8-byte-nonce) chacha20 stream. The accumulator is five 26-bit
  * limbs held in 64-bit integers, following poly1305-donna's 32-bit reference: each per-block
- * product is < 2^57 and the five-term sum < 2^60, so nothing promotes to float on 64-bit PHP.
+ * product is < 2^55 (an h_i < 2^27 times an r_i/s_i < 2^28.3) and the five-term sum < 2^58,
+ * comfortably inside a signed 64-bit int, so nothing promotes to float on 64-bit PHP.
  *
  * The class REQUIRES 64-bit PHP (the overflow bound assumes it); it throws otherwise. Callers
  * compare the returned tag with hash_equals() — this function is not itself constant-time over the

@@ -55,8 +55,31 @@ final class SshCipherTest extends TestCase
         $z16 = str_repeat('00', 16);
         $z15 = str_repeat('00', 15);
 
+        // The 375-byte IETF text (#2/#3) and the 127-byte Jabberwocky text (#4), as message hex.
+        $ietf = '416e79207375626d697373696f6e20746f20746865204945544620696e74656e6465'
+            . '642062792074686520436f6e7472696275746f7220666f72207075626c69636174696f6e2061'
+            . '7320616c6c206f722070617274206f6620616e204945544620496e7465726e65742d44726166'
+            . '74206f722052464320616e6420616e792073746174656d656e74206d6164652077697468696e'
+            . '2074686520636f6e74657874206f6620616e204945544620616374697669747920697320636f'
+            . '6e7369646572656420616e20224945544620436f6e747269627574696f6e222e205375636820'
+            . '73746174656d656e747320696e636c756465206f72616c2073746174656d656e747320696e20'
+            . '494554462073657373696f6e732c2061732077656c6c206173207772697474656e20616e6420'
+            . '656c656374726f6e696320636f6d6d756e69636174696f6e73206d61646520617420616e7920'
+            . '74696d65206f7220706c6163652c207768696368206172652061646472657373656420746f';
+        $jabber = '2754776173206272696c6c69672c20616e642074686520736c6974687920746f766573'
+            . '0a446964206779726520616e642067696d626c6520696e2074686520776162653a0a416c6c20'
+            . '6d696d737920776572652074686520626f726f676f7665732c0a416e6420746865206d6f6d65'
+            . '207261746873206f757467726162652e';
+
         return [
             '#1 zero key, 64 zero bytes' => [str_repeat('00', 32), str_repeat('00', 64), $z16],
+            '#2 IETF text, r=0' => [$z16 . '36e5f6b5c5e06070f0efca96227a863e', $ietf, '36e5f6b5c5e06070f0efca96227a863e'],
+            '#3 IETF text, s=0' => ['36e5f6b5c5e06070f0efca96227a863e' . $z16, $ietf, 'f3477e7cd95417af89a6b8794c310cf0'],
+            '#4 Jabberwocky multi-block' => [
+                '1c9240a5eb55d38af333888604f6b5f0473917c1402b80099dca5cbc207075c0',
+                $jabber,
+                '4541669a7eaaee61e708dc7cbcc5eb62',
+            ],
             '#5 partial reduction' => ['02' . $z15 . $z16, str_repeat('ff', 16), '03' . $z15],
             '#6 s add overflow mod 2^128' => ['02' . $z15 . str_repeat('ff', 16), '02' . $z15, '03' . $z15],
             '#7 all-ones limb carry' => [
@@ -132,8 +155,12 @@ final class SshCipherTest extends TestCase
         for ($i = 0; $i < 50; $i++) {
             $key = random_bytes(32);
             $nonce = random_bytes(8);
-            $m = random_bytes(random_int(0, 300));
-            $aad = random_bytes(random_int(0, 100));
+            // random_bytes(0) throws ValueError in PHP 8, so guard the 0-length case (|m|=0 and
+            // |aad|=0 both flow correctly through the sodium call and the OpenSSL chacha helper).
+            $mLen = random_int(0, 300);
+            $aadLen = random_int(0, 100);
+            $m = $mLen === 0 ? '' : random_bytes($mLen);
+            $aad = $aadLen === 0 ? '' : random_bytes($aadLen);
 
             $ref = sodium_crypto_aead_chacha20poly1305_encrypt($m, $aad, $nonce, $key);
             $polyKey = substr($this->chacha20($key, 0, $nonce, str_repeat("\x00", 32)), 0, 32);
