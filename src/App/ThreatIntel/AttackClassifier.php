@@ -31,6 +31,16 @@ final class AttackClassifier
      *  the Docker responder by path, not via the payload-regex classify() below — hence no PATTERNS entry. */
     public const DOCKER_API = 'docker_api';
 
+    /** Read-only Docker recon (a client probing /version, /info, /containers/json, an inspect/logs).
+     *  Distinct from DOCKER_API so the dashboard and report priority separate a harmless fingerprint
+     *  from a container-deploy attempt. Label-only, no PATTERNS entry (set by the Docker responder). */
+    public const DOCKER_RECON = 'docker_recon';
+
+    /** Container-escape intent (a create/exec carrying a host bind-mount, --privileged, --pid=host,
+     *  a docker-socket mount, cap SYS_ADMIN, …): the daemon is being used to break out onto the host.
+     *  Label-only, no PATTERNS entry (derived by {@see \Funnypot\App\Docker\EscapeIntent}). */
+    public const DOCKER_ESCAPE = 'docker_escape';
+
     /** class => [regex, ...]; first class with any match wins. Ordered most-severe first. */
     private const PATTERNS = [
         'rce' => [
@@ -78,7 +88,7 @@ final class AttackClassifier
         ],
     ];
 
-    private const SEVERITY = ['rce' => 'critical', 'sqli' => 'high', 'lfi' => 'high', 'xss' => 'medium', 'ai_api_recon' => 'medium', 'docker_api' => 'high'];
+    private const SEVERITY = ['rce' => 'critical', 'sqli' => 'high', 'lfi' => 'high', 'xss' => 'medium', 'ai_api_recon' => 'medium', 'docker_api' => 'high', 'docker_recon' => 'medium', 'docker_escape' => 'critical'];
 
     /** The attack class present in the request, or null. */
     public function classify(RequestContext $r): ?string

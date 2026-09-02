@@ -268,13 +268,62 @@ final class FingerprintSafetyTest extends TestCase
     public function test_docker_daemon_output_carries_no_denylisted_signature(int $seed): void
     {
         $d = DockerDaemon::fromSeed($seed);
+        $phantom = [
+            'id' => str_repeat('b', 64), 'image' => 'alpine', 'command' => 'sh', 'cmd' => ['sh'],
+            'entrypoint' => [], 'env' => ['A=1'], 'binds' => ['/:/host'], 'mounts' => [],
+            'name' => '', 'created' => 1_700_000_000, 'started' => true, 'privileged' => true,
+            'pid_mode' => 'host', 'network_mode' => 'host', 'user' => '', 'hostname' => '', 'tty' => false,
+        ];
         $blob = json_encode($d->version())
-            . json_encode($d->info(1_700_000_000))
-            . json_encode($d->containers())
-            . json_encode($d->images())
-            . $d->createdId('xmrig/xmrig', '-o pool.example:4444 -u wallet');
+            . json_encode($d->info(1_700_000_000, 2, 1, 3, 1))
+            . json_encode($d->containers([$phantom], [], true))
+            . json_encode($d->images(['docker.io/library/alpine:latest', 'evil.example:5000/x/miner:latest']))
+            . $d->createdId('xmrig/xmrig', '-o pool.example:4444 -u wallet')
+            // FP-0264 engagement generators the compiled-artifact gate never sees:
+            . json_encode($d->pullStream('alpine:latest'))
+            . json_encode($d->pullStream('evil.example:5000/x/miner:latest'))
+            . json_encode($d->inspectPhantom($phantom, 1_700_000_000))
+            . json_encode($d->inspectImage('alpine', 1_700_000_000))
+            . json_encode($d->execInspect($d->execId('cid', 'id'), 'cid', ['sh', '-c', 'id']))
+            . json_encode($d->notFound('container', 'deadbeef'))
+            . json_encode(['message' => 'page not found']);
+        for ($i = 0; $i < $d->fleetCount(); $i++) {
+            $blob .= json_encode($d->inspectFleet($i, 1_700_000_000)) . json_encode($d->logsFleet($i));
+        }
+        // The whole container-name generator table, over a spread of ids.
+        foreach (['0011223344ff', 'abcdef012345', str_repeat('c', 64), str_repeat('9', 12), 'feedface0000'] as $cid) {
+            $blob .= ' ' . $d->containerName($cid);
+        }
 
         self::assertClean((string) $blob, "Docker daemon output for seed {$seed}");
+    }
+
+    /**
+     * FP-0264 review B (M1): the pull stream's seeded byte-counts are ATTACKER-REF-DEPENDENT, so a
+     * two-ref sample can pass while a broad class of refs leaks a bare six-digit `9xxxxx` (a CRS
+     * rule-id token the denylist bans). Sweep MANY refs × seeds through the real gate so a regression of
+     * that shape (e.g. lowering the layer-total floor) trips here. This is the test that was widened
+     * after it under-sampled and passed the M1 defect falsely.
+     *
+     * @dataProvider hostFactsSeeds
+     */
+    public function test_pull_stream_never_serves_a_denylisted_token_across_many_refs(int $seed): void
+    {
+        $d = DockerDaemon::fromSeed($seed);
+        $repos = ['alpine', 'nginx', 'redis', 'busybox', 'ubuntu', 'python', 'xmrig/xmrig', 'library/postgres'];
+        $regs = ['', 'evil.example:5000/', 'r.example/ns/', 'localhost:5000/'];
+        $tags = ['latest', '1', '3.18', 'v2', 'stable'];
+        $scanned = 0;
+        // ~800 refs per seed: enough that a value in the 900000–999999 band would surface.
+        for ($i = 0; $i < 1000; $i++) {
+            $ref = $regs[$i % count($regs)] . $repos[$i % count($repos)] . ':' . $tags[$i % count($tags)] . $i;
+            $bytes = (string) json_encode($d->pullStream($ref));
+            self::assertClean($bytes, "pullStream({$ref}) at seed {$seed}");
+            // Belt: assert the specific M1 property directly, independent of the denylist wiring.
+            self::assertSame(0, preg_match('/(?<![#0-9a-fA-F])9\d{5}(?![0-9a-fA-F])/', $bytes), "bare 9xxxxx in pullStream({$ref})");
+            $scanned++;
+        }
+        self::assertGreaterThan(500, $scanned);
     }
 
     /** @return array<string,array{0:int}> label => identity seed (a spread of host identities) */

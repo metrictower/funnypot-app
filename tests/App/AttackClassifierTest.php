@@ -84,5 +84,8 @@ final class AttackClassifierTest extends TestCase
         self::assertSame('high', AttackClassifier::severityFor('sqli'));
         self::assertSame('high', AttackClassifier::severityFor('lfi'));
         self::assertSame('medium', AttackClassifier::severityFor('xss'));
+        self::assertSame('high', AttackClassifier::severityFor('docker_api'));
+        self::assertSame('medium', AttackClassifier::severityFor('docker_recon'));
+        self::assertSame('critical', AttackClassifier::severityFor('docker_escape'));
     }
 }

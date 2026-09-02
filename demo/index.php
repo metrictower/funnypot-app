@@ -26,6 +26,7 @@ use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Docker\DockerApiResponder;
 use Funnypot\App\Docker\DockerApiRouter;
+use Funnypot\App\Docker\PhantomStore;
 use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
@@ -119,7 +120,8 @@ if ($config->captureRaw) {
 // fake AI-API surface (core serves it as a real inference server would, keyless GET recon included)
 // and on the Docker surface only when that decoy is armed — a real Docker daemon sends no
 // X-Powered-By (both handlers also strip it defensively).
-$dockerSurface = $config->dockerApiEnabled && DockerApiRouter::isDockerSurface($context->path);
+$serverPort = (int) ($_SERVER['SERVER_PORT'] ?? 0);
+$dockerSurface = $config->dockerApiEnabled && DockerApiRouter::isDockerSurface($context->path, $serverPort);
 if (!AiApiRouter::isAiSurface($context->path) && !$dockerSurface) {
     header('X-Powered-By: ' . $config->poweredBy);
 }
@@ -354,7 +356,25 @@ if ($config->endlessDownload) {
 // 2375/2376 ports and captures a miner bot's POST /containers/create image+command, running nothing.
 $docker = null;
 if ($config->dockerApiEnabled) {
-    $docker = new DockerApiRouter(new DockerApiResponder($store, $config->personaSeed, $abuse));
+    // Cross-request coherence for the create->pull->create->start->inspect->exec chain lives in its
+    // OWN docker.sqlite (bounded, TTL'd, fail-open) so it never shares the panel's stored-bait store
+    // or its global row cap. The threat-intel reporter gets the full structured escape record; the port
+    // scopes bare /version + /info to the Docker ports (see DockerApiRouter). Nothing here executes.
+    $dockerPhantoms = new PhantomStore(dirname($config->dbPath) . '/docker.sqlite', $config->personaSeed);
+    $docker = new DockerApiRouter(
+        new DockerApiResponder(
+            $store,
+            $config->personaSeed,
+            $abuse,
+            null,
+            null,
+            $threatIntel,
+            $dockerPhantoms,
+            null,
+            $serverPort,
+        ),
+        $serverPort,
+    );
 }
 
 (new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter))->dispatch($context, $clientIp, $tokenVerdict);

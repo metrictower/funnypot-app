@@ -29,10 +29,10 @@ final class FakePersistenceStore
     /** Newest N submissions kept per (ip, seed, view); older ones for that view are pruned on write. */
     private const MAX_ITEMS_PER_VIEW = 10;
 
-    /** Field names kept per submission (a write endpoint has a handful of inputs, never more). */
+    /** Default field-name count kept per submission (a write endpoint has a handful of inputs). */
     private const MAX_FIELDS = 8;
 
-    /** Each stored value is truncated to this many bytes so a single POST cannot grow the row unbounded. */
+    /** Default per-value truncation (bytes) so a single POST cannot grow the row unbounded. */
     private const MAX_VALUE_LEN = 500;
 
     /** Global row ceiling; oldest rows are pruned first once the table would exceed it. */
@@ -43,9 +43,25 @@ final class FakePersistenceStore
     /** @var callable():int injectable clock so the TTL is testable without sleeping */
     private $clock;
 
-    public function __construct(private string $dbPath, ?callable $clock = null, private int $ttlSeconds = self::TTL_SECONDS)
-    {
+    private int $maxFields;
+    private int $maxValueLen;
+
+    /**
+     * @param int|null $maxFields   per-record field-count cap; null keeps the panel default (8)
+     * @param int|null $maxValueLen per-value byte cap; null keeps the panel default (500). A typed
+     *        façade with a larger record shape (e.g. the Docker phantom store) raises these; existing
+     *        panel callers pass neither and are unchanged.
+     */
+    public function __construct(
+        private string $dbPath,
+        ?callable $clock = null,
+        private int $ttlSeconds = self::TTL_SECONDS,
+        ?int $maxFields = null,
+        ?int $maxValueLen = null,
+    ) {
         $this->clock = $clock ?? 'time';
+        $this->maxFields = $maxFields ?? self::MAX_FIELDS;
+        $this->maxValueLen = $maxValueLen ?? self::MAX_VALUE_LEN;
     }
 
     /**
@@ -62,7 +78,7 @@ final class FakePersistenceStore
             if ($clean === []) {
                 return;
             }
-            $payload = json_encode($clean, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $payload = json_encode($clean, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
             if ($payload === false) {
                 return;
             }
@@ -128,7 +144,7 @@ final class FakePersistenceStore
     {
         $out = [];
         foreach ($fields as $key => $value) {
-            if (count($out) >= self::MAX_FIELDS) {
+            if (count($out) >= $this->maxFields) {
                 break;
             }
             if (!is_string($key) || !is_scalar($value)) {
@@ -138,8 +154,8 @@ final class FakePersistenceStore
             if ($val === '') {
                 continue;
             }
-            if (strlen($val) > self::MAX_VALUE_LEN) {
-                $val = substr($val, 0, self::MAX_VALUE_LEN);
+            if (strlen($val) > $this->maxValueLen) {
+                $val = substr($val, 0, $this->maxValueLen);
             }
             $out[substr($key, 0, 64)] = $val;
         }

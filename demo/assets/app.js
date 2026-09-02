@@ -39,6 +39,7 @@ function detectSource(r){
   if(r.method==='SIP'||r.proto==='sip') return 'SIP';
   if(r.event==='llm-fake') return 'LLM';
   if(r.event==='ai-api') return 'AI';
+  if(r.event==='docker') return 'Docker';
   if(r.event==='decoy-archive') return 'Decoy';
   if(r.event==='panel') return 'Panel';
   const ids=r.templates||[];
