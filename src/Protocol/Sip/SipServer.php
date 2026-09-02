@@ -89,15 +89,28 @@ final class SipServer
      * Rollup state for suppressed (dropped) flood requests, per apparent source: the running count, the
      * time of the first drop in the current burst, and when we last emitted a rollup event — so a flood
      * of thousands becomes ~one 'call_flood' row per minute instead of one row per call.
-     * @var array<string, array{count: int, since: string, lastLog: float}>
+     * @var array<string, array{count: int, since: string, lastLog: float, method: string, lastLoggedCount: int}>
      */
     private array $floodState = [];
     private const FLOOD_ROLLUP_SECS = 60.0; // emit at most one flood rollup per source per this window
-    private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (both maps) so they can't grow unbounded
+    private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (all maps) so they can't grow unbounded
+
+    /**
+     * Cumulative per-source call ceiling (distinct from the per-second rate bucket): counts a source's
+     * throttled requests (calls, extension-enum REGISTERs, OPTIONS sweeps) across an active run. Once it
+     * exceeds callCeiling the source is a confirmed flooder we've already characterized, so it flips to
+     * 'strict' — every subsequent request is dropped (logging collapsed to the flood rollup) until it
+     * stays quiet for callCeilingIdleReset and is forgotten. The rate bucket catches only FAST floods;
+     * this catches a slow, relentless source that never drains the per-second bucket yet still buries the
+     * log in per-request rows.
+     * @var array<string, array{count: int, last: float, strict: bool}>
+     */
+    private array $ceilingState = [];
 
     /** SIP methods that initiate work / draw an unsolicited response and so are worth flood-throttling.
      *  In-dialog follow-ups (ACK/BYE/CANCEL/INFO) are left alone so an admitted call still tears down. */
     private const THROTTLED_METHODS = ['INVITE', 'REGISTER', 'OPTIONS', 'MESSAGE'];
+    private const DTMF_MAX_DIGITS = 64; // cap captured DTMF per dialog; a real sequence is far shorter
 
     /** The request currently being dispatched, so logEvent can attach attacker attribution. */
     private ?SipMessage $currentReq = null;
@@ -451,10 +464,15 @@ final class SipServer
         // safe on UDP), with its per-call logging collapsed to a periodic rollup. Auto-recovers when the
         // source slows. ACK/BYE/CANCEL/INFO are exempt so an already-admitted call still tears down; a
         // re-INVITE from a drained source is throttled like any INVITE (a flood has no legitimate ones).
-        if (in_array($req->method, self::THROTTLED_METHODS, true) && !$this->admitRequest($peerIp)) {
-            $this->recordFloodDrop($peerIp, $req->method);
+        if (in_array($req->method, self::THROTTLED_METHODS, true)) {
+            // Cumulative ceiling first (a slow, relentless dialer the rate bucket never catches), then the
+            // per-second rate bucket (a fast flood). Either dropping routes to the same rollup so a buried
+            // log collapses to ~one 'call_flood' row per source per minute.
+            if ($this->overCallCeiling($peerIp, $req->method) || !$this->admitRequest($peerIp)) {
+                $this->recordFloodDrop($peerIp, $req->method);
 
-            return;
+                return;
+            }
         }
 
         switch ($req->method) {
@@ -1341,9 +1359,11 @@ final class SipServer
         $bucket['tokens'] = min($burst, $bucket['tokens'] + $elapsed * $rate);
         $bucket['last'] = $now;
 
-        // Fully refilled -> the source has been quiet long enough to have recovered; drop any flood
-        // rollup state so a later flood is reported as a fresh incident rather than continuing the count.
+        // Fully refilled -> the source has been quiet long enough to have recovered; flush the residual
+        // drop count (so the total is exact, not undercounted by the last window) then drop the rollup
+        // state so a later flood is reported as a fresh incident rather than continuing the count.
         if ($bucket['tokens'] >= $burst) {
+            $this->flushFloodRollup($ip);
             unset($this->floodState[$ip]);
         }
 
@@ -1353,6 +1373,71 @@ final class SipServer
         $bucket['tokens'] -= 1.0;
 
         return true;
+    }
+
+    /**
+     * Cumulative per-source ceiling gate. Returns true when the request should be dropped because the
+     * source is a confirmed flooder. A source accumulates one count per throttled request (INVITE calls,
+     * REGISTER enumeration/brute-force, OPTIONS sweeps) across an active run; once the count exceeds
+     * callCeiling it flips to 'strict' and every throttled request from it is dropped — we have already
+     * learned all we can, so there is nothing left to gain by answering. The source is forgotten (and thus
+     * forgiven) after callCeilingIdleReset seconds of silence.
+     */
+    private function overCallCeiling(string $ip, string $method): bool
+    {
+        $ceiling = $this->config->callCeiling;
+        if ($ceiling <= 0) {
+            return false; // disabled
+        }
+        $now = microtime(true);
+
+        if (!isset($this->ceilingState[$ip])) {
+            if (count($this->ceilingState) >= self::CALL_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->ceilingState as $k => $s) {
+                    if ($s['last'] < $oldestAt) {
+                        $oldestAt = $s['last'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->ceilingState[$oldestKey]);
+                }
+            }
+            $this->ceilingState[$ip] = ['count' => 0, 'last' => $now, 'strict' => false];
+        }
+
+        $st = &$this->ceilingState[$ip];
+        // A source that has been silent longer than the reset window is forgiven: start a fresh run so a
+        // bot that gives up and returns hours later is re-characterized rather than dropped on sight. A
+        // strict source is dropped before the rate bucket runs, so its flood state is cleared here (with a
+        // final flush) rather than in admitRequest.
+        if (($now - $st['last']) > $this->config->callCeilingIdleReset) {
+            $st['count'] = 0;
+            $st['strict'] = false;
+            $this->flushFloodRollup($ip);
+            unset($this->floodState[$ip]);
+        }
+        $st['last'] = $now;
+
+        if ($st['strict']) {
+            return true;
+        }
+
+        // Count every throttled request toward the ceiling, not just calls. A tool floods us with
+        // whatever method it uses: INVITE (toll-fraud dial), REGISTER (extension enumeration / credential
+        // brute-force), OPTIONS (liveness sweep). A call-only counter would let the REGISTER/OPTIONS
+        // scanners run forever. This method is only ever invoked for THROTTLED_METHODS, so any call here
+        // is a floodable request.
+        $st['count']++;
+        if ($st['count'] > $ceiling) {
+            $st['strict'] = true;
+
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -1379,32 +1464,46 @@ final class SipServer
                 }
             }
             // First drop of a fresh flood: log it immediately so the incident's start is visible.
-            $this->floodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now];
-            $this->emitFloodRollup($ip, $method);
+            $this->floodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now, 'method' => $method, 'lastLoggedCount' => 0];
+            $this->emitFloodRollup($ip);
 
             return;
         }
 
         $st = &$this->floodState[$ip];
         $st['count']++;
+        $st['method'] = $method;
         if (($now - $st['lastLog']) >= self::FLOOD_ROLLUP_SECS) {
             $st['lastLog'] = $now;
-            $this->emitFloodRollup($ip, $method);
+            $this->emitFloodRollup($ip);
+        }
+    }
+
+    /**
+     * Emit the residual (not-yet-rolled-up) drops for $ip before its flood state is cleared. Without this
+     * the last <FLOOD_ROLLUP_SECS window of a flood is never logged, so the recorded suppressed-count
+     * permanently undercounts by up to one rollup window. Call right before dropping the flood state.
+     */
+    private function flushFloodRollup(string $ip): void
+    {
+        if (isset($this->floodState[$ip]) && $this->floodState[$ip]['count'] > $this->floodState[$ip]['lastLoggedCount']) {
+            $this->emitFloodRollup($ip);
         }
     }
 
     /** Emit one throttle rollup event. Never reportable: a throttled flood is pre-ACK and, over UDP,
      *  the source is unverifiable (possibly a spoofed victim) — reporting it would blame an innocent IP. */
-    private function emitFloodRollup(string $ip, string $method): void
+    private function emitFloodRollup(string $ip): void
     {
-        $st = $this->floodState[$ip];
+        $st = &$this->floodState[$ip];
+        $st['lastLoggedCount'] = $st['count'];
         $this->logEvent([
             'proto' => 'sip',
             'method' => 'SIP',
             'event' => 'call_flood',
             'ip' => $ip,
             'port' => $this->currentPeerPort,
-            'path' => "SIP flood throttled: {$st['count']} {$method} request(s) dropped from {$ip} since {$st['since']}",
+            'path' => "SIP flood throttled: {$st['count']} {$st['method']} request(s) dropped from {$ip} since {$st['since']}",
             'matched' => 1,
             'served' => 0,
             'reportable' => false,
@@ -1582,11 +1681,19 @@ final class SipServer
             // to the max-duration cap and recording minutes of silence.
             $baseline = $s->lastInboundTime > 0.0 ? $s->lastInboundTime : $s->startTime;
             $idle = $now - $baseline;
+            // A streaming call that has received ZERO caller RTP is a scanner that completed the
+            // handshake but never spoke: we would otherwise stream a persona to no one until the full
+            // idle cap. Drop it on a shorter clock so we free the slot + stop wasting CPU fast. A call
+            // that DID send some audio then went quiet still uses the normal idle cap. 0 disables.
+            $noAudio = $s->isStreaming() && $s->recordedInbound === '';
+            $idleCap = ($noAudio && $this->config->callNoAudioTimeout > 0)
+                ? $this->config->callNoAudioTimeout
+                : $this->config->callIdleTimeout;
             // A never-ACKed INVITE never becomes "streaming", so the idle clause below can't reap it.
             // Evict it at the setup timeout so scan INVITEs can't exhaust the call table.
             $setupStalled = !$s->isStreaming() && ($now - $s->startTime) > self::INVITE_SETUP_TIMEOUT;
             if ($s->getDuration() > $this->config->maxCallDuration
-                || ($s->isStreaming() && $idle > $this->config->callIdleTimeout)
+                || ($s->isStreaming() && $idle > $idleCap)
                 || $setupStalled) {
                 try {
                     $this->endSession($s, $key);
@@ -1708,7 +1815,9 @@ final class SipServer
      *  - Metasploit SIP mixin: a hardcoded From-tag `70c00e8c` on every probe.
      *  - SIPVicious family (OSS + PRO): From/To domain 1.1.1.1 (To echoes From), a `"sipvicious"` display
      *    name, or a Via branch `z9hG4bK-` followed by pure decimals (random.getrandbits(32)).
-     *  - sippts (Pepelux): a long lowercase-alnum Via branch with NO z9hG4bK cookie + a bare 32-hex Call-ID.
+     *  - sippts (Pepelux): a long lowercase-alnum Via branch with NO z9hG4bK cookie + a bare 32-hex Call-ID;
+     *    OR the fixed 13-method Allow list; OR the SDP session name s=SIPPTS (the latter two survive both a
+     *    -ua override and a fuzzed branch).
      */
     private function classifyByWireSignature(SipMessage $req): ?string
     {
@@ -1733,6 +1842,17 @@ final class SipServer
         if ($via !== '' && stripos($via, 'z9hG4bK') === false
             && preg_match('/branch=[a-z0-9]{40,}/', $via) === 1
             && preg_match('/^[a-f0-9]{32}$/', trim((string) ($req->getHeader('call-id') ?? ''))) === 1) {
+            return 'pplsip-scanner';
+        }
+
+        // sippts, UA- and branch-independent: its shared builder stamps two fixed constants a real client
+        // never emits — the exact 13-method Allow list (this order) and the SDP session name s=SIPPTS.
+        // These survive both a -ua override and a fuzzed branch, so they catch runs the checks above miss.
+        $allowNorm = strtolower((string) preg_replace('/\s+/', '', (string) ($req->getHeader('allow') ?? '')));
+        if ($allowNorm === 'invite,register,ack,cancel,bye,notify,refer,options,info,subscribe,update,prack,message') {
+            return 'pplsip-scanner';
+        }
+        if (stripos($req->body, 's=SIPPTS') !== false) {
             return 'pplsip-scanner';
         }
 
@@ -1824,10 +1944,18 @@ final class SipServer
             return;
         }
 
+        // Attribute the digit to a matching dialog if there is one, and bound a post-call INFO burst:
+        // once a full DTMF sequence is captured on an admitted dialog, stop logging + buffering the tail
+        // (FP-0218 — a real sequence is far shorter than the cap; the tail is a flood we gain nothing from).
+        // A bare/off-dialog INFO (no session) is still logged as intel, but the reportable gate below keeps
+        // a lone spoofable datagram from blaming a forged source.
         $match = $this->findSessionByCallId($req->getCallId() ?? '', $peerIp);
         $streaming = false;
         if ($match) {
             [, $s] = $match;
+            if (strlen($s->dtmfDigits) >= self::DTMF_MAX_DIGITS) {
+                return; // full sequence already captured; ignore the in-dialog flood tail silently
+            }
             $s->dtmfDigits .= $digit;
             $streaming = $s->isStreaming();
         }
@@ -1844,7 +1972,7 @@ final class SipServer
             // FP-0247 anti-spoof: a lone forged INFO carrying a DTMF body is one spoofable UDP
             // datagram — reporting it would blame the forged source. Report only over return-routable
             // TCP, or when the INFO belongs to a call that passed the ACK To-tag check and is streaming.
-            'reportable' => ($transport === 'tcp') || ($match !== null && $streaming),
+            'reportable' => ($transport === 'tcp') || $streaming,
         ]);
     }
 

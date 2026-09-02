@@ -107,6 +107,29 @@ final class SipConfig
          */
         public int $crackMin = 2,
         public int $crackMax = 4,
+        /**
+         * Seconds an answered (streaming) call may receive ZERO caller audio before we tear it down. A
+         * scanner completes the handshake but never sends RTP, so we would otherwise stream a persona to
+         * no one until the (longer) idle/max-duration cap — wasted CPU + a held session slot. Drop it fast
+         * once it is clearly a silent bot. 0 disables (fall back to callIdleTimeout). Only applies once a
+         * call is streaming (post-ACK); a never-ACKed INVITE is already reaped at the RFC setup timeout.
+         */
+        public int $callNoAudioTimeout = 10,
+        /**
+         * Cumulative per-source call ceiling: how many throttled requests (INVITE calls, REGISTER
+         * enumeration/brute-force, OPTIONS sweeps) one apparent source may make in an active run before it
+         * is treated as a confirmed flooder and every further request from it is dropped (silently —
+         * reflection-safe — with logging collapsed to the flood rollup). The honeypot has no legitimate
+         * callers, so a source past this ceiling has been fully characterized and there is nothing more to
+         * learn by answering. Distinct from callBurst/callRatePerSec, which is a per-second bucket that only
+         * catches FAST floods; this catches a slow, relentless source. 0 disables.
+         */
+        public int $callCeiling = 20,
+        /**
+         * Seconds of silence after which a ceiling-flagged source is forgotten and re-characterized on its
+         * next call (auto-recovery). While a flooder keeps sending inside this window it stays strict.
+         */
+        public float $callCeilingIdleReset = 300.0,
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -289,6 +312,12 @@ final class SipConfig
         $crackMin = ($crackMinRaw !== false && $crackMinRaw !== '') ? (int) $crackMinRaw : 2;
         $crackMaxRaw = getenv('FUNNYPOT_SIP_CRACK_MAX');
         $crackMax = ($crackMaxRaw !== false && $crackMaxRaw !== '') ? (int) $crackMaxRaw : 4;
+        $noAudioRaw = getenv('FUNNYPOT_SIP_NO_AUDIO_TIMEOUT');
+        $noAudioTimeout = ($noAudioRaw !== false && $noAudioRaw !== '') ? (int) $noAudioRaw : 10;
+        $ceilingRaw = getenv('FUNNYPOT_SIP_CALL_CEILING');
+        $callCeiling = ($ceilingRaw !== false && $ceilingRaw !== '') ? (int) $ceilingRaw : 20;
+        $ceilingResetRaw = getenv('FUNNYPOT_SIP_CALL_CEILING_IDLE_RESET');
+        $callCeilingIdleReset = ($ceilingResetRaw !== false && $ceilingResetRaw !== '') ? (float) $ceilingResetRaw : 300.0;
         $idleTimeout = (int) (getenv('FUNNYPOT_SIP_IDLE_TIMEOUT') ?: '30');
         $rtpPort = (int) (getenv('FUNNYPOT_SIP_RTP_PORT') ?: '10000');
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
@@ -364,6 +393,9 @@ final class SipConfig
             callRatePerSec: max(0.0, $callRate),
             crackMin: $crackMin,
             crackMax: max($crackMin, $crackMax),
+            callNoAudioTimeout: max(0, $noAudioTimeout),
+            callCeiling: max(0, $callCeiling),
+            callCeilingIdleReset: max(1.0, $callCeilingIdleReset),
         );
     }
 }
