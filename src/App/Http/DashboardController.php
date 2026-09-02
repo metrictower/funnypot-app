@@ -561,6 +561,7 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"event":"panel"}\'>admin panel</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"shell"}\'>web console</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"ai-api"}\'>AI API</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"event":"docker"}\'>Docker</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"llm-fake"}\'>LLM pages</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"VNC"}\'>VNC</button>';
         echo '<button class=\'btn qscan\' id=qscan title=\'show only classified reconnaissance tools (scanners / wardialers) — lured in and captured\'>&#128269; scanners</button>';

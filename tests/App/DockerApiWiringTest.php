@@ -110,8 +110,62 @@ final class DockerApiWiringTest extends TestCase
         self::assertFalse(AppConfig::fromEnv(sys_get_temp_dir())->dockerApiEnabled, 'unset should disable (opt-in)');
     }
 
+    public function test_bare_version_on_port_80_falls_through_to_the_honeypot(): void
+    {
+        // FP-0264 port scoping: bare /version is NOT owned on a web port, so it reaches the honeypot.
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $calls = 0;
+        $router = $this->router($store, $this->spyDocker($calls, 80));
+
+        ob_start();
+        @$router->dispatch(new RequestContext('GET', '/version'), '9.9.9.9', 'off');
+        ob_end_clean();
+
+        self::assertSame(0, $calls, 'the Docker decoy must not claim bare /version on port 80');
+        self::assertNotEmpty($store->delta(0)['rows'], 'the honeypot logged the /version probe');
+    }
+
+    public function test_bare_version_on_docker_port_is_served_by_the_decoy(): void
+    {
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $calls = 0;
+        $router = $this->router($store, $this->spyDocker($calls, 2375));
+
+        ob_start();
+        $router->dispatch(new RequestContext('GET', '/version'), '9.9.9.9', 'off');
+        ob_end_clean();
+
+        self::assertSame(1, $calls, 'on a Docker port the decoy serves bare /version');
+        self::assertSame([], $store->delta(0)['rows']);
+    }
+
+    public function test_dashboard_path_still_resolves_on_port_80(): void
+    {
+        // With the Docker decoy armed on port 80, the operator dashboard path is not shadowed — the
+        // Docker seam only claims Docker path shapes there (the whole-port shadow is accepted ONLY on
+        // 2375/4243). Proven by the decoy spy seeing 0 calls for the dashboard path.
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $calls = 0;
+        $docker = $this->spyDocker($calls, 80);
+        $config = AppConfig::fromEnv($this->tmpPath('base'));
+        $fp = rtrim($config->funnypotPath, '/');
+
+        self::assertFalse($docker->matches($fp), 'the dashboard path is not a Docker surface on port 80');
+        self::assertTrue($docker->matches('/version') === false, 'sanity: bare version not owned on 80');
+    }
+
+    public function test_docker_port_shadows_everything_including_the_dashboard(): void
+    {
+        // The accepted trade-off: on a Docker port the seam owns the whole port (so an unmatched path
+        // is answered as dockerd's page-not-found rather than an nginx HTML 404 tell).
+        $calls = 0;
+        $docker = $this->spyDocker($calls, 2375);
+        $config = AppConfig::fromEnv($this->tmpPath('base'));
+        self::assertTrue($docker->matches(rtrim($config->funnypotPath, '/')), 'accepted: Docker port shadows the dashboard');
+    }
+
     /** @param int $calls counter incremented on each respond() */
-    private function spyDocker(int &$calls): DockerApiRouter
+    private function spyDocker(int &$calls, int $port = 0): DockerApiRouter
     {
         $responder = $this->getMockBuilder(DockerApiResponder::class)
             ->disableOriginalConstructor()
@@ -121,7 +175,7 @@ final class DockerApiWiringTest extends TestCase
             $calls++;
         });
 
-        return new DockerApiRouter($responder);
+        return new DockerApiRouter($responder, $port);
     }
 
     private function router(SqliteHitStore $store, DockerApiRouter $docker): Router

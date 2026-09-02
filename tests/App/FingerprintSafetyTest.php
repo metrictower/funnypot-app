@@ -268,11 +268,32 @@ final class FingerprintSafetyTest extends TestCase
     public function test_docker_daemon_output_carries_no_denylisted_signature(int $seed): void
     {
         $d = DockerDaemon::fromSeed($seed);
+        $phantom = [
+            'id' => str_repeat('b', 64), 'image' => 'alpine', 'command' => 'sh', 'cmd' => ['sh'],
+            'entrypoint' => [], 'env' => ['A=1'], 'binds' => ['/:/host'], 'mounts' => [],
+            'name' => '', 'created' => 1_700_000_000, 'started' => true, 'privileged' => true,
+            'pid_mode' => 'host', 'network_mode' => 'host', 'user' => '', 'hostname' => '', 'tty' => false,
+        ];
         $blob = json_encode($d->version())
-            . json_encode($d->info(1_700_000_000))
-            . json_encode($d->containers())
-            . json_encode($d->images())
-            . $d->createdId('xmrig/xmrig', '-o pool.example:4444 -u wallet');
+            . json_encode($d->info(1_700_000_000, 2, 1, 3, 1))
+            . json_encode($d->containers([$phantom], [], true))
+            . json_encode($d->images(['docker.io/library/alpine:latest', 'evil.example:5000/x/miner:latest']))
+            . $d->createdId('xmrig/xmrig', '-o pool.example:4444 -u wallet')
+            // FP-0264 engagement generators the compiled-artifact gate never sees:
+            . json_encode($d->pullStream('alpine:latest'))
+            . json_encode($d->pullStream('evil.example:5000/x/miner:latest'))
+            . json_encode($d->inspectPhantom($phantom, 1_700_000_000))
+            . json_encode($d->inspectImage('alpine', 1_700_000_000))
+            . json_encode($d->execInspect($d->execId('cid', 'id'), 'cid', ['sh', '-c', 'id']))
+            . json_encode($d->notFound('container', 'deadbeef'))
+            . json_encode(['message' => 'page not found']);
+        for ($i = 0; $i < $d->fleetCount(); $i++) {
+            $blob .= json_encode($d->inspectFleet($i, 1_700_000_000)) . json_encode($d->logsFleet($i));
+        }
+        // The whole container-name generator table, over a spread of ids.
+        foreach (['0011223344ff', 'abcdef012345', str_repeat('c', 64), str_repeat('9', 12), 'feedface0000'] as $cid) {
+            $blob .= ' ' . $d->containerName($cid);
+        }
 
         self::assertClean((string) $blob, "Docker daemon output for seed {$seed}");
     }

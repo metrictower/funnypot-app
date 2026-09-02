@@ -81,6 +81,8 @@ final class AbuseIpdb
                 return '15,21';   // hacking + web app attack
             case 'lfi':
                 return '21,15';   // web app attack + hacking
+            case 'docker_escape':
+                return '15,21';   // hacking (container-escape onto the host) + web app attack
             case 'docker_api':
                 return '15,21';   // hacking (unauthenticated daemon RCE) + web app attack
             case 'xss':
