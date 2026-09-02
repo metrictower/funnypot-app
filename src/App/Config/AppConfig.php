@@ -171,6 +171,11 @@ final class AppConfig
         /** Per-request honoured-sleep cap (ms), hard-clamped ≤ 2000 so an operator typo can't pin a
          *  worker near nginx's 15s timeout; TarpitBudget re-clamps to LATENCY_HARD_CAP_MS behind this. */
         public int $sleepPerReqCapMs = 2000,
+        /** FP-0247 (Fix E): max age of a queued abuse/threat-intel report before the drain drops it
+         *  unsent — a report that can no longer state a truthful, recent observation time is not sent,
+         *  and this bounds any backlog a sustained 429 accumulates. Safe defaults preserve behaviour. */
+        public int $abuseIpdbMaxQueueAgeHours = 24,
+        public int $threatIntelMaxQueueAgeHours = 24,
     ) {
     }
 
@@ -295,6 +300,8 @@ final class AppConfig
             threatIntelKey: $str('FUNNYPOT_THREATINTEL_KEY', ''),
             threatIntelDailyCap: max(1, (int) $str('FUNNYPOT_THREATINTEL_DAILY_CAP', '1000')),
             threatIntelDedupHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_DEDUP_HOURS', '24')),
+            abuseIpdbMaxQueueAgeHours: max(1, (int) $str('FUNNYPOT_ABUSEIPDB_MAX_QUEUE_AGE_HOURS', '24')),
+            threatIntelMaxQueueAgeHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_MAX_QUEUE_AGE_HOURS', '24')),
             llmEnabled: in_array(strtolower((string) $env('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
             aiApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
             dockerApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true),

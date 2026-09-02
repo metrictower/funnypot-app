@@ -60,9 +60,17 @@ final class ThreatIntelReporterTest extends TestCase
         };
     }
 
-    private function make(string $db, array $selfIps, int $cap = 1000, int $dedupH = 24, ?callable $sender = null): ThreatIntelReporter
+    private function make(string $db, array $selfIps, int $cap = 1000, int $dedupH = 24, ?callable $sender = null, int $maxAgeH = 24): ThreatIntelReporter
     {
-        return new ThreatIntelReporter(self::URL, 'KEY', $db, $selfIps, $cap, $dedupH, $sender);
+        return new ThreatIntelReporter(self::URL, 'KEY', $db, $selfIps, $cap, $dedupH, $sender, maxQueueAgeHours: $maxAgeH);
+    }
+
+    /** Rewrite a queued row's created_at to $iso, for the observation-timestamp / purge tests. */
+    private function backdate(string $db, string $ip, string $iso): void
+    {
+        $pdo = new \PDO('sqlite:' . $db);
+        $st = $pdo->prepare('UPDATE ti_queue SET created_at = :t WHERE ip = :ip');
+        $st->execute([':t' => $iso, ':ip' => $ip]);
     }
 
     public function test_enqueue_then_drain_posts_to_v1_report_with_key_and_sensor_id(): void
@@ -214,6 +222,51 @@ final class ThreatIntelReporterTest extends TestCase
         $names = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(\PDO::FETCH_COLUMN);
         self::assertContains('ti_queue', $names);
         self::assertNotContains('abuse_queue', $names);   // AbuseIpdb's tables are not touched
+    }
+
+    public function test_429_is_transient_row_survives_and_pass_stops(): void
+    {
+        $calls = [];
+        $db = $this->dbPath();
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($calls, 429));
+        $a->enqueue('45.9.148.1', 'x');
+        $a->enqueue('45.9.148.2', 'y');
+        $r = $a->drain();
+        self::assertSame(0, $r['sent']);
+        self::assertSame(0, $r['failed']);
+        self::assertSame(2, $a->queueCount());
+        self::assertCount(1, $calls);
+    }
+
+    public function test_drain_sends_observation_timestamp_not_drain_time(): void
+    {
+        $calls = [];
+        $db = $this->dbPath();
+        $recorder = static function (string $url, array $headers, string $body) use (&$calls): array {
+            parse_str($body, $f);
+            $calls[] = (string) ($f['timestamp'] ?? '');
+
+            return ['status' => 200, 'body' => '{}'];
+        };
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $recorder);
+        $a->enqueue('45.9.148.1', 'x');
+        $observed = gmdate('c', time() - 2 * 3600);
+        $this->backdate($db, '45.9.148.1', $observed);
+        $a->drain();
+        self::assertSame($observed, $calls[0]);
+    }
+
+    public function test_drain_purges_rows_older_than_max_age(): void
+    {
+        $calls = [];
+        $db = $this->dbPath();
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($calls), 24);
+        $a->enqueue('45.9.148.1', 'x');
+        $this->backdate($db, '45.9.148.1', gmdate('c', time() - 48 * 3600));
+        $r = $a->drain();
+        self::assertSame(0, $r['sent']);
+        self::assertCount(0, $calls);
+        self::assertSame(0, $a->queueCount());
     }
 
     public function test_benign_scanner_is_never_enqueued(): void

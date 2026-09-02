@@ -53,9 +53,17 @@ final class AbuseIpdbTest extends TestCase
         };
     }
 
-    private function make(string $db, array $selfIps, int $cap = 1000, int $dedupH = 24, ?callable $sender = null): AbuseIpdb
+    private function make(string $db, array $selfIps, int $cap = 1000, int $dedupH = 24, ?callable $sender = null, int $maxAgeH = 24): AbuseIpdb
     {
-        return new AbuseIpdb('KEY', $db, $selfIps, $cap, $dedupH, $sender);
+        return new AbuseIpdb('KEY', $db, $selfIps, $cap, $dedupH, $sender, maxQueueAgeHours: $maxAgeH);
+    }
+
+    /** Rewrite a queued row's created_at to $iso, for the observation-timestamp / purge tests. */
+    private function backdate(string $db, string $ip, string $iso): void
+    {
+        $pdo = new \PDO('sqlite:' . $db);
+        $st = $pdo->prepare('UPDATE abuse_queue SET created_at = :t WHERE ip = :ip');
+        $st->execute([':t' => $iso, ':ip' => $ip]);
     }
 
     public function test_enqueue_then_drain_sends_with_port_url_categories(): void
@@ -139,6 +147,62 @@ final class AbuseIpdbTest extends TestCase
         $b->enqueue('45.9.148.2', 'x');
         $b->drain();
         self::assertSame(0, $b->queueCount());
+    }
+
+    public function test_429_is_transient_row_survives_and_pass_stops(): void
+    {
+        // FP-0247 (Fix D): a 429 must NOT delete the row (it is a rate limit, not a permanent error);
+        // the pass stops and the row is retried next tick.
+        $calls = [];
+        $db = $this->dbPath();
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($calls, 429));
+        $a->enqueue('45.9.148.1', 'x');
+        $a->enqueue('45.9.148.2', 'y');
+        $r = $a->drain();
+        self::assertSame(0, $r['sent']);
+        self::assertSame(0, $r['failed']);          // not counted as failed — transient
+        self::assertSame(2, $a->queueCount());      // both rows survive
+        self::assertCount(1, $calls);               // pass stopped after the first 429
+
+        // Once the limit clears, the same rows send.
+        $ok = [];
+        $b = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($ok, 200));
+        $b->drain();
+        self::assertSame(0, $b->queueCount());
+        self::assertCount(2, $ok);
+    }
+
+    public function test_drain_sends_observation_timestamp_not_drain_time(): void
+    {
+        // FP-0247 (Fix E): the POSTed timestamp is the enqueue/observation time (created_at), not now.
+        $calls = [];
+        $db = $this->dbPath();
+        $recorder = static function (string $url, array $headers, string $body) use (&$calls): array {
+            parse_str($body, $f);
+            $calls[] = (string) ($f['timestamp'] ?? '');
+
+            return ['status' => 200, 'body' => '{}'];
+        };
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $recorder);
+        $a->enqueue('45.9.148.1', 'x');
+        $observed = gmdate('c', time() - 2 * 3600);   // 2h ago — inside the 24h window
+        $this->backdate($db, '45.9.148.1', $observed);
+        $a->drain();
+        self::assertSame($observed, $calls[0], 'the POST must carry the observation time, not the drain time');
+    }
+
+    public function test_drain_purges_rows_older_than_max_age(): void
+    {
+        // FP-0247 (Fix E): a row too old to report truthfully is dropped, never sent.
+        $calls = [];
+        $db = $this->dbPath();
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($calls), 24);
+        $a->enqueue('45.9.148.1', 'x');
+        $this->backdate($db, '45.9.148.1', gmdate('c', time() - 48 * 3600));   // 48h ago > 24h max
+        $r = $a->drain();
+        self::assertSame(0, $r['sent']);
+        self::assertCount(0, $calls, 'a stale row must never be POSTed');
+        self::assertSame(0, $a->queueCount());
     }
 
     public function test_benign_scanner_is_never_enqueued(): void

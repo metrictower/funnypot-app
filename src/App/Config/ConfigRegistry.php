@@ -124,6 +124,8 @@ final class ConfigRegistry
             'threatintel.url' => ['field' => 'threatIntelUrl', 'env' => 'FUNNYPOT_THREATINTEL_URL', 'type' => 'string', 'default' => 'https://threatintel.metrictower.com', 'group' => 'Threat-intel', 'live' => false, 'secret' => false],
             'threatintel.daily_cap' => ['field' => 'threatIntelDailyCap', 'env' => 'FUNNYPOT_THREATINTEL_DAILY_CAP', 'type' => 'int', 'min' => 1, 'default' => '1000', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
             'threatintel.dedup_hours' => ['field' => 'threatIntelDedupHours', 'env' => 'FUNNYPOT_THREATINTEL_DEDUP_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // (max(1,...))
+            'abuseipdb.max_queue_age_hours' => ['field' => 'abuseIpdbMaxQueueAgeHours', 'env' => 'FUNNYPOT_ABUSEIPDB_MAX_QUEUE_AGE_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // FP-0247 (max(1,...))
+            'threatintel.max_queue_age_hours' => ['field' => 'threatIntelMaxQueueAgeHours', 'env' => 'FUNNYPOT_THREATINTEL_MAX_QUEUE_AGE_HOURS', 'type' => 'int', 'min' => 1, 'default' => '24', 'group' => 'Threat-intel', 'live' => false, 'secret' => false], // FP-0247 (max(1,...))
 
             // --- Endless-download throttle knobs (restart-required: DownloadRouter ctor). Clamped both floor+ceiling. ---
             'dl.chunk_min_kb' => ['field' => 'dlChunkMinKb', 'env' => 'FUNNYPOT_DL_CHUNK_MIN_KB', 'type' => 'int', 'min' => 1, 'max' => 1024, 'default' => '100', 'group' => 'Download', 'live' => false, 'secret' => false], // (max(1,min(1024,...)))

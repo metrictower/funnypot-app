@@ -28,7 +28,8 @@ try {
         $config->intelDbPath,
         $config->selfIps,
         $config->threatIntelDailyCap,
-        $config->threatIntelDedupHours
+        $config->threatIntelDedupHours,
+        maxQueueAgeHours: $config->threatIntelMaxQueueAgeHours,
     ))->drain();
     if ($result['sent'] > 0 || $result['failed'] > 0) {
         fwrite(STDERR, sprintf("threatintel: sent %d, failed %d, pending %d\n", $result['sent'], $result['failed'], $result['pending']));

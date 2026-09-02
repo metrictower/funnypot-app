@@ -35,6 +35,10 @@ final class AbuseIpdb
         private int $dailyCap = 1000,
         private int $dedupHours = 24,
         private $sender = null,
+        /** FP-0247 (Fix E): drop a queued report older than this — a report that can no longer state a
+         *  truthful, recent observation time is not sent (fail-closed on temporal integrity). Also
+         *  bounds the backlog a sustained 429 (Fix D) can accumulate. */
+        private int $maxQueueAgeHours = 24,
     ) {
     }
 
@@ -115,6 +119,7 @@ final class AbuseIpdb
         $sent = 0;
         $failed = 0;
         try {
+            $this->purgeStale();   // FP-0247 (Fix E): drop rows too old to report truthfully
             $rows = $this->db()->query('SELECT * FROM abuse_queue ORDER BY id ASC LIMIT ' . max(1, $limit))
                 ->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
@@ -135,7 +140,9 @@ final class AbuseIpdb
                         'ip' => $row['ip'],
                         'categories' => $row['categories'],
                         'comment' => $row['comment'],
-                        'timestamp' => gmdate('c'),
+                        // FP-0247 (Fix E): report the OBSERVATION time (enqueue), not the drain time. A
+                        // delayed drain (backlog / 429 retries) must not claim the attack happened "now".
+                        'timestamp' => (string) (($row['created_at'] ?? '') !== '' ? $row['created_at'] : gmdate('c')),
                     ])
                 );
                 $status = (int) ($res['status'] ?? 0);
@@ -147,6 +154,11 @@ final class AbuseIpdb
                 $this->delete((int) $row['id']);
                 $this->bumpDaily();
                 $sent++;
+            } elseif ($status === 429) {
+                // FP-0247 (Fix D): 429 is transient (daily quota / rate limit), NOT a permanent client
+                // error — leave the row untouched (no delete, no attempts bump) and stop the pass;
+                // hammering the API is pointless. Retried next pass; the max-age purge bounds growth.
+                break;
             } elseif ($status >= 400 && $status < 500) {
                 $this->delete((int) $row['id']);   // client error: it will never succeed
                 $failed++;
@@ -215,6 +227,13 @@ final class AbuseIpdb
     private function delete(int $id): void
     {
         $this->db()->prepare('DELETE FROM abuse_queue WHERE id = :id')->execute([':id' => $id]);
+    }
+
+    /** FP-0247 (Fix E): purge queued rows older than the max age — too stale to report truthfully. */
+    private function purgeStale(): void
+    {
+        $cutoff = gmdate('c', time() - max(1, $this->maxQueueAgeHours) * 3600);
+        $this->db()->prepare('DELETE FROM abuse_queue WHERE created_at < :cutoff')->execute([':cutoff' => $cutoff]);
     }
 
     private function dailyCount(): int

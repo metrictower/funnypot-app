@@ -21,7 +21,14 @@ if (!$config->abuseIpdbReport || $config->abuseIpdbKey === '') {
 }
 
 try {
-    $result = (new AbuseIpdb($config->abuseIpdbKey, $config->intelDbPath, $config->selfIps, $config->abuseIpdbDailyCap, $config->abuseIpdbDedupHours))->drain();
+    $result = (new AbuseIpdb(
+        $config->abuseIpdbKey,
+        $config->intelDbPath,
+        $config->selfIps,
+        $config->abuseIpdbDailyCap,
+        $config->abuseIpdbDedupHours,
+        maxQueueAgeHours: $config->abuseIpdbMaxQueueAgeHours,
+    ))->drain();
     if ($result['sent'] > 0 || $result['failed'] > 0) {
         fwrite(STDERR, sprintf("abuseipdb: sent %d, failed %d, pending %d\n", $result['sent'], $result['failed'], $result['pending']));
     }
