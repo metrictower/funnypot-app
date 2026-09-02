@@ -102,6 +102,28 @@ final class DockerDaemon
         return 'de40ad0';
     }
 
+    /**
+     * The engine ID a Docker 23.0+ daemon reports in /info: a lowercase 8-4-4-4-12 UUID (version nibble
+     * pinned to 4, variant nibble to 8–b). Seed-derived and deterministic — coherent per deploy, never a
+     * cross-fleet constant, no rand()/clock. (Real dockerd's engine-id is a plain UUID, not necessarily
+     * v4, but a well-formed v4 is indistinguishable from one and cannot itself be a version tell.)
+     */
+    private function daemonId(): string
+    {
+        $h = $this->hex(32, 'daemon-id');
+        $variant = dechex(8 + (hexdec($h[16]) % 4));   // 8, 9, a or b
+
+        return sprintf(
+            '%s-%s-4%s-%s%s-%s',
+            substr($h, 0, 8),
+            substr($h, 8, 4),
+            substr($h, 13, 3),
+            $variant,
+            substr($h, 17, 3),
+            substr($h, 20, 12)
+        );
+    }
+
     // --- payloads ---
 
     /** GET /version — the daemon + component version block. Version numbers real, commits seed-derived. */
@@ -161,11 +183,12 @@ final class DockerDaemon
         $images = count($this->imageTags()) + max(0, $extraImages);
 
         return [
-            // Engine ≥ 23 reports a UUID here (from /var/lib/docker/engine-id); the pre-23 libtrust
-            // fingerprint below is 12 colon-groups of 4 hex. GATE-ON-REAL-CAPTURE: switching to a
-            // seed-derived UUIDv4 is unverified against a live 24.0.x daemon in this offline repo, and a
-            // wrong guess would ADD a tell, so this is left as-is per the plan-review addendum.
-            'ID' => strtoupper(implode(':', str_split($this->hex(48, 'daemon-id'), 4))),
+            // Engine 23.0+ (moby #43974) replaced the libtrust key-fingerprint ID (12×4-hex colon groups)
+            // with a UUID read from /var/lib/docker/engine-id; 24.0.5 emits a lowercase 8-4-4-4-12 UUID.
+            // The FORMAT is publicly documented (not a guess), so the old colon-hex was a coherence tell
+            // vs the claimed version — fixed here. The VALUE stays seed-derived (deterministic, no rand /
+            // clock), so it is coherent per deploy and never a cross-fleet constant. (FP-0264 review A #1.)
+            'ID' => $this->daemonId(),
             'Containers' => $total,
             'ContainersRunning' => $running,
             'ContainersPaused' => 0,
@@ -441,8 +464,14 @@ final class DockerDaemon
     /**
      * The seeded jsonmessage sequence a real `dockerd` streams for `POST /images/create` (the "pull").
      * NOTHING is resolved or fetched — the sequence is a pure function of (seed, ref). Bounded: ≤ 40
-     * messages, layer sizes ≥ 1 MB (so no six-digit `9xxxxx` decimal can be misread as a CRS rule id),
-     * so the whole stream stays under a few KB and a fraction of a second to emit.
+     * messages, so the whole stream stays under a few KB and a fraction of a second to emit.
+     *
+     * FINGERPRINT SAFETY (FP-0264 review B / M1): the emitted `progressDetail.current` is 40 %/80 % of
+     * the layer `total`, so the FLOOR that matters is on `current`, not `total`. The app denylist bans a
+     * bare six-digit CRS rule id (`(?<![#0-9a-fA-F])9\d{5}(?![0-9a-fA-F])\b`); a `current` in
+     * [900000,999999] would trip it. Flooring `total` at 2_500_000 makes the smallest emitted `current`
+     * (40 %) ≥ 1_000_000 — always ≥ 7 digits, so no bare `9xxxxx` can ever be served (a 7-digit value
+     * like 2_900_000 is NOT a match: the `9` is preceded by a hex digit, failing the lookbehind).
      *
      * @return list<array<string,mixed>>
      */
@@ -457,8 +486,9 @@ final class DockerDaemon
         $layers = 1 + ($this->h('layers|' . $ref) % 4);   // 1..4
         for ($l = 0; $l < $layers; $l++) {
             $lid = substr($this->hex(12, "layer|{$ref}|{$l}"), 0, 12);
-            // Total between 1 MB and ~120 MB, always ≥ 7 digits so it never renders a bare 9xxxxx.
-            $total = 1_000_000 + ($this->h("size|{$ref}|{$l}") % 120_000_000);
+            // Total ∈ [2.5 MB, ~122 MB] so 40 % of the minimum is ≥ 1,000,000 (see the note above): no
+            // emitted current/total can ever land in the 900000–999999 denylist band.
+            $total = 2_500_000 + ($this->h("size|{$ref}|{$l}") % 120_000_000);
             $out[] = ['status' => 'Pulling fs layer', 'progressDetail' => new \stdClass(), 'id' => $lid];
             foreach ([40, 80] as $pct) {
                 $cur = intdiv($total * $pct, 100);

@@ -305,6 +305,29 @@ final class DockerApiResponderTest extends TestCase
         self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', json_decode($this->cap->body, true)['Id']);
     }
 
+    public function test_name_conflict_on_a_local_image_is_409_with_by_container_id(): void
+    {
+        // A local image + a --name colliding with a fleet container: 409 with real dockerd wording,
+        // including `by container "<full-id>"` (review A #2).
+        $this->make()->respond($this->ctx('POST', '/containers/create', ['Image' => 'postgres:15.4'], 'name=vault-secret-store'), self::IP);
+
+        self::assertSame(409, $this->cap->status);
+        $msg = json_decode($this->cap->body, true)['message'];
+        self::assertStringContainsString('The container name "/vault-secret-store" is already in use by container "', $msg);
+        self::assertMatchesRegularExpression('/by container "[0-9a-f]{64}"/', $msg);
+        self::assertStringContainsString('You have to remove (or rename)', $msg);
+    }
+
+    public function test_missing_image_404s_before_the_name_conflict(): void
+    {
+        // Order matches real moby (GetImage before reserveName): a NON-local image + a taken name
+        // returns the 404 first, so the pull is still induced even when --name collides (review A #3).
+        $this->make()->respond($this->ctx('POST', '/containers/create', ['Image' => 'alpine'], 'name=vault-secret-store'), self::IP);
+
+        self::assertSame(404, $this->cap->status);
+        self::assertSame('No such image: alpine:latest', json_decode($this->cap->body, true)['message']);
+    }
+
     public function test_unknown_container_start_is_404_json(): void
     {
         $this->make()->respond($this->ctx('POST', '/containers/deadbeefcafe/start'), self::IP);

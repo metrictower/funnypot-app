@@ -298,6 +298,34 @@ final class FingerprintSafetyTest extends TestCase
         self::assertClean((string) $blob, "Docker daemon output for seed {$seed}");
     }
 
+    /**
+     * FP-0264 review B (M1): the pull stream's seeded byte-counts are ATTACKER-REF-DEPENDENT, so a
+     * two-ref sample can pass while a broad class of refs leaks a bare six-digit `9xxxxx` (a CRS
+     * rule-id token the denylist bans). Sweep MANY refs × seeds through the real gate so a regression of
+     * that shape (e.g. lowering the layer-total floor) trips here. This is the test that was widened
+     * after it under-sampled and passed the M1 defect falsely.
+     *
+     * @dataProvider hostFactsSeeds
+     */
+    public function test_pull_stream_never_serves_a_denylisted_token_across_many_refs(int $seed): void
+    {
+        $d = DockerDaemon::fromSeed($seed);
+        $repos = ['alpine', 'nginx', 'redis', 'busybox', 'ubuntu', 'python', 'xmrig/xmrig', 'library/postgres'];
+        $regs = ['', 'evil.example:5000/', 'r.example/ns/', 'localhost:5000/'];
+        $tags = ['latest', '1', '3.18', 'v2', 'stable'];
+        $scanned = 0;
+        // ~800 refs per seed: enough that a value in the 900000–999999 band would surface.
+        for ($i = 0; $i < 1000; $i++) {
+            $ref = $regs[$i % count($regs)] . $repos[$i % count($repos)] . ':' . $tags[$i % count($tags)] . $i;
+            $bytes = (string) json_encode($d->pullStream($ref));
+            self::assertClean($bytes, "pullStream({$ref}) at seed {$seed}");
+            // Belt: assert the specific M1 property directly, independent of the denylist wiring.
+            self::assertSame(0, preg_match('/(?<![#0-9a-fA-F])9\d{5}(?![0-9a-fA-F])/', $bytes), "bare 9xxxxx in pullStream({$ref})");
+            $scanned++;
+        }
+        self::assertGreaterThan(500, $scanned);
+    }
+
     /** @return array<string,array{0:int}> label => identity seed (a spread of host identities) */
     public static function hostFactsSeeds(): array
     {

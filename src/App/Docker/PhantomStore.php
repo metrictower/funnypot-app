@@ -39,8 +39,13 @@ final class PhantomStore
     public function __construct(string $dbPath, private int $seed, ?callable $clock = null, int $ttl = 3600)
     {
         // Wider field/value caps than the panel default: a container spec carries ~16 fields and a
-        // JSON-encoded env/cmd list is longer than a note. Own file, own TTL.
-        $this->store = new FakePersistenceStore($dbPath, $clock, $ttl, 24, 2000);
+        // JSON-encoded env/cmd list is longer than a note. 4000 B/value comfortably holds a realistic
+        // env (a handful of KEY=value pairs) and command intact on the inspect echo; a pathologically
+        // over-stuffed env (EscapeIntent caps it at 32×256 ≈ 8 KB JSON) still exceeds this and is
+        // truncated — which fails SAFE: json_decode returns [] and inspect echoes an empty Env, while
+        // the FULL intel is captured separately on the export line + raw body (review A#6 / B S4). Own
+        // file, own TTL — never shares the panel store's global row cap. (Kept bounded, not unbounded.)
+        $this->store = new FakePersistenceStore($dbPath, $clock, $ttl, 24, 4000);
         $this->clock = $clock ?? 'time';
     }
 

@@ -150,6 +150,21 @@ final class DockerDaemonTest extends TestCase
         self::assertSame($components['docker-init'], $info['InitCommit']['ID']);
     }
 
+    public function test_info_id_is_a_seed_derived_uuid_not_libtrust(): void
+    {
+        // Docker 23.0+ reports a UUID engine ID (not the pre-23 12×4-hex libtrust fingerprint).
+        $info = DockerDaemon::fromSeed(7)->info(self::NOW);
+        self::assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $info['ID'],
+            'engine ID is a lowercase UUIDv4-shaped string'
+        );
+        self::assertStringNotContainsString(':', $info['ID'], 'no libtrust colon-hex format');
+        // Seed-derived + deterministic (no clock dependence); a different seed differs.
+        self::assertSame($info['ID'], DockerDaemon::fromSeed(7)->info(self::NOW + 5)['ID']);
+        self::assertNotSame($info['ID'], DockerDaemon::fromSeed(8)->info(self::NOW)['ID']);
+    }
+
     public function test_info_has_swarm_and_registry_config(): void
     {
         $info = DockerDaemon::fromSeed(7)->info(self::NOW);

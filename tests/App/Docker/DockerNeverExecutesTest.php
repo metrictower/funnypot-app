@@ -26,9 +26,13 @@ final class DockerNeverExecutesTest extends TestCase
     /** A backtick anywhere in the source is a shell-exec operator. */
     private const BACKTICK_RE = '/\x60/';
 
-    /** Filesystem / network / deserialisation primitives (call-shaped), banned everywhere in the seam. */
+    /** Filesystem / network / deserialisation primitives (call-shaped), banned everywhere in the seam.
+     *  Covers reads AND host-FS WRITES (file_put_contents / fwrite / fputs / copy / rename / touch /
+     *  mkdir / …), directory enumeration (glob / scandir / opendir / readdir), temp files, env mutation
+     *  (putenv), and dynamic-eval helpers (eval / assert / create_function) — the invariant is "no
+     *  filesystem write or process/network I/O beyond the app's own SQLite" (FP-0264 review B S1). */
     private const IO_RES = [
-        '/\b(?:file_get_contents|fopen|readfile|fsockopen|pfsockopen|stream_socket_client|stream_socket_server|stream_context_create|socket_create|socket_connect|gethostbynamel|gethostbyname|dns_get_record|checkdnsrr|eval|unserialize|mkdir|rmdir|unlink|symlink|link|chmod|chown|rename|touch)\s*\(/',
+        '/\b(?:file_get_contents|file_put_contents|fopen|fwrite|fputs|fread|fgets|fgetcsv|fputcsv|readfile|fpassthru|fscanf|copy|rename|touch|mkdir|rmdir|unlink|symlink|link|chmod|chown|chgrp|glob|scandir|opendir|readdir|tmpfile|tempnam|fsockopen|pfsockopen|stream_socket_client|stream_socket_server|stream_socket_pair|stream_context_create|socket_create|socket_connect|gethostbynamel|gethostbyname|dns_get_record|checkdnsrr|getmxrr|eval|assert|create_function|unserialize|putenv)\s*\(/',
         '/(?<![\w>])file\s*\(/',
         '/\bcurl_\w+\s*\(/',
         '/\b(?:include|require)(?:_once)?\s*[\(\'"]/',
@@ -130,9 +134,43 @@ final class DockerNeverExecutesTest extends TestCase
         }
         self::assertTrue($hit, 'an empty/broken regex must not pass a genuinely executing fixture');
 
-        // And each family bites its own primitive.
+        // And each family bites its own primitive — incl. a host-FS WRITE (review B S1 addition).
         self::assertSame(1, preg_match(self::EXEC_RE, '<?php system("id");'));
         self::assertSame(1, preg_match(self::UNIX_SCHEME_RE, 'fsockopen("unix:///var/run/docker.sock")'));
+        $writeHit = false;
+        foreach (self::IO_RES as $re) {
+            $writeHit = $writeHit || preg_match($re, '<?php file_put_contents("/host/x", $data);') === 1;
+        }
+        self::assertTrue($writeHit, 'a host-FS write (file_put_contents) must trip the I/O ban');
+    }
+
+    /**
+     * codeOnly() must PRESERVE a real primitive after blanking comments/strings (review B S2): a
+     * genuine call is a T_STRING token, never blanked, so a banned fixture still trips the scan even
+     * once its comments and string literals are stripped — closing the "tokenizer accidentally blanks a
+     * real call" gap. (The socket LITERAL inside a string is correctly blanked; the CALL survives.)
+     */
+    public function test_codeonly_preserves_a_real_call_while_blanking_strings(): void
+    {
+        $fixture = <<<'PHP'
+        <?php
+        // proc_open in a comment must be ignored
+        $s = "fsockopen in a string must be ignored, and /var/run/docker.sock";
+        proc_open('id', [], $p);
+        file_put_contents('/host/evil', $x);
+        PHP;
+        $code = self::codeOnly($fixture);
+
+        // The comment's and string's mentions are gone...
+        self::assertStringNotContainsString('fsockopen in a string', $code);
+        self::assertStringNotContainsString('in a comment', $code);
+        // ...but the real calls survive and still trip the scan.
+        self::assertSame(1, preg_match(self::EXEC_RE, $code), 'proc_open( must survive codeOnly()');
+        $ioHit = false;
+        foreach (self::IO_RES as $re) {
+            $ioHit = $ioHit || preg_match($re, $code) === 1;
+        }
+        self::assertTrue($ioHit, 'file_put_contents( must survive codeOnly()');
     }
 
     /** The demo/index.php Docker wiring block references no socket path or unix:// scheme. */

@@ -250,24 +250,31 @@ class DockerApiResponder
         $intel = $this->intent->fromCreate($body, $ctx->query, $ctx->headers);
         $display = (string) $intel['image_ref']['display'];
 
-        // Name conflict — a real daemon 409s a duplicate name before it 404s a missing image.
-        $name = (string) $intel['name'];
-        if ($name !== '' && $this->nameTaken($ip, $name)) {
-            $this->json(409, ['message' => sprintf(
-                'Conflict. The container name "/%s" is already in use. You have to remove (or rename) that container to be able to reuse that name.',
-                ltrim($name, '/')
-            )]);
+        // Order matches real moby daemon.create(): image resolution (GetImage → "No such image") runs
+        // BEFORE name reservation (reserveName → the 409). So a missing image + a taken name returns the
+        // 404 first — which also keeps the pull induction working when a bot's --name collides.
+        // (FP-0264 review A #3: reordered from the plan's §2.2 assumption, citing moby's ordering.)
+        $local = ImageRef::isLocal((string) $intel['image'], $this->daemon->localCanonicals(), $this->phantoms?->pulled($ip) ?? []);
+        if (!$local) {
+            // No such image — but the FULL escape config is in THIS body, so intel is captured even if
+            // the bot never pulls. This 404 is exactly what induces the bot's POST /images/create.
+            $this->json(404, $this->daemon->notFound('image', $display));
             $this->logHit($ctx, $ip, 'create', (string) $intel['class'], $intel);
             $this->reportIntent($ctx, $ip, 'create', $intel);
 
             return;
         }
 
-        $local = ImageRef::isLocal((string) $intel['image'], $this->daemon->localCanonicals(), $this->phantoms?->pulled($ip) ?? []);
-        if (!$local) {
-            // No such image — but the FULL escape config is in THIS body, so intel is captured even if
-            // the bot never pulls. This 404 is exactly what induces the bot's POST /images/create.
-            $this->json(404, $this->daemon->notFound('image', $display));
+        // Name conflict — the image exists, so a duplicate --name now 409s (real dockerd wording,
+        // including `by container "<id>"`, with the colliding fleet/phantom id filled in).
+        $name = (string) $intel['name'];
+        $collidingId = $name !== '' ? $this->nameOwner($ip, $name) : '';
+        if ($collidingId !== '') {
+            $this->json(409, ['message' => sprintf(
+                'Conflict. The container name "/%s" is already in use by container "%s". You have to remove (or rename) that container to be able to reuse that name.',
+                ltrim($name, '/'),
+                $collidingId
+            )]);
             $this->logHit($ctx, $ip, 'create', (string) $intel['class'], $intel);
             $this->reportIntent($ctx, $ip, 'create', $intel);
 
@@ -493,19 +500,24 @@ class DockerApiResponder
         return in_array((string) $spec['id'], $this->phantoms->hidden($ip), true) ? null : $spec;
     }
 
-    private function nameTaken(string $ip, string $name): bool
+    /** The id of the fleet/phantom container already holding $name for this IP, or '' if free. */
+    private function nameOwner(string $ip, string $name): string
     {
         $n = ltrim($name, '/');
-        if ($this->daemon->fleetIndex($n) !== null) {
-            return true;
+        if ($n === '') {
+            return '';
+        }
+        $fi = $this->daemon->fleetIndex($n);
+        if ($fi !== null) {
+            return $this->daemon->fleetId($fi);
         }
         foreach ($this->livePhantoms($ip) as $spec) {
-            if (ltrim((string) $spec['name'], '/') === $n && $n !== '') {
-                return true;
+            if (ltrim((string) $spec['name'], '/') === $n) {
+                return (string) $spec['id'];
             }
         }
 
-        return false;
+        return '';
     }
 
     // --- emit / encode ---
