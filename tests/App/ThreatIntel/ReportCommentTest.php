@@ -40,6 +40,57 @@ final class ReportCommentTest extends TestCase
         }
     }
 
+    /**
+     * FP-0247 (opus #5): compound / `_`-joined credential param names — `\b` fails on these, so they
+     * were previously republished verbatim. The name need only CONTAIN a credential token now.
+     */
+    public function test_compound_credential_keys_redacted(): void
+    {
+        $compound = [
+            'access_token=SECRETVAL',
+            'refresh_token=SECRETVAL',
+            'client_secret=SECRETVAL',
+            'session_id=SECRETVAL',
+            'sessionid=SECRETVAL',
+            'x_api_key=SECRETVAL',
+            'user_password=SECRETVAL',
+            'X-Auth-Token=SECRETVAL',
+        ];
+        foreach ($compound as $pair) {
+            $c = ReportComment::build('web', 'GET /oauth/callback?' . $pair . '&keep=ok');
+            self::assertStringNotContainsString('SECRETVAL', $c, "compound key not redacted: {$pair}");
+            self::assertStringContainsString('[redacted]', $c, "no redaction marker for: {$pair}");
+            self::assertStringContainsString('keep=ok', $c, 'non-secret param must survive');
+        }
+    }
+
+    public function test_gemini_dialect_api_key_redacted(): void
+    {
+        // FP-0247 (fable #3b): a Gemini-dialect AI-API request carries the Google API key in the query
+        // string; the AI honeypot path now routes through build(), so the key must be redacted.
+        $c = ReportComment::build('ai_api_recon', '/v1beta/models/gemini-pro:generateContent?key=AIzaSyD-EXAMPLE-KEY-1234567890');
+        self::assertStringNotContainsString('AIzaSyD-EXAMPLE-KEY-1234567890', $c);
+        self::assertStringContainsString('[redacted]', $c);
+        self::assertStringContainsString('gemini-pro', $c);   // the useful model detail survives
+    }
+
+    public function test_protocol_relative_host_stripped_but_path_kept(): void
+    {
+        // nginx forwards `GET //host/path` verbatim; the protocol-relative authority carries no scheme,
+        // so it must be stripped separately or it names a third-party host in the public report.
+        $c = ReportComment::build('funnypot web honeypot, port 80: GET', '//victim.example/admin?a=1');
+        self::assertStringNotContainsString('victim.example', $c);
+        self::assertStringContainsString('/admin?a=1', $c);
+    }
+
+    public function test_protocol_relative_host_after_method_token_stripped(): void
+    {
+        $c = ReportComment::build('p', 'GET //evil.test:8443/wp-login.php');
+        self::assertStringNotContainsString('evil.test', $c);
+        self::assertStringContainsString('/wp-login.php', $c);
+        self::assertStringContainsString('GET', $c);
+    }
+
     public function test_emails_redacted(): void
     {
         $c = ReportComment::build('smtp', 'MAIL FROM victim.person@company.example harvested');

@@ -19,8 +19,12 @@ namespace Funnypot\App\ThreatIntel;
  */
 final class ReportComment
 {
-    /** Query/param keys whose value is a secret and must never be republished. */
-    private const CREDENTIAL_KEYS = 'authorization|apikey|api_key|password|passwd|secret|session|token|pass|pwd|auth|key';
+    /**
+     * Credential tokens: any param NAME CONTAINING one of these has its value redacted. `key` covers
+     * apikey/api_key/x_api_key; `pass` covers password/passwd/user_password; `auth` covers
+     * authorization. `apikey`/`api_key` are listed explicitly too as belt-and-suspenders.
+     */
+    private const CREDENTIAL_KEYS = 'token|secret|session|key|pass|pwd|auth|apikey|api_key';
 
     /**
      * @param string $prefix trusted, structured lead-in (e.g. "funnypot SSH honeypot, port 22: login")
@@ -42,8 +46,19 @@ final class ReportComment
         // Drop a scheme://host authority anywhere it appears, keeping the path — an absolute-URI
         // request line (GET http://victim.example/x) must not name a third-party host in a public report.
         $s = (string) preg_replace('~[a-z][a-z0-9+.\-]*://[^\s/?\#]*~i', '', $s);
-        // Redact credential-bearing params (case-insensitive, key=value).
-        $s = (string) preg_replace('~\b(' . self::CREDENTIAL_KEYS . ')=([^&\s#]*)~i', '$1=[redacted]', $s);
+        // Also strip a leading protocol-relative authority (`//victim.example/admin`) — it carries no
+        // scheme so the rule above misses it, yet nginx forwards `GET //host/path` verbatim, which
+        // would name a third-party host in the public report. Keep the path.
+        $s = (string) preg_replace('~(^|\s)//[^/?\#\s]*~', '$1', $s);
+        // Redact credential-bearing params (case-insensitive, key=value). The param NAME need only
+        // CONTAIN one of the credential tokens — `\b` fails on `_`-joined compounds (a word boundary
+        // sits between a word char and a non-word char, never between `_`/letters), so a bare `\btoken`
+        // would miss `access_token=`, `refresh_token=`, `client_secret=`, `session_id=`, `x_api_key=`,
+        // `user_password=`. Matching `[\w.-]*token[\w.-]*=` (etc.) catches every compound. The keyword
+        // name is preserved (forensic) while the value is dropped. Over-redaction of an incidental name
+        // like `monkey=` is acceptable: this is a PUBLIC report, so leaking more is the only unsafe
+        // direction.
+        $s = (string) preg_replace('~([\w.\-]*(?:' . self::CREDENTIAL_KEYS . ')[\w.\-]*)=([^&\s#]*)~i', '$1=[redacted]', $s);
         // Redact email addresses (victim PII).
         $s = (string) preg_replace('~[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}~', '[email]', $s);
         // Collapse long base64/hex runs (exfil/exploit blobs, encoded credentials) — the hex charset
