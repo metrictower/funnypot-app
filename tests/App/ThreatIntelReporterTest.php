@@ -216,6 +216,15 @@ final class ThreatIntelReporterTest extends TestCase
         self::assertNotContains('abuse_queue', $names);   // AbuseIpdb's tables are not touched
     }
 
+    public function test_benign_scanner_is_never_enqueued(): void
+    {
+        $a = $this->make($this->dbPath(), ['203.0.113.9']);
+        $r = $a->enqueue('162.142.125.10', 'x');
+        self::assertFalse($r['queued']);
+        self::assertStringStartsWith('benign scanner:', $r['reason']);
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_self_cidr_covers_whole_range(): void
     {
         // FP-0247 (Fix J): mirror of AbuseIpdb — a self CIDR protects a whole shared-NAT range.

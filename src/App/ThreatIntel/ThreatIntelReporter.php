@@ -78,6 +78,9 @@ final class ThreatIntelReporter
         if (IpMatcher::matches($ip, $this->selfIps)) {         // FP-0247 (Fix J): exact IP or self CIDR
             return $this->skip('self');                       // the invariant
         }
+        if (($org = BenignScanners::match($ip)) !== null) {    // FP-0247 (Fix C): never accuse research infra
+            return $this->skip('benign scanner: ' . $org);
+        }
         if (!self::reportable($ip)) {
             return $this->skip('not a public ip');
         }

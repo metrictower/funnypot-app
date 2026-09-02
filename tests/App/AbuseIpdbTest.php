@@ -141,6 +141,16 @@ final class AbuseIpdbTest extends TestCase
         self::assertSame(0, $b->queueCount());
     }
 
+    public function test_benign_scanner_is_never_enqueued(): void
+    {
+        // FP-0247 (Fix C): a documented research scanner (Censys) must never queue a report.
+        $a = $this->make($this->dbPath(), ['203.0.113.9']);
+        $r = $a->enqueue('162.142.125.10', 'x');
+        self::assertFalse($r['queued']);
+        self::assertStringStartsWith('benign scanner:', $r['reason']);
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_self_cidr_covers_whole_range(): void
     {
         // FP-0247 (Fix J): a self entry may be a CIDR — every IP in our shared-NAT egress range is self.
