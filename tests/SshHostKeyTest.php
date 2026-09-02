@@ -77,6 +77,28 @@ final class SshHostKeyTest extends TestCase
         }
     }
 
+    public function test_ecdsa_der_parser_rejects_trailing_data(): void
+    {
+        // The parser only ever sees openssl_sign output in production, but a malformed/overlong DER
+        // must be rejected, not silently truncated. Reflection reaches the private static so the
+        // trailing-data guard is pinned (non-vacuous: the pre-fix parser ignored trailing bytes).
+        $ec = openssl_pkey_new(['curve_name' => 'prime256v1', 'private_key_type' => OPENSSL_KEYTYPE_EC]);
+        openssl_sign('data', $der, $ec, OPENSSL_ALGO_SHA256);
+
+        $parse = new \ReflectionMethod(Ecdsa::class, 'parseDerSig');
+        $parse->setAccessible(true);
+
+        // A well-formed signature still parses to a non-empty (r, s).
+        [$r, $s] = $parse->invoke(null, $der);
+        self::assertNotSame('', $r);
+        self::assertNotSame('', $s);
+
+        // One trailing byte → rejected.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('malformed ecdsa signature');
+        $parse->invoke(null, $der . "\x00");
+    }
+
     public function test_ecdsa_point_is_always_left_padded_to_65_bytes(): void
     {
         // ~1/128 keys have a short x or y; over 300 generations every Q must still be 65 bytes.

@@ -10,8 +10,14 @@ use Funnypot\Protocol\Ssh\Buf;
  * An RSA host key (ext-openssl) signing under rsa-sha2-512 or rsa-sha2-256 (RFC 8332). The key type
  * in the public blob stays "ssh-rsa" for both SHA-2 signature names — only the signature blob names
  * the hash. One key serves both signers: {@see withAlgorithm()} returns a copy bound to the other
- * name. Persisted as a PKCS#8 PEM; OpenSSH's own -----BEGIN OPENSSH PRIVATE KEY----- format is not
- * readable by ext-openssl and is not supported here.
+ * name.
+ *
+ * Persistence is PKCS#8 PEM only: {@see pem()} is openssl_pkey_export (which emits
+ * -----BEGIN PRIVATE KEY-----) and {@see fromPem()} is openssl_pkey_get_private, so an
+ * operator-supplied key file must be PKCS#8 (or the traditional PKCS#1 -----BEGIN RSA PRIVATE KEY-----
+ * that openssl_pkey_get_private also reads). OpenSSH's own -----BEGIN OPENSSH PRIVATE KEY----- format
+ * is NOT readable by ext-openssl and is not supported; a file in that format reads as corrupt and the
+ * key is regenerated.
  */
 final class Rsa implements HostKeyAlgorithm
 {

@@ -11,6 +11,10 @@ use Funnypot\Protocol\Ssh\Buf;
  * §3.1). openssl_sign emits a DER SEQUENCE{INTEGER r, INTEGER s}; the SSH signature blob carries
  * `string( mpint r ‖ mpint s )` instead, so the DER is parsed and re-encoded. The public point Q is
  * left-padded to 32 bytes per coordinate (openssl_pkey_get_details strips leading zeros).
+ *
+ * Persistence is PKCS#8 PEM only ({@see pem()} = openssl_pkey_export, {@see fromPem()} =
+ * openssl_pkey_get_private); OpenSSH's own -----BEGIN OPENSSH PRIVATE KEY----- format is not readable
+ * by ext-openssl, and a non-prime256v1 key is rejected since the algorithm name is fixed.
  */
 final class Ecdsa implements HostKeyAlgorithm
 {
@@ -91,14 +95,15 @@ final class Ecdsa implements HostKeyAlgorithm
 
     /**
      * Parse a DER SEQUENCE{INTEGER r, INTEGER s}. For P-256 r,s <= 33 bytes and the sequence <= 70,
-     * so short-form (one-byte) lengths always suffice; a long-form or non-SEQUENCE header is
-     * rejected rather than silently mis-parsed.
+     * so short-form (one-byte) lengths always suffice; a long-form or non-SEQUENCE header, a declared
+     * SEQUENCE length that does not span exactly the buffer, or any trailing byte after s is rejected
+     * rather than silently mis-parsed.
      *
      * @return array{0:string,1:string} [r, s] as raw big-endian magnitudes
      */
     private static function parseDerSig(string $der): array
     {
-        if (strlen($der) < 8 || ord($der[0]) !== 0x30 || (ord($der[1]) & 0x80) !== 0) {
+        if (strlen($der) < 8 || ord($der[0]) !== 0x30 || (ord($der[1]) & 0x80) !== 0 || 2 + ord($der[1]) !== strlen($der)) {
             throw new \RuntimeException('ssh: malformed ecdsa signature');
         }
         $off = 2;
@@ -118,6 +123,9 @@ final class Ecdsa implements HostKeyAlgorithm
         };
         $r = $read($der, $off);
         $s = $read($der, $off);
+        if ($off !== strlen($der)) {
+            throw new \RuntimeException('ssh: malformed ecdsa signature'); // trailing data after r,s
+        }
 
         return [$r, $s];
     }

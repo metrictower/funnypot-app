@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * RFC 4253 §7.2 key derivation with the key-expansion extension (FP-0288). Pins that short keys
- * are bit-identical to the former one-shot Kex formula (no regression on the live aes256-ctr path)
+ * are bit-identical to the former one-shot derivation (no regression on the live aes256-ctr path)
  * and that longer-than-hashlen keys extend by the HASH(K ‖ H ‖ K1 ‖ …) chain. No published KAT
  * exists for the extension; parity with real clients lands in FP-0291's interop.
  */

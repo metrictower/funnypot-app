@@ -46,8 +46,10 @@ trait DhComputation
             $f = $details['dh']['pub_key'] ?? '';
         }
         if ($ours === false || $f === '') {
+            self::drainOpensslErrors(); // the priv_key attempt may have left errors before we fall back
             $ours = openssl_pkey_new(['dh' => ['p' => $p, 'g' => DhGroups::G]]);
             if ($ours === false) {
+                self::drainOpensslErrors();
                 throw new \RuntimeException('ssh: dh keygen failed');
             }
             $details = openssl_pkey_get_details($ours);
@@ -65,13 +67,25 @@ trait DhComputation
     {
         $peer = openssl_pkey_new(['dh' => ['p' => $p, 'g' => DhGroups::G, 'pub_key' => $e]]);
         if ($peer === false) {
+            self::drainOpensslErrors();
             throw new \RuntimeException('ssh: invalid dh public value');
         }
         $k = openssl_pkey_derive($peer, $ours);
         if ($k === false) {
+            // A non-residue / out-of-range e is rejected here (OpenSSL 3 checks it); drain so the
+            // stale error does not bleed into a later openssl call's error string.
+            self::drainOpensslErrors();
             throw new \RuntimeException('ssh: dh derive failed');
         }
 
         return $k;
+    }
+
+    /** Empty the per-thread OpenSSL error queue after a handled failure (as Ecdh does on import). */
+    private static function drainOpensslErrors(): void
+    {
+        while (openssl_error_string() !== false) {
+            // discard
+        }
     }
 }
