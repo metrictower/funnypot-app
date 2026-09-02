@@ -29,6 +29,7 @@ use Funnypot\Protocol\Ssh\Cipher\PlainCipher;
 final class Transport
 {
     private const MAX_PACKET = 35000; // guard against absurd length fields
+    private const MAX_INFLATE = 262144; // cap a decompressed payload (== SshConnection::MAX_IN)
 
     private int $outSeq = 0;
     private int $inSeq = 0;
@@ -36,6 +37,11 @@ final class Transport
 
     private PacketCipher $send;
     private PacketCipher $recv;
+
+    // Delayed zlib@openssh.com compression, enabled per direction after USERAUTH_SUCCESS (§2.6).
+    // One stream per direction for the connection's life; null until enabled (the common case).
+    private ?\DeflateContext $deflate = null;
+    private ?\InflateContext $inflate = null;
 
     // Cached packet length once the head of an inbound packet has been read; held until the whole
     // packet arrives (and, for E&M, so the first-block decrypt is not repeated).
@@ -62,6 +68,12 @@ final class Transport
     /** Build the wire bytes for one outbound packet carrying $payload. */
     public function frame(string $payload): string
     {
+        if ($this->deflate !== null) {
+            // Compress the payload only, before padding/encryption. Z_PARTIAL_FLUSH (OpenSSH
+            // compress.c) — not SYNC_FLUSH, whose 00 00 ff ff trailer is a cleartext packet_length
+            // tell under an ETM/AEAD cipher.
+            $payload = deflate_add($this->deflate, $payload, ZLIB_PARTIAL_FLUSH);
+        }
         $pad = self::padLen(strlen($payload), $this->send->blockSize(), $this->send->aadLen());
         $packet = pack('N', 1 + strlen($payload) + $pad) . chr($pad) . $payload . random_bytes($pad);
         $wire = $this->send->seal($this->outSeq, $packet);
@@ -99,7 +111,12 @@ final class Transport
         $this->lastInSeq = $this->inSeq;
         $this->inSeq = ($this->inSeq + 1) & 0xffffffff;
 
-        return $this->payloadOf($packet, $packetLen);
+        $payload = $this->payloadOf($packet, $packetLen);
+        if ($this->inflate !== null) {
+            $payload = $this->inflatePayload($payload);
+        }
+
+        return $payload;
     }
 
     private function payloadOf(string $packet, int $packetLen): string
@@ -111,6 +128,36 @@ final class Transport
         }
 
         return substr($packet, 5, $payloadLen);
+    }
+
+    /**
+     * Inflate one compressed payload under the recv-side zlib stream. Fed in 256-byte input slices
+     * so a zip-bomb packet is caught by the output bound (§2.6) before the whole of it is allocated:
+     * a 35 KB packet that would expand to ~35 MB throws at ~0.5 MB transient instead. ZLIB_SYNC_FLUSH
+     * on the final slice means "give me everything decodable so far" — it need not match the sender's
+     * PARTIAL_FLUSH deflate mode.
+     */
+    private function inflatePayload(string $data): string
+    {
+        $out = '';
+        $len = strlen($data);
+        if ($len === 0) {
+            return '';
+        }
+        for ($i = 0; $i < $len; $i += 256) {
+            $last = ($i + 256) >= $len;
+            // @: a corrupt/hostile stream must disconnect cleanly (false → throw), never warn.
+            $piece = @inflate_add($this->inflate, substr($data, $i, 256), $last ? ZLIB_SYNC_FLUSH : ZLIB_NO_FLUSH);
+            if ($piece === false) {
+                throw new \RuntimeException('ssh: decompression failed');
+            }
+            $out .= $piece;
+            if (strlen($out) > self::MAX_INFLATE) {
+                throw new \RuntimeException('ssh: decompression bound');
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -146,5 +193,21 @@ final class Transport
     public function lastInSeq(): int
     {
         return $this->lastInSeq;
+    }
+
+    /**
+     * Turn on outbound zlib@openssh.com compression (delayed compression, §2.6): every subsequent
+     * frame() compresses its payload. One stream for the connection's life, zlib wrapper
+     * (ZLIB_ENCODING_DEFLATE = deflateInit, not raw), level 6 — OpenSSH compress.c's default.
+     */
+    public function enableSendCompression(): void
+    {
+        $this->deflate = deflate_init(ZLIB_ENCODING_DEFLATE, ['level' => 6]);
+    }
+
+    /** Turn on inbound zlib@openssh.com decompression; every subsequent next() inflates its payload. */
+    public function enableRecvCompression(): void
+    {
+        $this->inflate = inflate_init(ZLIB_ENCODING_DEFLATE);
     }
 }

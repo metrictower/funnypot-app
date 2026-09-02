@@ -76,6 +76,7 @@ final class SshConnection
     private const HOSTKEY_ALGOS = ['ssh-ed25519'];
     private const CIPHERS = ['aes256-ctr'];
     private const MACS = ['hmac-sha2-256'];
+    private const COMPRESSION = ['none'];
 
     // The server-sig-algs value a real OpenSSH 8.9p1 advertises in SSH_MSG_EXT_INFO —
     // sshkey_alg_list(0, 1, 1) with ENABLE_SK and without WITH_XMSS (the Ubuntu build). A literal
@@ -96,6 +97,9 @@ final class SshConnection
     private ?KexAlgorithm $kex = null;
     /** @var array{ivC2S:string,ivS2C:string,keyC2S:string,keyS2C:string,macC2S:string,macS2C:string}|null */
     private ?array $keys = null;
+    // Negotiated compression per direction ('none' or 'zlib@openssh.com'); enabled after auth (§2.6).
+    private string $compC2S = 'none';
+    private string $compS2C = 'none';
 
     // Handshake-shape state, all set during the initial kex (M1: never recomputed from a rekey
     // KEXINIT). $advertisesStrictKex reflects whether our served kex list carries kex-strict-s — the
@@ -360,6 +364,8 @@ final class SshConnection
         $encS2C = $r->nameList();
         $macC2S = $r->nameList();
         $macS2C = $r->nameList();
+        $compC2S = $r->nameList();  // compression client->server (parsed now for delayed compression)
+        $compS2C = $r->nameList();  // compression server->client
         // Marker parsing + the strict "KEXINIT must be the first packet" rule apply to the INITIAL
         // kex only (M1 / kex.c:1181-1197, KEX_INITIAL): a later rekey KEXINIT must ignore the markers,
         // and $strictKex, once set, persists for the connection (PROTOCOL §1.9(b)).
@@ -379,6 +385,8 @@ final class SshConnection
         $candidates = array_values(array_filter(self::KEX_ALGOS, static fn (string $n): bool => !KexSuite::isMarker($n)));
         $kexName = self::pick($kex, $candidates);
         $hostName = self::pick($host, self::HOSTKEY_ALGOS);
+        $compC2SPick = self::pick($compC2S, self::COMPRESSION);
+        $compS2CPick = self::pick($compS2C, self::COMPRESSION);
         if (
             $kexName === null
             || $hostName === null
@@ -386,11 +394,15 @@ final class SshConnection
             || self::pick($encS2C, self::CIPHERS) === null
             || self::pick($macC2S, self::MACS) === null
             || self::pick($macS2C, self::MACS) === null
+            || $compC2SPick === null
+            || $compS2CPick === null
         ) {
             $this->disconnect('no common algorithm');
 
             return;
         }
+        $this->compC2S = $compC2SPick;
+        $this->compS2C = $compS2CPick;
         // Build the kex object from the negotiated names; it — not this class — owns what msg 30
         // means. With today's unchanged lists this is always Ecdh('curve25519-sha256') + Ed25519.
         $this->kex = KexSuite::create(
@@ -565,6 +577,15 @@ final class SshConnection
         $this->authed = true;
         $this->session->user = $user !== '' ? $user : 'root';
         $this->send((new Buf())->byte(self::MSG_USERAUTH_SUCCESS)->get());
+        // Delayed zlib@openssh.com compression: sshd's userauth_finish enables it in BOTH directions
+        // right after the SUCCESS packet is queued (ssh_packet_enable_delayed_compress). The SUCCESS
+        // packet itself is uncompressed; the next packet each way is compressed. 'none' → no-op.
+        if ($this->compS2C === 'zlib@openssh.com') {
+            $this->transport->enableSendCompression();
+        }
+        if ($this->compC2S === 'zlib@openssh.com') {
+            $this->transport->enableRecvCompression();
+        }
     }
 
     /** @param string[] $canContinue */
