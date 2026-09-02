@@ -65,7 +65,19 @@ final class ReportGate
         // the Threat Intel report (the params existed but no call site ever passed them). The event only
         // reaches here after the fail-closed gate, i.e. the source is verified.
         $signals = ['protocol' => $protocol, 'event' => $event];
-        $abuse?->enqueue($ip, $comment, $categories);
-        $threatIntel?->enqueue($ip, $comment, $categories, $signals, 0.8);
+        $abuseResult = $abuse?->enqueue($ip, $comment, $categories);
+        $intelResult = $threatIntel?->enqueue($ip, $comment, $categories, $signals, 0.8);
+
+        // FP-0247 (fable): a per-IP suppression reason (self / deduped / benign scanner / not-public)
+        // is otherwise invisible — an operator cannot tell "the gate dropped a spoof" from "enqueue
+        // suppressed a known-good source". Surface it under an opt-in debug env only; off by default,
+        // egress-side, and it never changes the report decision.
+        if (getenv('FUNNYPOT_REPORT_DEBUG')) {
+            foreach (['abuseipdb' => $abuseResult, 'threatintel' => $intelResult] as $dest => $r) {
+                if (is_array($r) && ($r['queued'] ?? true) === false) {
+                    error_log(sprintf('funnypot report suppressed [%s] %s: %s', $dest, $ip, (string) ($r['reason'] ?? '')));
+                }
+            }
+        }
     }
 }

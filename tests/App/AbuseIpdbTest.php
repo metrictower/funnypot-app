@@ -293,6 +293,17 @@ final class AbuseIpdbTest extends TestCase
         self::assertSame(0, $a->queueCount());
     }
 
+    public function test_nat64_source_is_never_enqueued(): void
+    {
+        // FP-0247 (fable): NAT64 well-known prefix (RFC 6052, 64:ff9b::/96) is a translator-synthesised
+        // address, never the real origin → never report.
+        $a = $this->make($this->dbPath(), ['203.0.113.9']);
+        foreach (['64:ff9b::1.2.3.4', '64:ff9b::c000:0201'] as $ip) {
+            self::assertSame('not a public ip', $a->enqueue($ip, 'x')['reason'], $ip);
+        }
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_categories_for_web_class(): void
     {
         // FP-0247 (Fix F): class-accurate categories, not a static '21'.

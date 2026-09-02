@@ -180,8 +180,11 @@ final class ThreatIntelReporter
                 $status = 0;   // fail-silent: a transport fault is treated as a transient failure
             }
 
+            // FP-0247 (opus #1): guard every terminal mutation on our own claim token, so a slow pass
+            // whose rows were stale-reclaimed by a newer overlapping pass cannot delete or overwrite
+            // the newer owner's work.
             if ($status >= 200 && $status < 300) {
-                $this->delete((int) $row['id']);
+                $this->deleteClaimed((int) $row['id'], $token);
                 $this->bumpDaily();
                 $sent++;
             } elseif ($status === 429) {
@@ -189,16 +192,16 @@ final class ThreatIntelReporter
                 // leave the row untouched and stop the pass; retried next tick, purge bounds growth.
                 break;
             } elseif ($status >= 400 && $status < 500) {
-                $this->delete((int) $row['id']);   // client error: it will never succeed
+                $this->deleteClaimed((int) $row['id'], $token);   // client error: it will never succeed
                 $failed++;
             } else {
                 $attempts = (int) $row['attempts'] + 1;
                 if ($attempts >= 3) {
-                    $this->delete((int) $row['id']);
+                    $this->deleteClaimed((int) $row['id'], $token);
                     $failed++;
                 } else {
-                    $this->db()->prepare('UPDATE ti_queue SET attempts = :a WHERE id = :id')
-                        ->execute([':a' => $attempts, ':id' => (int) $row['id']]);
+                    $this->db()->prepare('UPDATE ti_queue SET attempts = :a WHERE id = :id AND claim = :tok')
+                        ->execute([':a' => $attempts, ':id' => (int) $row['id'], ':tok' => $token]);
                 }
             }
         }
@@ -276,7 +279,10 @@ final class ThreatIntelReporter
         // FP-0247 (Fix J): RFC 6598 CGNAT (100.64.0.0/10) and the benchmarking ranges are not publicly
         // routable — a "source" there is local-side plumbing or a shared-NAT neighbour, so reporting it
         // always risks innocent collateral. The PHP filter flags do not exclude these; reject explicitly.
-        foreach (['100.64.0.0/10', '192.0.0.0/24', '198.18.0.0/15'] as $cidr) {
+        // NAT64 well-known prefix (RFC 6052, 64:ff9b::/96) embeds an IPv4 in its low 32 bits — the
+        // v6 source is synthesised by a translator, never the real origin, so reporting it blames the
+        // wrong address. PHP's reserved-range flags do not cover it; reject explicitly.
+        foreach (['100.64.0.0/10', '192.0.0.0/24', '198.18.0.0/15', '64:ff9b::/96'] as $cidr) {
             if (IpMatcher::inCidr($ip, $cidr)) {
                 return false;
             }
@@ -303,6 +309,16 @@ final class ThreatIntelReporter
     private function delete(int $id): void
     {
         $this->db()->prepare('DELETE FROM ti_queue WHERE id = :id')->execute([':id' => $id]);
+    }
+
+    /**
+     * FP-0247 (opus #1): delete a row only while we still hold its claim, so a slow pass whose rows
+     * were stale-reclaimed by a newer overlapping pass cannot delete the newer owner's work.
+     */
+    private function deleteClaimed(int $id, string $token): void
+    {
+        $this->db()->prepare('DELETE FROM ti_queue WHERE id = :id AND claim = :tok')
+            ->execute([':id' => $id, ':tok' => $token]);
     }
 
     /** FP-0247 (Fix E): purge queued rows older than the max age — too stale to report truthfully. */

@@ -40,12 +40,16 @@ return [
         '80.82.77.0/24',
     ],
 
-    // Shadowserver Foundation — non-profit; scans hosted in Hurricane Electric ranges.
-    // https://www.shadowserver.org/what-we-do/network-reporting/get-reports/ (scanning source ranges)
+    // Shadowserver Foundation — non-profit internet-wide scanner. Its scan nodes are HOSTED in
+    // Hurricane Electric address space, but HE is a large transit provider: whole-block exemptions
+    // (64.62.128.0/17, 184.105.0.0/16, 216.218.128.0/17) also grant a free pass to every attacker
+    // renting HE space in those blocks (FP-0247, fable #2). Shadowserver does not publish a stable,
+    // citable list of its exact scanning /24-/26 subnets at a fetchable URL, so — fail-safe — the broad
+    // HE parent blocks are REMOVED here rather than left over-broad: mistakenly reporting a benign
+    // Shadowserver node is a recoverable false positive, but exempting a real attacker in HE space is
+    // an integrity hole. Only the narrow, Shadowserver-specific /24 is retained. If Shadowserver later
+    // publishes its precise scanning subnets, add them here as tight CIDRs (append-only, with the URL).
     'Shadowserver' => [
-        '64.62.128.0/17',
-        '184.105.0.0/16',
-        '216.218.128.0/17',
         '74.82.47.0/24',
     ],
 

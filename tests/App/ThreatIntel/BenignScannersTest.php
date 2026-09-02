@@ -17,13 +17,27 @@ final class BenignScannersTest extends TestCase
     public function test_known_scanner_matches_with_org_label(): void
     {
         self::assertSame('Censys', BenignScanners::match('162.142.125.10'));
-        self::assertSame('Shadowserver', BenignScanners::match('184.105.10.20'));
+        // FP-0247 (fable #2): the Shadowserver exemption is now its narrow /24, not the whole HE block.
+        self::assertSame('Shadowserver', BenignScanners::match('74.82.47.10'));
     }
 
     public function test_ordinary_ip_is_not_a_scanner(): void
     {
         self::assertNull(BenignScanners::match('45.9.148.1'));
         self::assertNull(BenignScanners::match(''));
+    }
+
+    /**
+     * FP-0247 (fable #2): the broad Hurricane Electric parent blocks were removed from the Shadowserver
+     * entry — HE is a large transit provider, so exempting a whole /16-/17 gave every attacker renting
+     * that space a free pass. An HE-block address that is NOT in Shadowserver's narrow /24 must now be
+     * reportable (fail-safe: a benign-scanner exemption lost is safer than an attacker exempted).
+     */
+    public function test_broad_he_blocks_are_no_longer_exempted(): void
+    {
+        self::assertNull(BenignScanners::match('184.105.10.20'));   // was 184.105.0.0/16
+        self::assertNull(BenignScanners::match('64.62.200.1'));     // was 64.62.128.0/17
+        self::assertNull(BenignScanners::match('216.218.200.1'));   // was 216.218.128.0/17
     }
 
     public function test_resource_file_shapes_are_valid_cidrs_or_ips(): void
