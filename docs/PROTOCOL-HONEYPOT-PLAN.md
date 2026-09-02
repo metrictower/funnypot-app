@@ -223,12 +223,15 @@ new template, zero new PHP.
 > linux/arm64, and so on); the composer package can't know where it runs. A
 > pure-PHP server runs wherever PHP, `ext-sodium`, and `ext-openssl` do, the same
 > "PHP alone" promise as the rest of the engine. It was built in `src/Protocol/Ssh/`
-> (curve25519-sha256 kex, ssh-ed25519 host key, aes256-ctr and hmac-sha2-256),
+> (the stock OpenSSH 8.9p1 algorithm set minus sntrup761 until FP-0292: curve25519
+> / ECDH P-256/384/521 / DH group14/16/18 + group-exchange kex, RSA/ECDSA/ed25519
+> host keys, chacha20-poly1305 / AES-CTR / AES-GCM ciphers with HMAC-SHA1/SHA2 and
+> UMAC, delayed zlib compression, strict-kex and EXT_INFO — hasshServer 779664e6),
 > completes the handshake against real OpenSSH, accepts all auth (capturing
 > credentials and offered keys), and drops the attacker into the same
 > `FakeShell` telnet uses, with every command logged. The crypto surface is
-> deliberately narrow (server-only, one algorithm per role, no client-signature
-> verification) and never executes attacker input. The Tier-1 banner analysis
+> server-only (it answers a client's negotiation; it never verifies a client
+> signature) and never executes attacker input. The Tier-1 banner analysis
 > below stands as history; Tier 2 is now pure PHP, not a sidecar.
 
 **SSH is an encrypted transport.** Before any shell bytes exist, both sides run
