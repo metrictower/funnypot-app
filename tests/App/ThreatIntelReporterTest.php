@@ -205,6 +205,22 @@ final class ThreatIntelReporterTest extends TestCase
         self::assertSame('87.5', (string) $calls[0]['fields']['confidence']);
     }
 
+    public function test_confidence_and_signals_sent_for_classified_web_attack(): void
+    {
+        // FP-0247 (Fix F): the shape HoneypotController::maybeReport() now sends for a classified web
+        // hit — class-accurate categories plus the previously-dead signals + confidence params.
+        $calls = [];
+        $a = $this->make($this->dbPath(), ['203.0.113.9'], 1000, 24, $this->recorder($calls));
+        $categories = \Funnypot\App\ThreatIntel\AbuseIpdb::categoriesForWebClass('sqli');
+        $a->enqueue('45.9.148.1', 'funnypot web honeypot, port 443: [sqli] GET', $categories, ['method' => 'GET', 'port' => 443, 'class' => 'sqli'], 0.8);
+        $a->drain();
+
+        self::assertSame('16,21', $calls[0]['fields']['categories']);
+        self::assertSame('sqli', $calls[0]['fields']['signals']['class']);
+        self::assertSame('443', (string) $calls[0]['fields']['signals']['port']);
+        self::assertSame('0.8', (string) $calls[0]['fields']['confidence']);
+    }
+
     public function test_sensor_id_is_stable_across_instances(): void
     {
         $db = $this->dbPath();

@@ -68,6 +68,29 @@ final class AbuseIpdb
     }
 
     /**
+     * AbuseIPDB category ids for a classified web hit (FP-0247, Fix F). The old path hardcoded '21'
+     * (web-app-attack) for every hit even when the classifier identified SQLi/RCE/LFI; this maps the
+     * class to the accurate vocabulary (16 = SQL injection, 15 = hacking, 21 = web app attack).
+     */
+    public static function categoriesForWebClass(?string $class): string
+    {
+        switch ((string) $class) {
+            case 'sqli':
+                return '16,21';   // SQL injection + web app attack
+            case 'rce':
+                return '15,21';   // hacking + web app attack
+            case 'lfi':
+                return '21,15';   // web app attack + hacking
+            case 'docker_api':
+                return '15,21';   // hacking (unauthenticated daemon RCE) + web app attack
+            case 'xss':
+            case 'ai_api_recon':
+            default:
+                return '21';      // web app attack
+        }
+    }
+
+    /**
      * Queue a report if it passes the guards. Fast (a local SQLite write); safe to call from the
      * request path and the listener loop.
      *

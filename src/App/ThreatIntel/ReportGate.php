@@ -61,7 +61,11 @@ final class ReportGate
             sprintf('funnypot %s honeypot, port %d: %s', strtoupper($protocol), $port, $event),
             $data
         );
+        // FP-0247 (Fix F): forward small, non-PII request-shape signals + a protocol-tier confidence on
+        // the Threat Intel report (the params existed but no call site ever passed them). The event only
+        // reaches here after the fail-closed gate, i.e. the source is verified.
+        $signals = ['protocol' => $protocol, 'event' => $event];
         $abuse?->enqueue($ip, $comment, $categories);
-        $threatIntel?->enqueue($ip, $comment, $categories);
+        $threatIntel?->enqueue($ip, $comment, $categories, $signals, 0.8);
     }
 }

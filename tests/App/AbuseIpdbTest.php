@@ -293,6 +293,19 @@ final class AbuseIpdbTest extends TestCase
         self::assertSame(0, $a->queueCount());
     }
 
+    public function test_categories_for_web_class(): void
+    {
+        // FP-0247 (Fix F): class-accurate categories, not a static '21'.
+        self::assertSame('16,21', AbuseIpdb::categoriesForWebClass('sqli'));
+        self::assertSame('15,21', AbuseIpdb::categoriesForWebClass('rce'));
+        self::assertSame('21,15', AbuseIpdb::categoriesForWebClass('lfi'));
+        self::assertSame('15,21', AbuseIpdb::categoriesForWebClass('docker_api'));
+        self::assertSame('21', AbuseIpdb::categoriesForWebClass('xss'));
+        self::assertSame('21', AbuseIpdb::categoriesForWebClass('ai_api_recon'));
+        self::assertSame('21', AbuseIpdb::categoriesForWebClass(null));
+        self::assertSame('21', AbuseIpdb::categoriesForWebClass('something_unknown'));
+    }
+
     public function test_categories_for_protocol(): void
     {
         self::assertSame('18,22', AbuseIpdb::categoriesForProtocol('ssh'));

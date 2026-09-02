@@ -306,8 +306,18 @@ final class HoneypotController
             sprintf('funnypot web honeypot, port %d:%s %s', $port, $class, $context->method),
             $context->path
         );
-        $this->abuse?->enqueue($clientIp, $comment, '21');         // web app attack
-        $this->threatIntel?->enqueue($clientIp, $comment, '21');
+        // FP-0247 (Fix F): class-accurate categories (SQLi -> 16,21 etc.) instead of a static '21', and
+        // wire the previously-dead signals/confidence params on the Threat Intel report.
+        $categories = AbuseIpdb::categoriesForWebClass($payloadClass);
+        $signals = ['method' => $context->method, 'port' => $port];
+        if ($payloadClass !== null) {
+            $signals['class'] = $payloadClass;
+        }
+        $confidence = $payloadClass !== null
+            ? (['critical' => 0.9, 'high' => 0.8, 'medium' => 0.6][AttackClassifier::severityFor($payloadClass)] ?? 0.6)
+            : 0.7;   // an engine match without a specific payload class
+        $this->abuse?->enqueue($clientIp, $comment, $categories);
+        $this->threatIntel?->enqueue($clientIp, $comment, $categories, $signals, $confidence);
     }
 
     /**
