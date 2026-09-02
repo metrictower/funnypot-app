@@ -270,6 +270,75 @@ final class SshKexTest extends TestCase
         ];
     }
 
+    /**
+     * FP-0291 M2: an in-range non-subgroup peer value e (passes sshd's dh_pub_is_valid range + popcount,
+     * but OpenSSL 3's named-group subgroup check rejects it) must still DERIVE via the g=5 generator
+     * retry in {@see \Funnypot\Protocol\Ssh\Kex\DhComputation::dhDerive()} — matching real sshd, which
+     * answers with a signed REPLY. No live client is needed: we reproduce the rejection with a direct
+     * OpenSSL probe, confirm the alternate generator derives the byte-identical K (generator-independent
+     * e^x mod p), then assert the production Dh::handle path completes on the very same e.
+     */
+    public function test_dh_derive_accepts_non_subgroup_e_via_generator_retry(): void
+    {
+        $p = DhGroups::modulus(2048);
+        $priv = random_bytes(64);
+        $ours = openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x02", 'priv_key' => $priv]]);
+        self::assertNotFalse($ours);
+        $drain = static function (): void {
+            while (openssl_error_string() !== false) {
+                // discard
+            }
+        };
+
+        // Find an in-range value (>= 4 bits set — a 256-byte 0x7f-led magnitude always qualifies and is
+        // < the 2048-bit modulus) that the g=2 named path rejects, i.e. a non-subgroup e. ~50% of values
+        // qualify, so 400 tries finds one with overwhelming probability.
+        $e = null;
+        for ($i = 0; $i < 400; $i++) {
+            $cand = random_bytes(256);
+            $cand[0] = "\x7f";
+            if (DhGroups::cmp($cand, "\x01") <= 0 || DhGroups::cmp($cand, DhGroups::minusOne($p)) >= 0) {
+                continue;
+            }
+            $peer = openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x02", 'pub_key' => $cand]]);
+            $drain();
+            if ($peer === false) {
+                continue;
+            }
+            $k = openssl_pkey_derive($peer, $ours);
+            $drain();
+            if ($k === false) {
+                $e = $cand; // g=2 rejected it — a non-subgroup e that sshd would accept
+                break;
+            }
+        }
+        self::assertNotNull($e, 'expected an in-range non-subgroup e within 400 tries');
+        self::assertGreaterThanOrEqual(4, DhGroups::bitsSet($e), 'e passes the popcount gate');
+        self::assertSame(-1, DhGroups::cmp($e, DhGroups::minusOne($p)), 'e < p-1');
+
+        // The alternate-generator derivation succeeds and is generator-independent: g=5 == g=7.
+        $k5 = openssl_pkey_derive(
+            openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x05", 'pub_key' => $e]]),
+            openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x05", 'priv_key' => $priv]])
+        );
+        $drain();
+        $k7 = openssl_pkey_derive(
+            openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x07", 'pub_key' => $e]]),
+            openssl_pkey_new(['dh' => ['p' => $p, 'g' => "\x07", 'priv_key' => $priv]])
+        );
+        $drain();
+        self::assertNotFalse($k5, 'the g=5 retry derives a non-subgroup e');
+        self::assertSame(bin2hex((string) $k5), bin2hex((string) $k7), 'K = e^x mod p is generator-independent');
+
+        // The production path: Dh::handle must complete (a KEXDH_REPLY, not null) on the same non-subgroup
+        // e — the g=5 retry inside dhDerive is what makes it derive, exactly as sshd does.
+        [$hostKey] = $this->hostKey('ssh-ed25519');
+        $kex = new Dh('diffie-hellman-group14-sha256', 'sha256', self::V_C, self::V_S, self::I_C, self::I_S, $hostKey);
+        $reply = $kex->handle(30, "\x1e" . Buf::mpintOf($e));
+        self::assertNotNull($reply, 'a non-subgroup e derives via the g=5 retry (matches sshd dh_pub_is_valid)');
+        self::assertSame(31, ord($reply[0][0]), 'KEXDH_REPLY');
+    }
+
     public function test_dh_rejects_negative_mpint(): void
     {
         [$hostKey] = $this->hostKey('ssh-ed25519');
@@ -493,7 +562,7 @@ final class SshKexTest extends TestCase
 
     // ---- §4.6 the served-bytes flip (FP-0291) ----
 
-    public function test_served_kex_list_carries_strict_marker(): void
+    public function test_served_lists_are_stage1(): void
     {
         $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(1), static function (): void {
         }, self::V_S, 0);
@@ -510,8 +579,21 @@ final class SshKexTest extends TestCase
         $r->uint32();
         $r->uint32();
         $r->uint32(); // 16-byte cookie
-        self::assertSame(['curve25519-sha256', 'curve25519-sha256@libssh.org', 'kex-strict-s-v00@openssh.com'], $r->nameList(), 'kex list carries kex-strict-s last (commit 4 marker-only)');
-        self::assertSame(['ssh-ed25519'], $r->nameList(), 'host-key list still single-choice until the full flip (commit 5)');
+        // Full Stage-1 flip (FP-0291 commit 5): the 9 real 8.9p1 kex names in myproposal.h order
+        // (== KexSuite::NAMES) with kex-strict-s appended last, and the 4 host-key names (== HostKeySet::ALGORITHMS).
+        self::assertSame([
+            'curve25519-sha256',
+            'curve25519-sha256@libssh.org',
+            'ecdh-sha2-nistp256',
+            'ecdh-sha2-nistp384',
+            'ecdh-sha2-nistp521',
+            'diffie-hellman-group-exchange-sha256',
+            'diffie-hellman-group16-sha512',
+            'diffie-hellman-group18-sha512',
+            'diffie-hellman-group14-sha256',
+            'kex-strict-s-v00@openssh.com',
+        ], $r->nameList(), 'Stage-1 kex list (8.9p1 minus sntrup761, kex-strict-s last)');
+        self::assertSame(['rsa-sha2-512', 'rsa-sha2-256', 'ecdsa-sha2-nistp256', 'ssh-ed25519'], $r->nameList(), 'Stage-1 host-key list');
     }
 
     // ---- helpers ----

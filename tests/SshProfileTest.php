@@ -58,12 +58,34 @@ final class SshProfileTest extends TestCase
     {
         // The current-commit served shape (updated with each stage of the flip). Written as literals
         // here, never read from the profile, so a profile edit must satisfy this pin explicitly.
-        $kex = ['curve25519-sha256', 'curve25519-sha256@libssh.org', 'kex-strict-s-v00@openssh.com'];
-        $hostKeys = ['ssh-ed25519'];
-        $ciphers = ['aes256-ctr'];
-        $macs = ['hmac-sha2-256'];
-        $comp = ['none'];
-        $hassh = '557eee0f76ba1b566aa8960f3b5434c1'; // commit 4 marker-only; 779664e6 after the full flip
+        $kex = [
+            'curve25519-sha256',
+            'curve25519-sha256@libssh.org',
+            'ecdh-sha2-nistp256',
+            'ecdh-sha2-nistp384',
+            'ecdh-sha2-nistp521',
+            'diffie-hellman-group-exchange-sha256',
+            'diffie-hellman-group16-sha512',
+            'diffie-hellman-group18-sha512',
+            'diffie-hellman-group14-sha256',
+            'kex-strict-s-v00@openssh.com',
+        ];
+        $hostKeys = ['rsa-sha2-512', 'rsa-sha2-256', 'ecdsa-sha2-nistp256', 'ssh-ed25519'];
+        $ciphers = ['chacha20-poly1305@openssh.com', 'aes128-ctr', 'aes192-ctr', 'aes256-ctr', 'aes128-gcm@openssh.com', 'aes256-gcm@openssh.com'];
+        $macs = [
+            'umac-64-etm@openssh.com',
+            'umac-128-etm@openssh.com',
+            'hmac-sha2-256-etm@openssh.com',
+            'hmac-sha2-512-etm@openssh.com',
+            'hmac-sha1-etm@openssh.com',
+            'umac-64@openssh.com',
+            'umac-128@openssh.com',
+            'hmac-sha2-256',
+            'hmac-sha2-512',
+            'hmac-sha1',
+        ];
+        $comp = ['none', 'zlib@openssh.com'];
+        $hassh = '779664e66160bf75999f091fce5edb5a'; // Stage-1: 8.9p1 server defaults minus sntrup761 (FP-0291 commit 5)
 
         foreach (self::BANNERS as $banner) {
             $r = $this->servedKexInit($banner);

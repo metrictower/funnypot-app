@@ -8,6 +8,14 @@ namespace Funnypot\Protocol\Ssh\Kex;
  * The finite-field Diffie-Hellman arithmetic shared by {@see Dh} and {@see DhGex}: peer-value
  * validation (sshd dh_pub_is_valid), our ephemeral keypair, and the shared-secret derivation — all
  * on ext-openssl with an embedded modulus, no gmp.
+ *
+ * OpenSSL 3 recognises the embedded RFC 3526 moduli as named groups and rejects an in-range
+ * non-subgroup peer value e that sshd's dh_pub_is_valid (range + popcount only) accepts and completes.
+ * {@see dhDerive()} matches sshd exactly by retrying such an e under an alternate generator (g=5), which
+ * suppresses OpenSSL's named-group subgroup test while leaving K = e^x mod p unchanged — so the honeypot
+ * does not disconnect where a real sshd would answer with a signed REPLY (a probe-able divergence, live
+ * now that DH is advertised). Real client values (e = g^x, a subgroup member) complete on the first g=2
+ * attempt and never reach the retry.
  */
 trait DhComputation
 {
@@ -65,20 +73,40 @@ trait DhComputation
     /** Derive the shared secret K from the peer value $e on modulus $p and our private key. */
     private function dhDerive(string $p, string $e, \OpenSSLAsymmetricKey $ours): string
     {
+        // First attempt on the RFC 3526 named group (g=2): OpenSSL's stronger subgroup check stays in
+        // force for the 100% real-client case (e = g^x is always a subgroup member).
         $peer = openssl_pkey_new(['dh' => ['p' => $p, 'g' => DhGroups::G, 'pub_key' => $e]]);
-        if ($peer === false) {
-            self::drainOpensslErrors();
-            throw new \RuntimeException('ssh: invalid dh public value');
-        }
-        $k = openssl_pkey_derive($peer, $ours);
-        if ($k === false) {
-            // A non-residue / out-of-range e is rejected here (OpenSSL 3 checks it); drain so the
-            // stale error does not bleed into a later openssl call's error string.
-            self::drainOpensslErrors();
-            throw new \RuntimeException('ssh: dh derive failed');
+        if ($peer !== false) {
+            $k = openssl_pkey_derive($peer, $ours);
+            if ($k !== false) {
+                return $k;
+            }
         }
 
-        return $k;
+        // OpenSSL 3 rejected an e that already passed sshd's range + popcount check (validatePeerValue),
+        // i.e. an in-range non-subgroup value. Drain the stale error, then retry with BOTH keys built on
+        // the alternate generator g=5 (DhGroups::G_RETRY): OpenSSL then treats the modulus as an anonymous
+        // group with no q, skips the subgroup test, and derives the byte-identical K (g plays no part in
+        // e^x mod p) — exactly sshd's dh_pub_is_valid semantics. Reusing our own private exponent keeps
+        // K consistent with the f already sent to the client.
+        self::drainOpensslErrors();
+        $details = openssl_pkey_get_details($ours);
+        $priv = is_array($details) ? ($details['dh']['priv_key'] ?? '') : '';
+        if ($priv !== '') {
+            $oursAlt = openssl_pkey_new(['dh' => ['p' => $p, 'g' => DhGroups::G_RETRY, 'priv_key' => $priv]]);
+            $peerAlt = openssl_pkey_new(['dh' => ['p' => $p, 'g' => DhGroups::G_RETRY, 'pub_key' => $e]]);
+            if ($oursAlt !== false && $peerAlt !== false) {
+                $k = openssl_pkey_derive($peerAlt, $oursAlt);
+                if ($k !== false) {
+                    return $k;
+                }
+            }
+        }
+
+        // Neither path derived — a genuinely malformed e. Drain so the stale error does not bleed into a
+        // later openssl call's error string, and fail as before.
+        self::drainOpensslErrors();
+        throw new \RuntimeException('ssh: dh derive failed');
     }
 
     /** Empty the per-thread OpenSSL error queue after a handled failure (as Ecdh does on import). */

@@ -15,10 +15,10 @@ use Funnypot\Protocol\Ssh\Kex\KexSuite;
  * of the banner; nothing here reads an attacker byte, clock, env or key.
  *
  * Three profiles (the three banners HostIdentity emits): A = 8.9p1 (Ubuntu 22.04), B = 9.2p1
- * (Debian 12), C = 8.7 (el9 family). At this commit (4, marker-only) all three serve today's single-
- * choice cipher/MAC/compression lists with kex-strict-s appended LAST to the kex list (hasshServer
- * 557eee0f); the full Stage-1 lists (commit 5) then flip these arrays to hasshServer 779664e6;
- * FP-0292 diverges B (sntrup761 first) and FP-0293 diverges C (el9 cbc/order). Each profile's target
+ * (Debian 12), C = 8.7 (el9 family). At this commit (5, the full Stage-1 flip) all three serve the
+ * exact OpenSSH 8.9p1 server default lists minus sntrup761, with kex-strict-s appended LAST to the kex
+ * list (hasshServer 779664e6, a real OpenSSH 8.2/8.4 fingerprint); FP-0292 diverges A (sntrup761 after
+ * nistp521 → 41ff3ecd) and B (sntrup761 first → a65c3b91), FP-0293 diverges C (el9 cbc/order). Each profile's target
  * list is spelled in the comment above its entry so those later flips are a literal edit:
  *
  *   Profile A target (8.9p1, FP-0292 → 41ff3ecd): curve25519-sha256, curve25519-sha256@libssh.org,
@@ -44,15 +44,50 @@ final class SshProfile
     // el9's 8.7 has no webauthn-sk (introduced in 8.9) and nr=1 (no publickey-hostbound, also 8.9).
     private const SERVER_SIG_ALGS_87 = 'ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com';
 
-    // Commit 4 (marker-only): kex-strict-s-v00@openssh.com is appended LAST to the served kex list so
-    // FP-0290's strict-kex reset/discipline engages for a client that offers kex-strict-c; the other
-    // lists still serve today's single choice. hasshServer is 557eee0f (the full Stage-1 flip → 779664e6
-    // lands in commit 5). The marker is filtered out of the real-kex candidate set in negotiate().
-    private const KEX = ['curve25519-sha256', 'curve25519-sha256@libssh.org', 'kex-strict-s-v00@openssh.com'];
-    private const HOSTKEYS = ['ssh-ed25519'];
-    private const CIPHERS = ['aes256-ctr'];
-    private const MACS = ['hmac-sha2-256'];
-    private const COMPRESSION = ['none'];
+    // Commit 5 (the full Stage-1 flip): the exact OpenSSH 8.9p1 server-default name-lists MINUS
+    // sntrup761x25519-sha512@openssh.com (which needs FP-0292), with kex-strict-s-v00@openssh.com
+    // appended LAST to the kex list (OpenSSH's kex_names_cat Terrapin backport) so FP-0290's strict-kex
+    // reset/discipline engages for a client that offers kex-strict-c. Byte/order-exact per 8.9
+    // myproposal.h → hasshServer 779664e6. The 9 real kex names are KexSuite::NAMES in the same order;
+    // the 4 host-key names are HostKeySet::ALGORITHMS in the same order. Every name resolves to a live
+    // implementation (the §4.3 advertise ⇒ implement audit is the mechanical gate): UMAC (commit 2 /
+    // FP-0293a) and zlib@openssh.com (commit 1) exist. The marker is filtered out of the real-kex
+    // candidate set in negotiate(); dropping the umac names (→ ab7e2ad8) or zlib (→ 056287fe) would
+    // recreate an impossible-shape hash, so both are load-bearing to 779664e6.
+    private const KEX = [
+        'curve25519-sha256',
+        'curve25519-sha256@libssh.org',
+        'ecdh-sha2-nistp256',
+        'ecdh-sha2-nistp384',
+        'ecdh-sha2-nistp521',
+        'diffie-hellman-group-exchange-sha256',
+        'diffie-hellman-group16-sha512',
+        'diffie-hellman-group18-sha512',
+        'diffie-hellman-group14-sha256',
+        'kex-strict-s-v00@openssh.com',
+    ];
+    private const HOSTKEYS = ['rsa-sha2-512', 'rsa-sha2-256', 'ecdsa-sha2-nistp256', 'ssh-ed25519'];
+    private const CIPHERS = [
+        'chacha20-poly1305@openssh.com',
+        'aes128-ctr',
+        'aes192-ctr',
+        'aes256-ctr',
+        'aes128-gcm@openssh.com',
+        'aes256-gcm@openssh.com',
+    ];
+    private const MACS = [
+        'umac-64-etm@openssh.com',
+        'umac-128-etm@openssh.com',
+        'hmac-sha2-256-etm@openssh.com',
+        'hmac-sha2-512-etm@openssh.com',
+        'hmac-sha1-etm@openssh.com',
+        'umac-64@openssh.com',
+        'umac-128@openssh.com',
+        'hmac-sha2-256',
+        'hmac-sha2-512',
+        'hmac-sha1',
+    ];
+    private const COMPRESSION = ['none', 'zlib@openssh.com'];
 
     /** @var array<string,string> */
     private array $extInfo;

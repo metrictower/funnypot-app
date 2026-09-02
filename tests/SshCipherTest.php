@@ -406,7 +406,7 @@ final class SshCipherTest extends TestCase
 
     // --- §4.5 HASSH pin: the served-bytes flip (FP-0291) ---
 
-    public function test_served_kexinit_hassh_is_marker_only(): void
+    public function test_served_kexinit_hassh_is_stage1(): void
     {
         $server = new SshConnection(
             SshHostKeyFixture::set(),
@@ -441,7 +441,7 @@ final class SshCipherTest extends TestCase
         $compS2C = $r->nameList();
 
         $hassh = md5(implode(',', $kex) . ';' . implode(',', $encS2C) . ';' . implode(',', $macS2C) . ';' . implode(',', $compS2C));
-        self::assertSame('557eee0f76ba1b566aa8960f3b5434c1', $hassh, 'HASSHServer at the marker-only intermediate (FP-0291 commit 4); 779664e6 after the full flip');
+        self::assertSame('779664e66160bf75999f091fce5edb5a', $hassh, 'HASSHServer at the full Stage-1 flip (FP-0291 commit 5): 8.9p1 server defaults minus sntrup761; 41ff3ecd after FP-0292');
     }
 
     // --- helpers ---

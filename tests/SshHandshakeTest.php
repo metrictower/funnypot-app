@@ -134,26 +134,25 @@ final class SshHandshakeTest extends TestCase
     // --- FP-0290 §4.3: strict-kex end-to-end, positive AND negative, both directions ---
 
     /**
-     * Row A (live path, the #1 deploy-window regression guard): a modern client that offers
-     * kex-strict-c + ext-info-c against our real (non-advertising) list, NOT resetting, must complete.
-     * Gating on the client marker alone (ignoring our served list) would reset our counters and break
-     * every OpenSSH >= 9.6 / Go / libssh / dropbear / PuTTY client the moment this ticket deploys.
+     * Legacy guard: a modern client that offers ext-info-c but NOT kex-strict-c does not negotiate
+     * strict kex, so neither side resets its counters — continuous sequence numbers, EXT_INFO still
+     * delivered (RFC 8308 is independent of Terrapin). The server advertises kex-strict-s (Profile A),
+     * so this proves strict mode is gated on the CLIENT's kex-strict-c, not merely on our advertising it.
      */
-    public function test_strict_client_against_non_advertising_server_completes(): void
+    public function test_non_strict_client_with_ext_info_completes_with_continuous_counters(): void
     {
         $log = [];
         [$server, $client, $buffer] = $this->handshake(
             $log,
             99,
             0,
-            ['curve25519-sha256', 'ext-info-c', 'kex-strict-c-v00@openssh.com'],
-            false, // client does not reset (our list carried no kex-strict-s)
-            false  // server does not advertise (real served list)
+            ['curve25519-sha256', 'ext-info-c'], // no kex-strict-c → strict mode not negotiated
+            false                                // client does not reset (matches: no strict mode)
         );
         $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
         $types = array_map(static fn (string $p): int => ord($p[0]), $this->drain($client, $server, $buffer));
         self::assertContains(7, $types, 'EXT_INFO was sent (client offered ext-info-c)');
-        self::assertContains(6, $types, 'SERVICE_ACCEPT — the strict client completed against a non-advertising server');
+        self::assertContains(6, $types, 'SERVICE_ACCEPT — continuous counters, no reset');
 
         $client->send($server, $this->passwordAuth('root', 'hunter2'));
         self::assertSame(52, $this->firstMsg($client, $server, $buffer), 'login lands');
@@ -161,29 +160,29 @@ final class SshHandshakeTest extends TestCase
     }
 
     /**
-     * Row A′: a client that resets while our server does NOT advertise kex-strict-s is broken by spec
-     * — our counters never reset, so its first encrypted packet (sealed at seq 0) fails to open at 3.
+     * The mirror negative: a client that resets its counters WITHOUT offering kex-strict-c is broken by
+     * spec — strict mode is not negotiated, so our counters never reset and its first encrypted packet
+     * (sealed at seq 0) fails to open at 3. Proves the server does not reset unless the client agreed to.
      */
-    public function test_strict_client_reset_against_non_advertising_server_is_dropped(): void
+    public function test_client_reset_without_negotiating_strict_is_dropped(): void
     {
         $log = [];
         [$server, $client, $buffer] = $this->handshake(
             $log,
             99,
             0,
-            ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
-            true,  // client resets (wrongly — we never advertised)
-            false  // server does not advertise
+            ['curve25519-sha256'], // no kex-strict-c → strict mode not negotiated
+            true                   // client resets anyway (wrongly)
         );
         $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
-        self::assertTrue($server->isClosed(), 'a client that resets against a non-advertising server is dropped');
+        self::assertTrue($server->isClosed(), 'a client that resets without negotiating strict kex is dropped');
     }
 
     /**
-     * Row B (positive): synthetic strict-advertising server + a strict client that resets both
-     * counters. SERVICE_ACCEPT decrypts at the client's recv seq 0 (proves our outSeq reset) and the
-     * client's SERVICE_REQUEST sealed at seq 0 is accepted (proves our inSeq reset). A reset placed a
-     * line too early (numbering NEWKEYS 0) or a missing reset in either direction fails this.
+     * Row B (positive): our advertising server (Profile A serves kex-strict-s) + a strict client that
+     * resets both counters. SERVICE_ACCEPT decrypts at the client's recv seq 0 (proves our outSeq reset)
+     * and the client's SERVICE_REQUEST sealed at seq 0 is accepted (proves our inSeq reset). A reset
+     * placed a line too early (numbering NEWKEYS 0) or a missing reset in either direction fails this.
      */
     public function test_strict_kex_positive_both_reset_completes(): void
     {
@@ -193,8 +192,7 @@ final class SshHandshakeTest extends TestCase
             99,
             0,
             ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
-            true, // client resets
-            true  // server advertises (synthetic, via reflection)
+            true // client resets; the server genuinely advertises kex-strict-s
         );
         $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
         self::assertSame(6, $this->firstMsg($client, $server, $buffer), 'SERVICE_ACCEPT decrypts under the strict reset');
@@ -205,9 +203,9 @@ final class SshHandshakeTest extends TestCase
     }
 
     /**
-     * Row C (negative — the ticket's non-vacuity requirement): synthetic strict server, but the
-     * client does NOT reset. Its SERVICE_REQUEST is sealed at seq 3 while we open at seq 0 → MAC
-     * failure → the server drops the connection. The test fails if the reset is a no-op on either side.
+     * Row C (negative — the ticket's non-vacuity requirement): our advertising server + a strict client
+     * that does NOT reset. Its SERVICE_REQUEST is sealed at seq 3 while we open at seq 0 → MAC failure →
+     * the server drops the connection. The test fails if the reset is a no-op on either side.
      */
     public function test_strict_kex_negative_client_does_not_reset_is_dropped(): void
     {
@@ -217,8 +215,7 @@ final class SshHandshakeTest extends TestCase
             99,
             0,
             ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
-            false, // client does NOT reset
-            true   // server advertises (synthetic)
+            false // client does NOT reset (the server does, having negotiated strict) → mismatch
         );
         $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
         self::assertTrue($server->isClosed(), 'a strict client that failed to reset its counter is dropped');
@@ -237,8 +234,7 @@ final class SshHandshakeTest extends TestCase
             99,
             0,
             ['curve25519-sha256', 'ext-info-c', 'kex-strict-c-v00@openssh.com'],
-            true,
-            true
+            true // client resets; the server genuinely advertises kex-strict-s
         );
         $first = $client->transport()->next($buffer);
         self::assertNotNull($first, 'a packet was queued after NEWKEYS');
@@ -259,8 +255,7 @@ final class SshHandshakeTest extends TestCase
             99,
             0,
             ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
-            true,
-            true
+            true // client resets; the server genuinely advertises kex-strict-s
         );
         $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
         self::assertSame(6, $this->firstMsg($client, $server, $buffer), 'initial kex complete (SERVICE_ACCEPT)');
@@ -281,8 +276,7 @@ final class SshHandshakeTest extends TestCase
             99,
             0,
             ['curve25519-sha256', 'ext-info-c'],
-            false,
-            false
+            false // no kex-strict-c → strict mode not negotiated, no reset
         );
         $extInfo = $client->transport()->next($buffer);
         self::assertNotNull($extInfo, 'EXT_INFO queued as the first encrypted packet after NEWKEYS');
@@ -363,7 +357,7 @@ final class SshHandshakeTest extends TestCase
         }
     }
 
-    // --- FP-0290 §4.7: strict-kex packet discipline (dormant, synthetic strict server) ---
+    // --- FP-0290 §4.7: strict-kex packet discipline (live; the server genuinely advertises kex-strict-s) ---
 
     public function test_strict_discipline_ignore_before_kexinit_is_dropped(): void
     {
@@ -418,7 +412,8 @@ final class SshHandshakeTest extends TestCase
         $pos = strpos($buffer, "\r\n");
         self::assertNotFalse($pos);
         $vS = substr($buffer, 0, $pos);
-        // No pretendServerAdvertisesStrictKex — a real, non-advertising server.
+        // The server advertises kex-strict-s (Profile A), but this client offers no kex-strict-c, so
+        // strict mode is never negotiated and the stray IGNORE is tolerated.
         $client = new SshTestClient(self::V_C, $vS, ['curve25519-sha256']); // no marker
         $server->feed(self::V_C . "\r\n");
         $buffer = $server->takeOut();

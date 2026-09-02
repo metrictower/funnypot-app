@@ -358,4 +358,30 @@ final class FingerprintSafetyTest extends TestCase
         }
         self::assertClean($blob, "HostFacts output for identity seed {$seed}");
     }
+
+    /**
+     * FP-0291 §4.7 — the SSH persona's served surface (banner + all ten KEXINIT name-lists + every
+     * EXT_INFO value) is runtime-generated and unseen by the compiled-artifact gate, so scan it here.
+     * A guard: the denylist has no SSH entry today, so this fixes the surface against a future entry
+     * (e.g. a retired bait algorithm literal) leaking through a profile.
+     */
+    public function test_ssh_profiles_are_denylist_clean(): void
+    {
+        $banners = [
+            'SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10',
+            'SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3',
+            'SSH-2.0-OpenSSH_8.7',
+        ];
+        foreach ($banners as $banner) {
+            $p = \Funnypot\Protocol\Ssh\SshProfile::forBanner($banner);
+            $blob = $banner . "\n"
+                . implode("\n", $p->kex()) . "\n"
+                . implode("\n", $p->hostKeys()) . "\n"
+                . implode("\n", $p->ciphers()) . "\n"
+                . implode("\n", $p->macs()) . "\n"
+                . implode("\n", $p->compression()) . "\n"
+                . implode("\n", array_values($p->extInfo()));
+            self::assertClean($blob, "SshProfile {$p->bannerPrefix()}");
+        }
+    }
 }

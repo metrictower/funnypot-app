@@ -49,3 +49,25 @@ jobs:
       # against it, asserting every golden template still fires.
       - name: Golden acceptance
         run: bash tests/acceptance/run.sh
+
+  ssh-interop:
+    name: SSH real-client interop (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, ctype, sodium, openssl, zlib
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      # Boots the pure-PHP SSH honeypot and drives real OpenSSH / paramiko / Go x/crypto / libssh2 /
+      # ssh-audit / ssh-keyscan clients against it (FP-0291 §2.7). Row 3 forces every served algorithm
+      # one at a time — the advertise ⇒ implement gate on real bytes.
+      - name: SSH interop
+        run: bash tests/interop/ssh/run.sh
