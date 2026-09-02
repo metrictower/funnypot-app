@@ -25,6 +25,13 @@ use Funnypot\Protocol\TrollStream;
  * every credential and offered key is logged (rejected guesses included — that intel is the point);
  * nothing is fetched. The class is transport-only I/O — it never touches the socket. The caller
  * feeds bytes in and drains queued bytes out, so it composes with a non-blocking select loop.
+ *
+ * Handshake shape mirrors a real sshd: our KEXINIT follows the client's identification line (not
+ * before it); when the client offers ext-info-c we send SSH_MSG_EXT_INFO as the first encrypted
+ * packet after NEWKEYS; and, when strict kex is mutually agreed, each direction's sequence number
+ * resets at its NEWKEYS with the strict "unexpected packet" discipline enforced during the initial
+ * kex. The served KEXINIT name-lists are byte-identical to before, so the strict-kex reset ships
+ * dormant (we do not advertise kex-strict-s until FP-0291) — EXT_INFO and the ordering go live now.
  */
 final class SshConnection
 {
@@ -35,6 +42,7 @@ final class SshConnection
     private const MSG_DEBUG = 4;
     private const MSG_SERVICE_REQUEST = 5;
     private const MSG_SERVICE_ACCEPT = 6;
+    private const MSG_EXT_INFO = 7;
     private const MSG_KEXINIT = 20;
     private const MSG_NEWKEYS = 21;
     // 30 is shared by KEX_ECDH_INIT / KEXDH_INIT / (unsupported) GEX_REQUEST_OLD — routed by the
@@ -69,6 +77,12 @@ final class SshConnection
     private const CIPHERS = ['aes256-ctr'];
     private const MACS = ['hmac-sha2-256'];
 
+    // The server-sig-algs value a real OpenSSH 8.9p1 advertises in SSH_MSG_EXT_INFO —
+    // sshkey_alg_list(0, 1, 1) with ENABLE_SK and without WITH_XMSS (the Ubuntu build). A literal
+    // constant, identical for every connection, never derived from attacker bytes and not in HASSH.
+    // FP-0291: per-profile (8.7 has no publickey-hostbound and only nr=1).
+    private const SERVER_SIG_ALGS = 'ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com,webauthn-sk-ecdsa-sha2-nistp256@openssh.com';
+
     private Transport $transport;
     private string $in = '';
     private string $out = '';
@@ -82,6 +96,15 @@ final class SshConnection
     private ?KexAlgorithm $kex = null;
     /** @var array{ivC2S:string,ivS2C:string,keyC2S:string,keyS2C:string,macC2S:string,macS2C:string}|null */
     private ?array $keys = null;
+
+    // Handshake-shape state, all set during the initial kex (M1: never recomputed from a rekey
+    // KEXINIT). $advertisesStrictKex reflects whether our served kex list carries kex-strict-s — the
+    // two-sided gate (PROTOCOL §1.9): a client's counters reset only if WE advertised, so with the
+    // list unchanged this stays false and the reset never fires (dormant until FP-0291).
+    private bool $advertisesStrictKex;
+    private bool $strictKex = false;      // strict kex mutually agreed (this connection)
+    private bool $wantExtInfo = false;    // client offered ext-info-c → send EXT_INFO after NEWKEYS
+    private bool $initialKexDone = false; // cleared-KEX_INITIAL equivalent: set once client NEWKEYS is consumed
 
     private bool $authed = false;
     private int $authTries = 0;
@@ -118,6 +141,10 @@ final class SshConnection
         private ?string $secret = null
     ) {
         $this->transport = new Transport();
+        // Two-sided strict-kex gate reads the SAME array buildKexInit() serializes, so the gate can
+        // never disagree with the served bytes. False today (no marker in KEX_ALGOS) → dormant.
+        // FP-0291: compute from the profile's kex list at the point it is serialized, never a second source.
+        $this->advertisesStrictKex = in_array(KexSuite::KEX_STRICT_S, self::KEX_ALGOS, true);
         // Seed the reject count per attacker so a source sees a stable K, not a per-attempt coin
         // flip. Timing realism (a human-like pause before the verdict) is intentionally not done
         // here: this engine is one shared non-blocking select loop, so any sleep would stall every
@@ -127,12 +154,10 @@ final class SshConnection
             : 0;
     }
 
-    /** Queue the greeting: identification line followed immediately by our KEXINIT. */
+    /** Queue the identification line only; our KEXINIT follows once the client's line is read, as sshd does. */
     public function onConnect(): void
     {
         $this->out .= $this->serverVersion . "\r\n";
-        $this->serverKexInit = $this->buildKexInit();
-        $this->out .= $this->transport->frame($this->serverKexInit);
     }
 
     /** Feed raw inbound bytes; advances the state machine and queues any response bytes. */
@@ -201,6 +226,10 @@ final class SshConnection
         }
         $this->gotVersion = true;
         $this->log('connect', $this->clientVersion);
+        // Queue our KEXINIT now, after the client's identification line — real-sshd ordering. Set
+        // before any packet can be handled (feed() returns until gotVersion), so negotiate() sees it.
+        $this->serverKexInit = $this->buildKexInit();
+        $this->out .= $this->transport->frame($this->serverKexInit);
 
         return true;
     }
@@ -208,6 +237,15 @@ final class SshConnection
     private function handle(string $payload): void
     {
         $msg = ord($payload[0]);
+        // Strict-kex packet discipline (PROTOCOL §1.9(a); OpenSSH packet.c:1741-1749 / kex_protocol_error):
+        // during the initial kex under strict mode only the kex messages (and DISCONNECT) may appear —
+        // IGNORE/DEBUG/UNIMPLEMENTED, silently tolerated otherwise, are a violation. Gated on the initial
+        // kex only (M1: a later rekey KEXINIT ignores the markers). Dormant until FP-0291.
+        if ($this->strictKex && !$this->initialKexDone && !$this->allowedDuringStrictKex($msg)) {
+            $this->disconnect('strict kex violation');
+
+            return;
+        }
         switch ($msg) {
             case self::MSG_KEXINIT:
                 $this->clientKexInit = $payload;
@@ -221,6 +259,8 @@ final class SshConnection
             case self::MSG_NEWKEYS:
                 // The client's NEWKEYS is the last plaintext inbound packet; only now does the
                 // receive side switch to ciphertext, using the client->server keys from the kex.
+                // Under strict kex the inbound sequence number resets to 0 with the switch (the
+                // packet just consumed was the client's NEWKEYS), so its next packet opens at 0.
                 if ($this->keys !== null) {
                     $this->transport->enableRecv(CipherSuite::build(
                         'aes256-ctr',
@@ -228,7 +268,10 @@ final class SshConnection
                         $this->keys['keyC2S'],
                         $this->keys['ivC2S'],
                         $this->keys['macC2S']
-                    ));
+                    ), $this->strictKex);
+                    // The initial kex is complete (sshd clears KEX_INITIAL in kex_input_newkeys);
+                    // strict discipline and marker parsing no longer apply to later packets.
+                    $this->initialKexDone = true;
                 }
                 break;
             case self::MSG_SERVICE_REQUEST:
@@ -251,6 +294,9 @@ final class SshConnection
             case self::MSG_IGNORE:
             case self::MSG_DEBUG:
             case self::MSG_UNIMPLEMENTED:
+            case self::MSG_EXT_INFO:
+                // A client only sends EXT_INFO if we advertised ext-info-s (we do not); parse-and-
+                // ignore it as sshd does rather than answering UNIMPLEMENTED via default:.
                 break;
             case self::MSG_CHANNEL_CLOSE:
                 if ($this->channel !== null) {
@@ -271,12 +317,12 @@ final class SshConnection
     }
 
     /**
-     * SSH_MSG_UNIMPLEMENTED (RFC 4253 §11.4). The uint32 should be the offending packet's sequence
-     * number; today it is a fixed 0 (a pre-existing nit tracked for FP-0290).
+     * SSH_MSG_UNIMPLEMENTED (RFC 4253 §11.4). The uint32 is the offending packet's sequence number —
+     * the sequence number of the packet most recently pulled by the transport, as a real sshd sends.
      */
     private function sendUnimplemented(): void
     {
-        $this->send((new Buf())->byte(self::MSG_UNIMPLEMENTED)->uint32(0)->get());
+        $this->send((new Buf())->byte(self::MSG_UNIMPLEMENTED)->uint32($this->transport->lastInSeq())->get());
     }
 
     private function buildKexInit(): string
@@ -314,7 +360,24 @@ final class SshConnection
         $encS2C = $r->nameList();
         $macC2S = $r->nameList();
         $macS2C = $r->nameList();
-        $kexName = self::pick($kex, self::KEX_ALGOS);
+        // Marker parsing + the strict "KEXINIT must be the first packet" rule apply to the INITIAL
+        // kex only (M1 / kex.c:1181-1197, KEX_INITIAL): a later rekey KEXINIT must ignore the markers,
+        // and $strictKex, once set, persists for the connection (PROTOCOL §1.9(b)).
+        if (!$this->initialKexDone) {
+            $this->wantExtInfo = in_array(KexSuite::EXT_INFO_C, $kex, true);
+            $this->strictKex = $this->advertisesStrictKex && in_array(KexSuite::KEX_STRICT_C, $kex, true);
+            if ($this->strictKex && $this->transport->lastInSeq() !== 0) {
+                // Our KEXINIT was framed but not consumed here; lastInSeq is the client KEXINIT's own
+                // inbound seq. Non-zero means a packet preceded it — a strict violation (kex.c:1191-1197).
+                $this->disconnect('strict kex violation');
+
+                return;
+            }
+        }
+        // Never let a pseudo-algorithm marker be negotiated as a real kex (a no-op today; the guard
+        // that stops FP-0291's kex-strict-s from reaching KexSuite::create() if a hostile client lists it).
+        $candidates = array_values(array_filter(self::KEX_ALGOS, static fn (string $n): bool => !KexSuite::isMarker($n)));
+        $kexName = self::pick($kex, $candidates);
         $hostName = self::pick($host, self::HOSTKEY_ALGOS);
         if (
             $kexName === null
@@ -350,12 +413,12 @@ final class SshConnection
     private function kexMessage(int $msg, string $payload): void
     {
         if ($this->kex === null) {
-            $this->sendUnimplemented(); // a kex message before KEXINIT
+            $this->kexProtocolError(); // a kex message before KEXINIT
             return;
         }
         $replies = $this->kex->handle($msg, $payload);
         if ($replies === null) {
-            $this->sendUnimplemented(); // wrong message for this kex / this state
+            $this->kexProtocolError(); // wrong message for this kex / this state
             return;
         }
         foreach ($replies as $reply) {
@@ -370,14 +433,72 @@ final class SshConnection
         // aes256-ctr + hmac-sha2-256 sizes; FP-0291: CipherSuite sizes of the negotiated names.
         $this->keys = $result->keys(16, 32, 32);
         // Our outbound half switches to ciphertext right after our NEWKEYS; the inbound half waits
-        // for the client's NEWKEYS (still plaintext), handled in the MSG_NEWKEYS case.
+        // for the client's NEWKEYS (still plaintext), handled in the MSG_NEWKEYS case. Under strict
+        // kex the outbound sequence number resets to 0 with the switch — the packet just framed was
+        // our NEWKEYS, so the next packet (EXT_INFO) is numbered 0 (packet.c:1224-1227). Order within
+        // this method is load-bearing: send(NEWKEYS) → enableSend → buildExtInfo().
         $this->transport->enableSend(CipherSuite::build(
             'aes256-ctr',
             'hmac-sha2-256',
             $this->keys['keyS2C'],
             $this->keys['ivS2C'],
             $this->keys['macS2C']
-        ));
+        ), $this->strictKex);
+        // SSH_MSG_EXT_INFO is the first encrypted packet after NEWKEYS when the client offered
+        // ext-info-c (RFC 8308); sent once (initial kex only — we have no rekey, and the flag is
+        // cleared so a later KEXINIT cannot re-trigger it).
+        if ($this->wantExtInfo) {
+            $this->wantExtInfo = false;
+            $this->send($this->buildExtInfo());
+        }
+    }
+
+    /** SSH_MSG_EXT_INFO (RFC 8308 §2.3) — the exact OpenSSH 8.9p1 shape (kex.c:429-455). */
+    private function buildExtInfo(): string
+    {
+        return (new Buf())
+            ->byte(self::MSG_EXT_INFO)
+            ->uint32(2)                                       // nr-extensions
+            ->string('server-sig-algs')
+            ->string(self::SERVER_SIG_ALGS)
+            ->string('publickey-hostbound@openssh.com')
+            ->string('0')
+            ->get();
+    }
+
+    /**
+     * A kex-phase protocol error, mirroring sshd's kex_protocol_error (kex.c:484-499): during the
+     * initial kex under strict mode it is fatal (disconnect); otherwise it draws SSH_MSG_UNIMPLEMENTED
+     * carrying the offending sequence number and the connection stays up. Dormant under strict until FP-0291.
+     */
+    private function kexProtocolError(): void
+    {
+        if ($this->strictKex && !$this->initialKexDone) {
+            $this->disconnect('strict kex violation');
+
+            return;
+        }
+        $this->sendUnimplemented();
+    }
+
+    /**
+     * Messages permitted during the initial kex under strict mode (PROTOCOL §1.9(a); packet.c:1741-1749):
+     * the kex messages 30/32/34, NEWKEYS (21) once the kex produced keys, and DISCONNECT (1) — which sshd
+     * processes before its strict early-return (S3). Everything else is a strict violation.
+     */
+    private function allowedDuringStrictKex(int $msg): bool
+    {
+        switch ($msg) {
+            case self::MSG_KEX_ECDH_INIT:        // 30
+            case self::MSG_KEX_DH_GEX_INIT:      // 32
+            case self::MSG_KEX_DH_GEX_REQUEST:   // 34
+            case self::MSG_DISCONNECT:           // 1
+                return true;
+            case self::MSG_NEWKEYS:              // 21 — only once the kex derived keys
+                return $this->keys !== null;
+            default:
+                return false;
+        }
     }
 
     private function serviceRequest(string $payload): void

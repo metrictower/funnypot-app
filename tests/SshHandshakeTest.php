@@ -7,6 +7,7 @@ namespace Funnypot\Tests;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Ssh\Buf;
 use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
+use Funnypot\Protocol\Ssh\Kex\KexSuite;
 use Funnypot\Protocol\Ssh\Reader;
 use Funnypot\Protocol\Ssh\SshConnection;
 use Funnypot\Protocol\Ssh\Transport;
@@ -130,7 +131,344 @@ final class SshHandshakeTest extends TestCase
         self::assertContains('login:admin / first-try', $log);
     }
 
+    // --- FP-0290 §4.3: strict-kex end-to-end, positive AND negative, both directions ---
+
+    /**
+     * Row A (live path, the #1 deploy-window regression guard): a modern client that offers
+     * kex-strict-c + ext-info-c against our real (non-advertising) list, NOT resetting, must complete.
+     * Gating on the client marker alone (ignoring our served list) would reset our counters and break
+     * every OpenSSH >= 9.6 / Go / libssh / dropbear / PuTTY client the moment this ticket deploys.
+     */
+    public function test_strict_client_against_non_advertising_server_completes(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'ext-info-c', 'kex-strict-c-v00@openssh.com'],
+            false, // client does not reset (our list carried no kex-strict-s)
+            false  // server does not advertise (real served list)
+        );
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        $types = array_map(static fn (string $p): int => ord($p[0]), $this->drain($client, $server, $buffer));
+        self::assertContains(7, $types, 'EXT_INFO was sent (client offered ext-info-c)');
+        self::assertContains(6, $types, 'SERVICE_ACCEPT — the strict client completed against a non-advertising server');
+
+        $client->send($server, $this->passwordAuth('root', 'hunter2'));
+        self::assertSame(52, $this->firstMsg($client, $server, $buffer), 'login lands');
+        self::assertFalse($server->isClosed());
+    }
+
+    /**
+     * Row A′: a client that resets while our server does NOT advertise kex-strict-s is broken by spec
+     * — our counters never reset, so its first encrypted packet (sealed at seq 0) fails to open at 3.
+     */
+    public function test_strict_client_reset_against_non_advertising_server_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
+            true,  // client resets (wrongly — we never advertised)
+            false  // server does not advertise
+        );
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertTrue($server->isClosed(), 'a client that resets against a non-advertising server is dropped');
+    }
+
+    /**
+     * Row B (positive): synthetic strict-advertising server + a strict client that resets both
+     * counters. SERVICE_ACCEPT decrypts at the client's recv seq 0 (proves our outSeq reset) and the
+     * client's SERVICE_REQUEST sealed at seq 0 is accepted (proves our inSeq reset). A reset placed a
+     * line too early (numbering NEWKEYS 0) or a missing reset in either direction fails this.
+     */
+    public function test_strict_kex_positive_both_reset_completes(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
+            true, // client resets
+            true  // server advertises (synthetic, via reflection)
+        );
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertSame(6, $this->firstMsg($client, $server, $buffer), 'SERVICE_ACCEPT decrypts under the strict reset');
+
+        $client->send($server, $this->passwordAuth('root', 'hunter2'));
+        self::assertSame(52, $this->firstMsg($client, $server, $buffer));
+        self::assertFalse($server->isClosed());
+    }
+
+    /**
+     * Row C (negative — the ticket's non-vacuity requirement): synthetic strict server, but the
+     * client does NOT reset. Its SERVICE_REQUEST is sealed at seq 3 while we open at seq 0 → MAC
+     * failure → the server drops the connection. The test fails if the reset is a no-op on either side.
+     */
+    public function test_strict_kex_negative_client_does_not_reset_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
+            false, // client does NOT reset
+            true   // server advertises (synthetic)
+        );
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertTrue($server->isClosed(), 'a strict client that failed to reset its counter is dropped');
+    }
+
+    /**
+     * Row D: with ext-info-c under strict, the first decrypted server packet after NEWKEYS is EXT_INFO
+     * (msg 7) opened at the client's recv seq 0 — the exact packet a real OpenSSH >= 9.6 client
+     * decrypts first (it proves the outbound reset happens before EXT_INFO is sealed).
+     */
+    public function test_strict_kex_ext_info_is_first_packet_at_seq_zero(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'ext-info-c', 'kex-strict-c-v00@openssh.com'],
+            true,
+            true
+        );
+        $first = $client->transport()->next($buffer);
+        self::assertNotNull($first, 'a packet was queued after NEWKEYS');
+        self::assertSame(7, ord($first[0]), 'EXT_INFO is the first encrypted packet after NEWKEYS, opened at seq 0');
+    }
+
+    /**
+     * M1: the strict markers and the "KEXINIT must be the first packet" rule apply to the INITIAL kex
+     * only. After the initial kex completes, a rekey KEXINIT (not the first packet) must NOT trip the
+     * first-packet check — otherwise, once FP-0291 flips the served list, a strict client's rekey
+     * would be falsely dropped mid-stream. It must be accepted and the session stays up.
+     */
+    public function test_strict_rekey_kexinit_after_initial_kex_is_not_a_violation(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'kex-strict-c-v00@openssh.com'],
+            true,
+            true
+        );
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertSame(6, $this->firstMsg($client, $server, $buffer), 'initial kex complete (SERVICE_ACCEPT)');
+
+        // A second, encrypted KEXINIT (a rekey): not the first packet. With M1 it is accepted.
+        $client->send($server, $client->kexInit());
+        self::assertFalse($server->isClosed(), 'a rekey KEXINIT after the initial kex is not a strict violation');
+    }
+
+    // --- FP-0290 §4.4: SSH_MSG_EXT_INFO shape (goes live now, gated on ext-info-c) ---
+
+    public function test_ext_info_shape_when_client_offers_ext_info_c(): void
+    {
+        $log = [];
+        // Non-strict client offering ext-info-c: EXT_INFO is one-sided (RFC 8308) and goes live now.
+        [$server, $client, $buffer] = $this->handshake(
+            $log,
+            99,
+            0,
+            ['curve25519-sha256', 'ext-info-c'],
+            false,
+            false
+        );
+        $extInfo = $client->transport()->next($buffer);
+        self::assertNotNull($extInfo, 'EXT_INFO queued as the first encrypted packet after NEWKEYS');
+        self::assertNull($client->transport()->next($buffer), 'exactly one packet before we send anything');
+
+        $r = new Reader($extInfo);
+        self::assertSame(7, $r->byte(), 'SSH_MSG_EXT_INFO');
+        self::assertSame(2, $r->uint32(), 'nr-extensions = 2');
+        self::assertSame('server-sig-algs', $r->string());
+        // The exact 8.9p1 sshkey_alg_list(0,1,1) 11-name string — written here, not read from the code.
+        self::assertSame(
+            'ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,'
+            . 'ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,'
+            . 'sk-ecdsa-sha2-nistp256@openssh.com,webauthn-sk-ecdsa-sha2-nistp256@openssh.com',
+            $r->string(),
+            'server-sig-algs value'
+        );
+        self::assertSame('publickey-hostbound@openssh.com', $r->string());
+        self::assertSame('0', $r->string());
+
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertSame(6, $this->firstMsg($client, $server, $buffer), 'userauth proceeds after EXT_INFO');
+    }
+
+    public function test_no_ext_info_when_client_does_not_offer_it(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake($log); // default client: no ext-info-c
+        self::assertNull($client->transport()->next($buffer), 'nothing queued after NEWKEYS');
+
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        $types = array_map(static fn (string $p): int => ord($p[0]), $this->drain($client, $server, $buffer));
+        self::assertSame([6], $types, 'first reply is SERVICE_ACCEPT; no EXT_INFO anywhere');
+    }
+
+    public function test_inbound_ext_info_is_ignored_not_unimplemented(): void
+    {
+        $log = [];
+        [$server, $client, $buffer] = $this->handshake($log);
+        $client->send($server, (new Buf())->byte(5)->string('ssh-userauth')->get());
+        self::assertSame(6, $this->firstMsg($client, $server, $buffer));
+        $client->send($server, $this->passwordAuth('root', 'hunter2'));
+        self::assertSame(52, $this->firstMsg($client, $server, $buffer));
+
+        // A client EXT_INFO (msg 7) must be parsed-and-ignored, not answered with UNIMPLEMENTED (msg 3).
+        $client->send($server, (new Buf())->byte(7)->uint32(0)->get());
+        self::assertSame([], $this->drain($client, $server, $buffer), 'inbound EXT_INFO draws no reply');
+        self::assertFalse($server->isClosed());
+    }
+
+    // --- FP-0290 §4.6: pseudo-algorithm markers are never negotiated (guard for FP-0291) ---
+
+    public function test_pseudo_algorithm_markers_are_never_negotiated(): void
+    {
+        $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(1), static function (): void {
+        }, 'SSH-2.0-OpenSSH_8.9p1');
+        $server->onConnect();
+        $server->takeOut();
+        $server->feed(self::V_C . "\r\n");
+        $server->takeOut(); // drain the server KEXINIT
+
+        $t = new Transport();
+        // A kex list of ONLY markers offers no real algorithm → no common kex → dropped; no KEX_ECDH_REPLY.
+        $kexInit = (new Buf())->byte(20)->raw(random_bytes(16))
+            ->nameList(['kex-strict-c-v00@openssh.com', 'ext-info-c', 'kex-strict-s-v00@openssh.com'])
+            ->nameList(['ssh-ed25519'])->nameList(['aes256-ctr'])->nameList(['aes256-ctr'])
+            ->nameList(['hmac-sha2-256'])->nameList(['hmac-sha2-256'])->nameList(['none'])->nameList(['none'])
+            ->nameList([])->nameList([])->bool(false)->uint32(0)->get();
+        $server->feed($t->frame($kexInit));
+        self::assertTrue($server->isClosed(), 'a markers-only kex list has no common algorithm');
+        self::assertSame('', $server->takeOut(), 'no KEX_ECDH_REPLY, silent pre-auth close');
+
+        self::assertTrue(KexSuite::isMarker('kex-strict-c-v00@openssh.com'));
+        self::assertTrue(KexSuite::isMarker('kex-strict-s-v00@openssh.com'));
+        self::assertTrue(KexSuite::isMarker('ext-info-c'));
+        foreach (KexSuite::NAMES as $name) {
+            self::assertFalse(KexSuite::isMarker($name), "{$name} is a real kex, not a marker");
+        }
+    }
+
+    // --- FP-0290 §4.7: strict-kex packet discipline (dormant, synthetic strict server) ---
+
+    public function test_strict_discipline_ignore_before_kexinit_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client] = $this->strictServerAwaitingKex($log);
+        // An IGNORE (inbound seq 0) alone is handled non-strictly — we cannot know strict mode yet.
+        $server->feed($client->transport()->frame((new Buf())->byte(2)->string('')->get()));
+        self::assertFalse($server->isClosed(), 'the stray IGNORE alone does not close (strict not yet known)');
+        // The KEXINIT then arrives at seq 1 → "KEXINIT was not the first packet".
+        $server->feed($client->transport()->frame($client->kexInit()));
+        self::assertTrue($server->isClosed(), 'a KEXINIT that is not the first packet is a strict violation');
+    }
+
+    public function test_strict_discipline_ignore_after_kexinit_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client] = $this->strictServerAwaitingKex($log);
+        $server->feed($client->transport()->frame($client->kexInit()));
+        self::assertFalse($server->isClosed(), 'the KEXINIT as the first packet is fine');
+        $server->feed($client->transport()->frame((new Buf())->byte(2)->string('')->get())); // IGNORE mid-kex
+        self::assertTrue($server->isClosed(), 'a stray IGNORE during the initial kex is a strict violation');
+    }
+
+    public function test_strict_discipline_wrong_kex_message_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client] = $this->strictServerAwaitingKex($log);
+        $server->feed($client->transport()->frame($client->kexInit()));
+        // msg 34 passes the packet-discipline gate (it is a kex message) but is wrong for curve25519,
+        // so the kex object rejects it → kex_protocol_error, which is fatal under strict (else UNIMPLEMENTED).
+        $server->feed($client->transport()->frame((new Buf())->byte(34)->uint32(0)->get()));
+        self::assertTrue($server->isClosed(), 'a wrong-state kex message during strict initial kex is fatal');
+    }
+
+    public function test_strict_discipline_newkeys_before_kex_completes_is_dropped(): void
+    {
+        $log = [];
+        [$server, $client] = $this->strictServerAwaitingKex($log);
+        $server->feed($client->transport()->frame($client->kexInit()));
+        $server->feed($client->transport()->frame((new Buf())->byte(21)->get())); // NEWKEYS with no keys yet
+        self::assertTrue($server->isClosed(), 'NEWKEYS before the kex produced keys is a strict violation');
+    }
+
+    public function test_non_strict_control_tolerates_stray_ignore(): void
+    {
+        // A legacy client that does NOT offer kex-strict-c: the server never enters strict mode, so a
+        // stray IGNORE before the KEXINIT is tolerated (today's behaviour) and the kex proceeds.
+        $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(99), static function (): void {
+        }, 'SSH-2.0-OpenSSH_8.9p1');
+        $server->onConnect();
+        $buffer = $server->takeOut();
+        $pos = strpos($buffer, "\r\n");
+        self::assertNotFalse($pos);
+        $vS = substr($buffer, 0, $pos);
+        // No pretendServerAdvertisesStrictKex — a real, non-advertising server.
+        $client = new SshTestClient(self::V_C, $vS, ['curve25519-sha256']); // no marker
+        $server->feed(self::V_C . "\r\n");
+        $buffer = $server->takeOut();
+        $client->transport()->next($buffer); // server KEXINIT
+
+        $server->feed($client->transport()->frame((new Buf())->byte(2)->string('')->get())); // stray IGNORE
+        $server->feed($client->transport()->frame($client->kexInit()));
+        $server->feed($client->transport()->frame($client->ecdhInit()));
+        self::assertFalse($server->isClosed(), 'a non-strict server tolerates a stray IGNORE and completes the kex');
+
+        $out = $server->takeOut();
+        $reply = $client->transport()->next($out);
+        self::assertNotNull($reply);
+        self::assertSame(31, ord($reply[0]), 'KEX_ECDH_REPLY — the handshake proceeds');
+    }
+
     // --- helpers: a minimal in-memory SSH client sharing the server's transport primitives ---
+
+    /**
+     * A synthetic strict-advertising server past the version exchange with its KEXINIT drained, plus
+     * a strict client (offers kex-strict-c) whose transport has consumed that KEXINIT — ready for a
+     * test to inject stray packets and assert the strict discipline closes the connection.
+     *
+     * @param array<int,string> $log
+     * @return array{0:SshConnection,1:SshTestClient}
+     */
+    private function strictServerAwaitingKex(array &$log): array
+    {
+        $server = new SshConnection(
+            SshHostKeyFixture::set(),
+            new ProtocolSession(99),
+            static function (string $event, string $detail) use (&$log): void {
+                $log[] = $event . ':' . $detail;
+            },
+            'SSH-2.0-OpenSSH_8.9p1'
+        );
+        $server->onConnect();
+        $buffer = $server->takeOut();
+        $pos = strpos($buffer, "\r\n");
+        self::assertNotFalse($pos);
+        $vS = substr($buffer, 0, $pos);
+        self::pretendServerAdvertisesStrictKex($server);
+
+        $client = new SshTestClient(self::V_C, $vS, ['curve25519-sha256', 'kex-strict-c-v00@openssh.com']);
+        $server->feed(self::V_C . "\r\n");
+        $buffer = $server->takeOut();
+        self::assertNotNull($client->transport()->next($buffer), 'server KEXINIT drained');
+
+        return [$server, $client];
+    }
 
     /** Build a password USERAUTH_REQUEST payload. */
     private function passwordAuth(string $user, string $pass): string
@@ -143,11 +481,27 @@ final class SshHandshakeTest extends TestCase
      * Drive version exchange + curve25519 kex + NEWKEYS, leaving both sides encrypted and ready
      * for userauth.
      *
+     * FP-0290 ordering: after onConnect() the server has queued only its banner; the KEXINIT
+     * follows once we feed the client's identification line (as a real sshd does). With a strict /
+     * ext-info client (see $clientKex) and a synthetic strict-advertising server ($pretendStrictServer),
+     * the server's EXT_INFO ciphertext is queued together with the REPLY+NEWKEYS (before the client's
+     * NEWKEYS), so the returned $buffer already holds it and the final `assertSame('', takeOut())`
+     * still passes — the '' means "nothing NEW was queued after the client NEWKEYS", not "no EXT_INFO".
+     *
      * @param array<int,string> $log
+     * @param string[]          $clientKex        the client's advertised kex name-list (markers last, as OpenSSH sends them)
+     * @param bool              $resetOnNewKeys   client resets its own transport seq at NEWKEYS (models a strict client)
+     * @param bool              $pretendStrictServer flip the private advertisesStrictKex bool before the client KEXINIT is fed
      * @return array{0:SshConnection,1:SshTestClient,2:string}
      */
-    private function handshake(array &$log, int $seed = 99, int $authRejectBudget = 0): array
-    {
+    private function handshake(
+        array &$log,
+        int $seed = 99,
+        int $authRejectBudget = 0,
+        array $clientKex = ['curve25519-sha256'],
+        bool $resetOnNewKeys = false,
+        bool $pretendStrictServer = false
+    ): array {
         $server = new SshConnection(
             SshHostKeyFixture::set(),
             new ProtocolSession($seed),
@@ -163,15 +517,26 @@ final class SshHandshakeTest extends TestCase
         $pos = strpos($buffer, "\r\n");
         self::assertNotFalse($pos);
         $vS = substr($buffer, 0, $pos);
-        $buffer = substr($buffer, $pos + 2);
+        self::assertSame($vS . "\r\n", $buffer, 'banner only before the client speaks — the KEXINIT follows the client line');
 
-        $client = new SshTestClient(self::V_C, $vS);
+        if ($pretendStrictServer) {
+            // Synthetic strict-advertising server: flip the one private bool the two-sided gate reads,
+            // as if our served kex list carried kex-strict-s (FP-0291 does this for real). Must happen
+            // before the client's KEXINIT is fed — the gate is evaluated in negotiate().
+            self::pretendServerAdvertisesStrictKex($server);
+        }
+
+        $client = new SshTestClient(self::V_C, $vS, $clientKex);
+
+        // Client identification line first; the server queues its KEXINIT in response.
+        $server->feed(self::V_C . "\r\n");
+        $buffer = $server->takeOut();
         $serverKexInit = $client->transport()->next($buffer);
         self::assertNotNull($serverKexInit);
-        self::assertSame('', $buffer);
+        self::assertSame(20, ord($serverKexInit[0]));
+        self::assertSame('', $buffer, 'exactly the KEXINIT');
 
-        // Client identification + KEXINIT + ECDH_INIT.
-        $server->feed(self::V_C . "\r\n");
+        // Client KEXINIT + ECDH_INIT.
         $server->feed($client->transport()->frame($client->kexInit()));
         $server->feed($client->transport()->frame($client->ecdhInit()));
 
@@ -185,10 +550,23 @@ final class SshHandshakeTest extends TestCase
 
         $client->deriveKeys($reply, $serverKexInit);
         $server->feed($client->transport()->frame((new Buf())->byte(21)->get())); // client NEWKEYS
-        $client->enableEncryption();
+        $client->enableEncryption($resetOnNewKeys);
         self::assertSame('', $server->takeOut());
 
         return [$server, $client, $buffer];
+    }
+
+    /**
+     * Flip the one private bool the two-sided strict gate reads, so the SshConnection wiring (the
+     * real negotiate()/kexMessage()/NEWKEYS reset points and the gate expression) is exercised as if
+     * our served kex list carried kex-strict-s. Test-only seam — deleted by FP-0291 when rows B–D run
+     * against a genuinely strict-advertising server.
+     */
+    private static function pretendServerAdvertisesStrictKex(SshConnection $server): void
+    {
+        $p = new \ReflectionProperty(SshConnection::class, 'advertisesStrictKex');
+        $p->setAccessible(true); // M2: required on the PHP 8.0 floor (a no-op only since 8.1)
+        $p->setValue($server, true);
     }
 
     /** Feed the server, decrypt its reply and return the first response message type. */
@@ -251,7 +629,8 @@ final class SshTestClient
     private string $ivS2C = '';
     private string $macS2C = '';
 
-    public function __construct(private string $vC, private string $vS)
+    /** @param string[] $kex the advertised kex name-list (a strict/ext-info client appends the markers last) */
+    public function __construct(private string $vC, private string $vS, array $kex = ['curve25519-sha256'])
     {
         $this->transport = new Transport();
         $this->priv = random_bytes(32);
@@ -259,7 +638,7 @@ final class SshTestClient
         $this->kexInit = (new Buf())
             ->byte(20)
             ->raw(random_bytes(16))
-            ->nameList(['curve25519-sha256'])
+            ->nameList($kex)
             ->nameList(['ssh-ed25519'])
             ->nameList(['aes256-ctr'])
             ->nameList(['aes256-ctr'])
@@ -321,10 +700,11 @@ final class SshTestClient
         $this->macS2C = $derive('F');
     }
 
-    public function enableEncryption(): void
+    /** Install the derived keys; $resetSeq models a strict client resetting each counter at NEWKEYS. */
+    public function enableEncryption(bool $resetSeq = false): void
     {
-        $this->transport->enableSend(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyC2S, $this->ivC2S, $this->macC2S));
-        $this->transport->enableRecv(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyS2C, $this->ivS2C, $this->macS2C));
+        $this->transport->enableSend(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyC2S, $this->ivC2S, $this->macC2S), $resetSeq);
+        $this->transport->enableRecv(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $this->keyS2C, $this->ivS2C, $this->macS2C), $resetSeq);
     }
 
     /** Frame + hand a payload to the server. */

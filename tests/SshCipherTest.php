@@ -417,10 +417,10 @@ final class SshCipherTest extends TestCase
             0
         );
         $server->onConnect();
+        $server->takeOut();                              // drain the banner
+        // KEXINIT is now queued after the client's identification line (real-sshd ordering, FP-0290).
+        $server->feed("SSH-2.0-TestClient_1.0\r\n");
         $buffer = $server->takeOut();
-        $pos = strpos($buffer, "\r\n");
-        self::assertNotFalse($pos);
-        $buffer = substr($buffer, $pos + 2);
 
         $kexInit = (new Transport())->next($buffer);
         self::assertNotNull($kexInit);
@@ -441,7 +441,7 @@ final class SshCipherTest extends TestCase
         $compS2C = $r->nameList();
 
         $hassh = md5(implode(',', $kex) . ';' . implode(',', $encS2C) . ';' . implode(',', $macS2C) . ';' . implode(',', $compS2C));
-        self::assertSame('04e7711cffa95c90b7c5ec4a6b7bdcd1', $hassh, 'HASSHServer unchanged by FP-0288');
+        self::assertSame('04e7711cffa95c90b7c5ec4a6b7bdcd1', $hassh, 'HASSHServer unchanged by FP-0288/0289/0290');
     }
 
     // --- helpers ---

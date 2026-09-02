@@ -411,16 +411,24 @@ final class SshKexTest extends TestCase
         $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(7), static function (): void {
         }, self::V_S, 0);
         $server->onConnect();
-        $server->takeOut(); // MUST-FIX #2: drain the banner + server KEXINIT first
+        $server->takeOut();                 // drain the banner
         $server->feed(self::V_C . "\r\n");
+        $server->takeOut();                 // drain the server KEXINIT (now queued after the client ident line, FP-0290)
 
         $t = new Transport();
+        // An IGNORE (inbound seq 0) then a pre-KEXINIT msg 30 (inbound seq 1): UNIMPLEMENTED must
+        // carry the offending packet's real sequence number (1), not a fixed 0. The IGNORE prefix is
+        // what makes this non-vacuous — with msg 30 first the value would be 0 either way (§4.8).
+        $server->feed($t->frame((new Buf())->byte(2)->string('')->get()));   // MSG_IGNORE
         $server->feed($t->frame((new Buf())->byte(30)->string(random_bytes(32))->get()));
 
         $out = $server->takeOut();
         $packet = $t->next($out);
         self::assertNotNull($packet);
         self::assertSame(3, ord($packet[0]), 'a kex message before KEXINIT draws UNIMPLEMENTED (not a signed reply)');
+        $rseq = new Reader($packet);
+        $rseq->byte();
+        self::assertSame(1, $rseq->uint32(), 'UNIMPLEMENTED carries the offending packet sequence number');
         self::assertNull($t->next($out), 'exactly one packet');
         self::assertFalse($server->isClosed(), 'the connection stays up');
     }
@@ -430,8 +438,9 @@ final class SshKexTest extends TestCase
         $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(7), static function (): void {
         }, self::V_S, 0);
         $server->onConnect();
-        $server->takeOut();
+        $server->takeOut();                 // drain the banner
         $server->feed(self::V_C . "\r\n");
+        $server->takeOut();                 // drain the server KEXINIT (now queued after the client ident line, FP-0290)
 
         $t = new Transport();
         $server->feed($t->frame($this->clientKexInit()));
@@ -489,10 +498,9 @@ final class SshKexTest extends TestCase
         $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(1), static function (): void {
         }, self::V_S, 0);
         $server->onConnect();
+        $server->takeOut();                     // drain the banner
+        $server->feed(self::V_C . "\r\n");       // KEXINIT is queued after the client ident line (FP-0290)
         $buffer = $server->takeOut();
-        $pos = strpos($buffer, "\r\n");
-        self::assertNotFalse($pos);
-        $buffer = substr($buffer, $pos + 2);
 
         $kexInit = (new Transport())->next($buffer);
         self::assertNotNull($kexInit);

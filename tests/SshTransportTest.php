@@ -190,4 +190,171 @@ final class SshTransportTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $recv->next($wire);
     }
+
+    // --- FP-0290 §4.1: the strict-kex sequence-number reset is per-direction and changes the wire ---
+
+    /**
+     * Four reset combinations per cipher class. Both sides frame/consume three plaintext packets
+     * (KEXINIT/REPLY/NEWKEYS → seq 3) then switch ciphers with the reset flags under test; the first
+     * encrypted packet opens iff both directions agree on the next sequence number. For a
+     * sequence-dependent cipher (E&M / ETM covers the MAC over BE32(seq); chacha uses seq as the
+     * nonce) only TT and FF agree — TF/FT garble (MAC failure or bad length). GCM's per-packet state
+     * is its own IV invocation counter, not the SSH sequence number, so all four open.
+     *
+     * Non-vacuous by construction: at baseline enableSend/enableRecv silently ignore the extra bool
+     * (PHP accepts extra args to a user method), so no reset happens and the TF/FT rows open — the
+     * expectException then fails. A no-op reset cannot pass this matrix.
+     *
+     * @dataProvider strictResetMatrix
+     */
+    public function test_strict_kex_reset_is_per_direction_and_changes_the_wire(
+        string $cipher,
+        string $mac,
+        bool $serverReset,
+        bool $clientReset,
+        bool $expectOpen
+    ): void {
+        $send = new Transport();
+        $recv = new Transport();
+        for ($i = 0; $i < 3; $i++) {
+            $p = chr(20 + $i) . random_bytes(8);
+            $buf = $send->frame($p);
+            self::assertSame($p, $recv->next($buf), 'plaintext KEX packet round-trips');
+        }
+        [$sc, $rc] = $this->cipherPair($cipher, $mac);
+        $send->enableSend($sc, $serverReset);
+        $recv->enableRecv($rc, $clientReset);
+
+        $payload = "\x07" . random_bytes(16); // models the first encrypted packet (EXT_INFO)
+        $wire = $send->frame($payload);
+
+        if ($expectOpen) {
+            self::assertSame($payload, $recv->next($wire), 'first encrypted packet opens when both directions agree');
+
+            return;
+        }
+        $this->expectException(\RuntimeException::class); // S2: message differs by cipher (MAC vs bad length)
+        $recv->next($wire);
+    }
+
+    /** @return array<string,array{0:string,1:string,2:bool,3:bool,4:bool}> */
+    public static function strictResetMatrix(): array
+    {
+        $rows = [];
+        foreach (self::seqDependentCiphers() as $label => [$cipher, $mac]) {
+            $rows["{$label}: TT opens"] = [$cipher, $mac, true, true, true];
+            $rows["{$label}: FF opens (legacy continuous)"] = [$cipher, $mac, false, false, true];
+            $rows["{$label}: TF throws"] = [$cipher, $mac, true, false, false];
+            $rows["{$label}: FT throws"] = [$cipher, $mac, false, true, false];
+        }
+        // GCM opens in all four — documents that its IV counter, not the seq, is its per-packet state.
+        foreach ([true, false] as $s) {
+            foreach ([true, false] as $c) {
+                $tag = ($s ? 'T' : 'F') . ($c ? 'T' : 'F');
+                $rows["aes256-gcm: {$tag} opens (IV counter, not seq)"] = ['aes256-gcm@openssh.com', 'hmac-sha2-256', $s, $c, true];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * S1 — asymmetric "fresh receiver / fresh sender" rows that pin the reset target to EXACTLY 0,
+     * not merely "some value both sides share" (TT alone opens even if both reset to 1). One side
+     * resets after three packets; the other is a fresh Transport whose counter is 0 by construction.
+     *
+     * @dataProvider seqDependentCipherRows
+     */
+    public function test_strict_kex_reset_targets_exactly_zero(string $cipher, string $mac): void
+    {
+        // Row 1: a sender that framed 3 packets then reset (outSeq→0) must agree with a FRESH
+        // receiver whose inSeq is 0 by construction (it never consumed anything). Pins outSeq === 0.
+        $send = new Transport();
+        for ($i = 0; $i < 3; $i++) {
+            $send->frame(chr(20 + $i) . random_bytes(8));
+        }
+        [$sc, $rc] = $this->cipherPair($cipher, $mac);
+        $send->enableSend($sc, true);
+        $freshRecv = new Transport();
+        $freshRecv->enableRecv($rc, false);
+        $payload = "\x07" . random_bytes(16);
+        $wire = $send->frame($payload);
+        self::assertSame($payload, $freshRecv->next($wire), 'reset sender (outSeq→0) agrees with a fresh receiver at 0');
+
+        // Row 2 (mirror): a receiver that consumed 3 packets then reset (inSeq→0) must agree with a
+        // fresh sender whose outSeq is 0 by construction. A throwaway advancer pushes the 3 packets
+        // so the real sender stays fresh. Pins inSeq === 0.
+        $advancer = new Transport();
+        $recv = new Transport();
+        for ($i = 0; $i < 3; $i++) {
+            $p = chr(20 + $i) . random_bytes(8);
+            $buf = $advancer->frame($p);
+            self::assertSame($p, $recv->next($buf));
+        }
+        [$sc2, $rc2] = $this->cipherPair($cipher, $mac);
+        $recv->enableRecv($rc2, true);
+        $freshSend = new Transport();
+        $freshSend->enableSend($sc2, false);
+        $payload2 = "\x07" . random_bytes(16);
+        $wire2 = $freshSend->frame($payload2);
+        self::assertSame($payload2, $recv->next($wire2), 'reset receiver (inSeq→0) agrees with a fresh sender at 0');
+    }
+
+    public function test_last_in_seq_tracks_consumed_packets(): void
+    {
+        $send = new Transport();
+        $recv = new Transport();
+        for ($i = 0; $i < 3; $i++) {
+            $p = chr(20 + $i) . random_bytes(8);
+            $buf = $send->frame($p);
+            self::assertSame($p, $recv->next($buf));
+            self::assertSame($i, $recv->lastInSeq(), "lastInSeq === {$i} after the packet at seq {$i}");
+        }
+        // Under strict kex both counters reset at NEWKEYS; the next consumed packet is seq 0 again.
+        [$sc, $rc] = $this->cipherPair('aes256-ctr', 'hmac-sha2-256');
+        $send->enableSend($sc, true);
+        $recv->enableRecv($rc, true);
+        $payload = "\x07" . random_bytes(16);
+        $wire = $send->frame($payload);
+        self::assertSame($payload, $recv->next($wire));
+        self::assertSame(0, $recv->lastInSeq(), 'lastInSeq is 0 again after the inbound reset');
+    }
+
+    /** @return array<string,array{0:string,1:string}> */
+    public static function seqDependentCipherRows(): array
+    {
+        $rows = [];
+        foreach (self::seqDependentCiphers() as $label => $pair) {
+            $rows[$label] = $pair;
+        }
+
+        return $rows;
+    }
+
+    /** @return array<string,array{0:string,1:string}> cipher classes whose wire depends on the sequence number */
+    private static function seqDependentCiphers(): array
+    {
+        return [
+            'aes256-ctr E&M' => ['aes256-ctr', 'hmac-sha2-256'],
+            'aes128-ctr ETM' => ['aes128-ctr', 'hmac-sha2-256-etm@openssh.com'],
+            'chacha20-poly1305' => ['chacha20-poly1305@openssh.com', 'hmac-sha2-256'],
+        ];
+    }
+
+    /**
+     * A matched send/recv cipher pair sharing key material.
+     *
+     * @return array{0:\Funnypot\Protocol\Ssh\Cipher\PacketCipher,1:\Funnypot\Protocol\Ssh\Cipher\PacketCipher}
+     */
+    private function cipherPair(string $cipher, string $mac): array
+    {
+        $key = random_bytes(CipherSuite::keyLen($cipher));
+        $iv = CipherSuite::ivLen($cipher) > 0 ? random_bytes(CipherSuite::ivLen($cipher)) : '';
+        $macKey = random_bytes(CipherSuite::macKeyLen($mac));
+
+        return [
+            CipherSuite::build($cipher, $mac, $key, $iv, $macKey),
+            CipherSuite::build($cipher, $mac, $key, $iv, $macKey),
+        ];
+    }
 }

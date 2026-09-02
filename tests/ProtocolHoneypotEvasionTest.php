@@ -239,7 +239,13 @@ final class ProtocolHoneypotEvasionTest extends TestCase
         $connection = $this->freshSshConnection($log);
 
         $connection->onConnect();
-        $banner = $connection->takeOut(); // our identification line + KEXINIT, sent before we read anything
+        $banner = $connection->takeOut(); // our identification line — nothing else is sent before we read the client's
+        // FP-0290: the KEXINIT now follows the client's ident line, so a bare connection sees only the banner.
+        self::assertSame(
+            "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10\r\n",
+            $banner,
+            'banner only before the client speaks (production default), no KEXINIT'
+        );
 
         $connection->feed("SSH-1337-OpenSSH_9.0\r\n"); // cowrie-ssh-honeypot-detect's own probe
         $reply = $connection->takeOut();

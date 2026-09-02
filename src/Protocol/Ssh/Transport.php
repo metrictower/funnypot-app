@@ -11,8 +11,12 @@ use Funnypot\Protocol\Ssh\Cipher\PlainCipher;
  * The SSH binary packet protocol (RFC 4253 §6) for one connection: framing, padding, and — once
  * keys are installed — sealing each packet through a {@see PacketCipher}. Send and receive run
  * independently, each with its own cipher and a monotonic 32-bit sequence number that spans the
- * plaintext KEX packets and continues into the encrypted stream. Before NEWKEYS both directions
- * use {@see PlainCipher} (no encryption, no MAC), so one code path serves both phases.
+ * plaintext KEX packets and continues into the encrypted stream — unless strict kex is negotiated,
+ * in which case each direction restarts its counter at 0 after its NEWKEYS (PROTOCOL §1.9(b)),
+ * driven by the $resetSeq flag on {@see enableSend()} / {@see enableRecv()}. The reset applies to
+ * every NEWKEYS under strict (§1.9(b) — it persists for the duration of the connection), not just
+ * the first. Before NEWKEYS both directions use {@see PlainCipher} (no encryption, no MAC), so one
+ * code path serves both phases.
  *
  * The padding rule ({@see padLen()}) is aadlen-aware: E&M includes the 4-byte length in the
  * alignment, while ETM/GCM/chacha exclude it (OpenSSH packet.c `ssh_packet_send2_wrapped`). Using
@@ -28,6 +32,7 @@ final class Transport
 
     private int $outSeq = 0;
     private int $inSeq = 0;
+    private int $lastInSeq = 0; // sequence number of the packet most recently returned by next()
 
     private PacketCipher $send;
     private PacketCipher $recv;
@@ -91,6 +96,7 @@ final class Transport
         $packetLen = $this->pktLen;
         $buffer = substr($buffer, $total);
         $this->pktLen = null;
+        $this->lastInSeq = $this->inSeq;
         $this->inSeq = ($this->inSeq + 1) & 0xffffffff;
 
         return $this->payloadOf($packet, $packetLen);
@@ -107,15 +113,38 @@ final class Transport
         return substr($packet, 5, $payloadLen);
     }
 
-    /** Install the server→client cipher; subsequent frames are sealed through it. */
-    public function enableSend(PacketCipher $cipher): void
+    /**
+     * Install the server→client cipher; subsequent frames are sealed through it. Under strict kex
+     * ($resetSeq true) the outbound sequence number restarts at 0 — the packet just framed was our
+     * NEWKEYS, so the next packet (EXT_INFO) is numbered 0 (OpenSSH packet.c:1224-1227).
+     */
+    public function enableSend(PacketCipher $cipher, bool $resetSeq = false): void
     {
         $this->send = $cipher;
+        if ($resetSeq) {
+            $this->outSeq = 0;
+        }
     }
 
-    /** Install the client→server cipher; subsequent packets are opened through it. */
-    public function enableRecv(PacketCipher $cipher): void
+    /**
+     * Install the client→server cipher; subsequent packets are opened through it. Under strict kex
+     * ($resetSeq true) the inbound sequence number restarts at 0 — the packet just consumed was the
+     * client's NEWKEYS, so its next packet opens at 0 (OpenSSH packet.c:1693-1696).
+     */
+    public function enableRecv(PacketCipher $cipher, bool $resetSeq = false): void
     {
         $this->recv = $cipher;
+        if ($resetSeq) {
+            $this->inSeq = 0;
+        }
+    }
+
+    /**
+     * Sequence number of the packet most recently returned by {@see next()} — used for
+     * SSH_MSG_UNIMPLEMENTED and the strict-kex "KEXINIT must be the first packet" rule.
+     */
+    public function lastInSeq(): int
+    {
+        return $this->lastInSeq;
     }
 }
