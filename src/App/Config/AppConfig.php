@@ -47,7 +47,9 @@ final class AppConfig
         public int $blocklistMinLists,
         public string $abuseIpdbKey,
         public bool $abuseIpdbReport,
-        /** Our own public IP(s); AbuseIPDB reporting refuses to report these (and is off if empty). */
+        /** Our own public IP(s); AbuseIPDB reporting refuses to report these (and is off if empty).
+         *  Entries may be exact IPs or CIDRs (FP-0247, Fix J) — a honeypot behind shared NAT/CGNAT can
+         *  list its whole egress range so an innocent shared-NAT neighbour is never reported. */
         public array $selfIps,
         /** IPs/CIDRs of proxies in front of us; only these may set X-Forwarded-For. Empty = edge. */
         public array $trustedProxies,

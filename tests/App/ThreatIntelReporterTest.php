@@ -216,6 +216,24 @@ final class ThreatIntelReporterTest extends TestCase
         self::assertNotContains('abuse_queue', $names);   // AbuseIpdb's tables are not touched
     }
 
+    public function test_self_cidr_covers_whole_range(): void
+    {
+        // FP-0247 (Fix J): mirror of AbuseIpdb — a self CIDR protects a whole shared-NAT range.
+        $a = $this->make($this->dbPath(), ['203.0.113.0/24']);
+        self::assertSame('self', $a->enqueue('203.0.113.50', 'x')['reason']);
+        self::assertSame(0, $a->queueCount());
+        self::assertTrue($a->enqueue('45.9.148.1', 'x')['queued']);
+    }
+
+    public function test_cgnat_source_is_never_enqueued(): void
+    {
+        $a = $this->make($this->dbPath(), ['203.0.113.9']);
+        foreach (['100.64.0.1', '100.127.255.254', '192.0.0.5', '198.18.0.1'] as $ip) {
+            self::assertSame('not a public ip', $a->enqueue($ip, 'x')['reason'], $ip);
+        }
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_categories_for_protocol(): void
     {
         self::assertSame('18,22', ThreatIntelReporter::categoriesForProtocol('ssh'));

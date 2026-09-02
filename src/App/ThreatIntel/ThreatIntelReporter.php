@@ -75,7 +75,7 @@ final class ThreatIntelReporter
         if ($this->selfIps === []) {
             return $this->skip('self ips not configured');   // fail safe
         }
-        if (in_array($ip, $this->selfIps, true)) {
+        if (IpMatcher::matches($ip, $this->selfIps)) {         // FP-0247 (Fix J): exact IP or self CIDR
             return $this->skip('self');                       // the invariant
         }
         if (!self::reportable($ip)) {
@@ -238,7 +238,19 @@ final class ThreatIntelReporter
 
     private static function reportable(string $ip): bool
     {
-        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return false;
+        }
+        // FP-0247 (Fix J): RFC 6598 CGNAT (100.64.0.0/10) and the benchmarking ranges are not publicly
+        // routable — a "source" there is local-side plumbing or a shared-NAT neighbour, so reporting it
+        // always risks innocent collateral. The PHP filter flags do not exclude these; reject explicitly.
+        foreach (['100.64.0.0/10', '192.0.0.0/24', '198.18.0.0/15'] as $cidr) {
+            if (IpMatcher::inCidr($ip, $cidr)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function recentlyReported(string $ip): bool

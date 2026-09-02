@@ -141,6 +141,27 @@ final class AbuseIpdbTest extends TestCase
         self::assertSame(0, $b->queueCount());
     }
 
+    public function test_self_cidr_covers_whole_range(): void
+    {
+        // FP-0247 (Fix J): a self entry may be a CIDR — every IP in our shared-NAT egress range is self.
+        $a = $this->make($this->dbPath(), ['203.0.113.0/24']);
+        self::assertSame('self', $a->enqueue('203.0.113.50', 'x')['reason']);
+        self::assertSame('self', $a->enqueue('203.0.113.255', 'x')['reason']);
+        self::assertSame(0, $a->queueCount());
+        // An IP outside the self range is still reportable.
+        self::assertTrue($a->enqueue('45.9.148.1', 'x')['queued']);
+    }
+
+    public function test_cgnat_source_is_never_enqueued(): void
+    {
+        // FP-0247 (Fix J): RFC 6598 CGNAT + benchmarking ranges are not publicly routable → never report.
+        $a = $this->make($this->dbPath(), ['203.0.113.9']);
+        foreach (['100.64.0.1', '100.127.255.254', '192.0.0.5', '198.18.0.1'] as $ip) {
+            self::assertSame('not a public ip', $a->enqueue($ip, 'x')['reason'], $ip);
+        }
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_categories_for_protocol(): void
     {
         self::assertSame('18,22', AbuseIpdb::categoriesForProtocol('ssh'));
