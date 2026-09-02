@@ -224,6 +224,57 @@ final class ThreatIntelReporterTest extends TestCase
         self::assertNotContains('abuse_queue', $names);   // AbuseIpdb's tables are not touched
     }
 
+    public function test_overlapping_drains_claim_disjoint_rows(): void
+    {
+        $db = $this->dbPath();
+        $posted = [];
+        $b = null;
+        $senderB = static function (string $u, array $h, string $body) use (&$posted): array {
+            parse_str($body, $f);
+            $posted[] = (string) $f['ip'];
+
+            return ['status' => 200, 'body' => '{}'];
+        };
+        $fired = false;
+        $senderA = static function (string $u, array $h, string $body) use (&$posted, &$b, &$fired): array {
+            parse_str($body, $f);
+            $posted[] = (string) $f['ip'];
+            if (!$fired) {
+                $fired = true;
+                $b->drain(2);
+            }
+
+            return ['status' => 200, 'body' => '{}'];
+        };
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $senderA);
+        $b = $this->make($db, ['203.0.113.9'], 1000, 24, $senderB);
+        foreach (['45.9.148.1', '45.9.148.2', '45.9.148.3'] as $ip) {
+            $a->enqueue($ip, 'x');
+        }
+
+        $a->drain(2);
+
+        self::assertCount(3, $posted);
+        self::assertSame(3, count(array_unique($posted)));
+        self::assertSame(0, $a->queueCount());
+    }
+
+    public function test_stale_claim_is_reclaimed_and_sent_once(): void
+    {
+        $db = $this->dbPath();
+        $calls = [];
+        $a = $this->make($db, ['203.0.113.9'], 1000, 24, $this->recorder($calls));
+        $a->enqueue('45.9.148.1', 'x');
+        $pdo = new \PDO('sqlite:' . $db);
+        $pdo->prepare('UPDATE ti_queue SET claim = :t, claimed_at = :at WHERE ip = :ip')
+            ->execute([':t' => 'deadbeef', ':at' => gmdate('c', time() - 11 * 60), ':ip' => '45.9.148.1']);
+
+        $r = $a->drain();
+        self::assertSame(1, $r['sent']);
+        self::assertCount(1, $calls);
+        self::assertSame(0, $a->queueCount());
+    }
+
     public function test_429_is_transient_row_survives_and_pass_stops(): void
     {
         $calls = [];

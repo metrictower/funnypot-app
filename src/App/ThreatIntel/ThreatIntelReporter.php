@@ -125,10 +125,20 @@ final class ThreatIntelReporter
     {
         $sent = 0;
         $failed = 0;
+        $token = bin2hex(random_bytes(8));
         try {
             $this->purgeStale();   // FP-0247 (Fix E): drop rows too old to report truthfully
-            $rows = $this->db()->query('SELECT * FROM ti_queue ORDER BY id ASC LIMIT ' . max(1, $limit))
-                ->fetchAll(PDO::FETCH_ASSOC);
+            // FP-0247 (Fix G): claim a disjoint batch atomically so overlapping drains never double-send;
+            // a row claimed > 10 min ago is reclaimed (crashed worker).
+            $stale = gmdate('c', time() - 600);
+            $this->db()->prepare(
+                'UPDATE ti_queue SET claim = :tok, claimed_at = :now '
+                . 'WHERE id IN (SELECT id FROM ti_queue WHERE claim IS NULL OR claimed_at < :stale '
+                . 'ORDER BY id ASC LIMIT ' . max(1, $limit) . ')'
+            )->execute([':tok' => $token, ':now' => gmdate('c'), ':stale' => $stale]);
+            $st = $this->db()->prepare('SELECT * FROM ti_queue WHERE claim = :tok ORDER BY id ASC');
+            $st->execute([':tok' => $token]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
             return ['sent' => 0, 'failed' => 0, 'pending' => 0];
         }
@@ -191,6 +201,15 @@ final class ThreatIntelReporter
                         ->execute([':a' => $attempts, ':id' => (int) $row['id']]);
                 }
             }
+        }
+
+        // FP-0247 (Fix G, addendum): release the claim on any unsent remainder (early break on 429 /
+        // daily cap, and transient-failure rows) so the next pass retries immediately.
+        try {
+            $this->db()->prepare('UPDATE ti_queue SET claim = NULL, claimed_at = NULL WHERE claim = :tok')
+                ->execute([':tok' => $token]);
+        } catch (Throwable $e) {
+            // fail-silent: the 10-min stale reclaim absorbs a release that could not be written
         }
 
         return ['sent' => $sent, 'failed' => $failed, 'pending' => $this->queueCount()];
@@ -332,6 +351,22 @@ final class ThreatIntelReporter
         return ['status' => $status, 'body' => $resp === false ? '' : $resp];
     }
 
+    /** FP-0247 (Fix G): idempotently add the claim columns to a pre-existing queue table. */
+    private static function migrateClaimColumns(PDO $db, string $table): void
+    {
+        try {
+            $cols = $db->query('PRAGMA table_info(' . $table . ')')->fetchAll(PDO::FETCH_COLUMN, 1);
+            if (!in_array('claim', $cols, true)) {
+                $db->exec('ALTER TABLE ' . $table . ' ADD COLUMN claim TEXT');
+            }
+            if (!in_array('claimed_at', $cols, true)) {
+                $db->exec('ALTER TABLE ' . $table . ' ADD COLUMN claimed_at TEXT');
+            }
+        } catch (Throwable $e) {
+            // fail-silent: new installs already have the columns from CREATE.
+        }
+    }
+
     private function db(): PDO
     {
         if ($this->db !== null) {
@@ -347,8 +382,9 @@ final class ThreatIntelReporter
         $db->exec('PRAGMA journal_mode=WAL');
         $db->exec('CREATE TABLE IF NOT EXISTS ti_reports (ip TEXT PRIMARY KEY, reported_at TEXT)');
         $db->exec('CREATE TABLE IF NOT EXISTS ti_daily (day TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0)');
-        $db->exec('CREATE TABLE IF NOT EXISTS ti_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, categories TEXT, comment TEXT, signals TEXT, confidence REAL, created_at TEXT, attempts INTEGER NOT NULL DEFAULT 0)');
+        $db->exec('CREATE TABLE IF NOT EXISTS ti_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, categories TEXT, comment TEXT, signals TEXT, confidence REAL, created_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, claim TEXT, claimed_at TEXT)');
         $db->exec('CREATE TABLE IF NOT EXISTS ti_meta (k TEXT PRIMARY KEY, v TEXT)');
+        self::migrateClaimColumns($db, 'ti_queue');   // FP-0247 (Fix G): claim/claimed_at on live DBs
 
         return $this->db = $db;
     }

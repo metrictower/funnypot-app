@@ -118,10 +118,22 @@ final class AbuseIpdb
     {
         $sent = 0;
         $failed = 0;
+        $token = bin2hex(random_bytes(8));
         try {
             $this->purgeStale();   // FP-0247 (Fix E): drop rows too old to report truthfully
-            $rows = $this->db()->query('SELECT * FROM abuse_queue ORDER BY id ASC LIMIT ' . max(1, $limit))
-                ->fetchAll(PDO::FETCH_ASSOC);
+            // FP-0247 (Fix G): claim a disjoint batch atomically before sending, so two overlapping
+            // drain runs (a slow HTTP pass + the next timer tick) never both POST the same row. A row
+            // claimed more than 10 min ago is reclaimed (a crashed worker left it). The single UPDATE is
+            // atomic under WAL + busy_timeout, so overlapping runs claim non-overlapping id sets.
+            $stale = gmdate('c', time() - 600);
+            $this->db()->prepare(
+                'UPDATE abuse_queue SET claim = :tok, claimed_at = :now '
+                . 'WHERE id IN (SELECT id FROM abuse_queue WHERE claim IS NULL OR claimed_at < :stale '
+                . 'ORDER BY id ASC LIMIT ' . max(1, $limit) . ')'
+            )->execute([':tok' => $token, ':now' => gmdate('c'), ':stale' => $stale]);
+            $st = $this->db()->prepare('SELECT * FROM abuse_queue WHERE claim = :tok ORDER BY id ASC');
+            $st->execute([':tok' => $token]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
             return ['sent' => 0, 'failed' => 0, 'pending' => 0];
         }
@@ -172,6 +184,16 @@ final class AbuseIpdb
                         ->execute([':a' => $attempts, ':id' => (int) $row['id']]);
                 }
             }
+        }
+
+        // FP-0247 (Fix G, plan-review addendum): release the claim on any unsent remainder — rows left
+        // when the pass broke early on a 429 or the daily cap, plus transient-failure rows whose claim
+        // we deliberately left set — so the next pass can pick them up immediately (no 10-min wait).
+        try {
+            $this->db()->prepare('UPDATE abuse_queue SET claim = NULL, claimed_at = NULL WHERE claim = :tok')
+                ->execute([':tok' => $token]);
+        } catch (Throwable $e) {
+            // fail-silent: the 10-min stale reclaim absorbs a release that could not be written
         }
 
         return ['sent' => $sent, 'failed' => $failed, 'pending' => $this->queueCount()];
@@ -275,6 +297,24 @@ final class AbuseIpdb
         return ['status' => $status, 'body' => $resp === false ? '' : $resp];
     }
 
+    /** FP-0247 (Fix G): idempotently add the claim columns to a pre-existing queue table (a live WAL
+     *  DB from before this ticket). ADD COLUMN is metadata-only and safe; guarded by table_info. */
+    private static function migrateClaimColumns(PDO $db, string $table): void
+    {
+        try {
+            $cols = $db->query('PRAGMA table_info(' . $table . ')')->fetchAll(PDO::FETCH_COLUMN, 1);
+            if (!in_array('claim', $cols, true)) {
+                $db->exec('ALTER TABLE ' . $table . ' ADD COLUMN claim TEXT');
+            }
+            if (!in_array('claimed_at', $cols, true)) {
+                $db->exec('ALTER TABLE ' . $table . ' ADD COLUMN claimed_at TEXT');
+            }
+        } catch (Throwable $e) {
+            // fail-silent: a new install already has the columns from CREATE; the drain's own try/catch
+            // covers a genuinely unusable schema.
+        }
+    }
+
     private function db(): PDO
     {
         if ($this->db !== null) {
@@ -290,7 +330,8 @@ final class AbuseIpdb
         $db->exec('PRAGMA journal_mode=WAL');
         $db->exec('CREATE TABLE IF NOT EXISTS abuse_reports (ip TEXT PRIMARY KEY, reported_at TEXT)');
         $db->exec('CREATE TABLE IF NOT EXISTS abuse_daily (day TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0)');
-        $db->exec('CREATE TABLE IF NOT EXISTS abuse_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, categories TEXT, comment TEXT, created_at TEXT, attempts INTEGER NOT NULL DEFAULT 0)');
+        $db->exec('CREATE TABLE IF NOT EXISTS abuse_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, categories TEXT, comment TEXT, created_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, claim TEXT, claimed_at TEXT)');
+        self::migrateClaimColumns($db, 'abuse_queue');   // FP-0247 (Fix G): claim/claimed_at on live DBs
 
         return $this->db = $db;
     }
