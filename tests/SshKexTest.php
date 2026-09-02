@@ -491,9 +491,9 @@ final class SshKexTest extends TestCase
         }
     }
 
-    // ---- §4.6 no served-byte change ----
+    // ---- §4.6 the served-bytes flip (FP-0291) ----
 
-    public function test_served_lists_unchanged_by_fp0289(): void
+    public function test_served_kex_list_carries_strict_marker(): void
     {
         $server = new SshConnection(SshHostKeyFixture::set(), new ProtocolSession(1), static function (): void {
         }, self::V_S, 0);
@@ -510,8 +510,8 @@ final class SshKexTest extends TestCase
         $r->uint32();
         $r->uint32();
         $r->uint32(); // 16-byte cookie
-        self::assertSame(['curve25519-sha256', 'curve25519-sha256@libssh.org'], $r->nameList(), 'kex list unchanged');
-        self::assertSame(['ssh-ed25519'], $r->nameList(), 'host-key list unchanged — HostKeySet::ALGORITHMS has NOT leaked in');
+        self::assertSame(['curve25519-sha256', 'curve25519-sha256@libssh.org', 'kex-strict-s-v00@openssh.com'], $r->nameList(), 'kex list carries kex-strict-s last (commit 4 marker-only)');
+        self::assertSame(['ssh-ed25519'], $r->nameList(), 'host-key list still single-choice until the full flip (commit 5)');
     }
 
     // ---- helpers ----

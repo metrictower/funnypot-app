@@ -58,12 +58,12 @@ final class SshProfileTest extends TestCase
     {
         // The current-commit served shape (updated with each stage of the flip). Written as literals
         // here, never read from the profile, so a profile edit must satisfy this pin explicitly.
-        $kex = ['curve25519-sha256', 'curve25519-sha256@libssh.org'];
+        $kex = ['curve25519-sha256', 'curve25519-sha256@libssh.org', 'kex-strict-s-v00@openssh.com'];
         $hostKeys = ['ssh-ed25519'];
         $ciphers = ['aes256-ctr'];
         $macs = ['hmac-sha2-256'];
         $comp = ['none'];
-        $hassh = '04e7711cffa95c90b7c5ec4a6b7bdcd1';
+        $hassh = '557eee0f76ba1b566aa8960f3b5434c1'; // commit 4 marker-only; 779664e6 after the full flip
 
         foreach (self::BANNERS as $banner) {
             $r = $this->servedKexInit($banner);

@@ -438,9 +438,10 @@ final class SshHandshakeTest extends TestCase
     // --- helpers: a minimal in-memory SSH client sharing the server's transport primitives ---
 
     /**
-     * A synthetic strict-advertising server past the version exchange with its KEXINIT drained, plus
-     * a strict client (offers kex-strict-c) whose transport has consumed that KEXINIT — ready for a
-     * test to inject stray packets and assert the strict discipline closes the connection.
+     * A strict-advertising server (Profile A serves kex-strict-s now) past the version exchange with
+     * its KEXINIT drained, plus a strict client (offers kex-strict-c) whose transport has consumed
+     * that KEXINIT — ready for a test to inject stray packets and assert the strict discipline closes
+     * the connection.
      *
      * @param array<int,string> $log
      * @return array{0:SshConnection,1:SshTestClient}
@@ -460,7 +461,6 @@ final class SshHandshakeTest extends TestCase
         $pos = strpos($buffer, "\r\n");
         self::assertNotFalse($pos);
         $vS = substr($buffer, 0, $pos);
-        self::pretendServerAdvertisesStrictKex($server);
 
         $client = new SshTestClient(self::V_C, $vS, ['curve25519-sha256', 'kex-strict-c-v00@openssh.com']);
         $server->feed(self::V_C . "\r\n");
@@ -483,15 +483,19 @@ final class SshHandshakeTest extends TestCase
      *
      * FP-0290 ordering: after onConnect() the server has queued only its banner; the KEXINIT
      * follows once we feed the client's identification line (as a real sshd does). With a strict /
-     * ext-info client (see $clientKex) and a synthetic strict-advertising server ($pretendStrictServer),
-     * the server's EXT_INFO ciphertext is queued together with the REPLY+NEWKEYS (before the client's
-     * NEWKEYS), so the returned $buffer already holds it and the final `assertSame('', takeOut())`
-     * still passes — the '' means "nothing NEW was queued after the client NEWKEYS", not "no EXT_INFO".
+     * ext-info client (see $clientKex), the server's EXT_INFO ciphertext is queued together with the
+     * REPLY+NEWKEYS (before the client's NEWKEYS), so the returned $buffer already holds it and the
+     * final `assertSame('', takeOut())` still passes — the '' means "nothing NEW was queued after the
+     * client NEWKEYS", not "no EXT_INFO".
+     *
+     * FP-0291 commit 4: the server banner SSH-2.0-OpenSSH_8.9p1 resolves to Profile A, whose kex list
+     * now carries kex-strict-s-v00@openssh.com, so the server GENUINELY advertises strict kex — the
+     * synthetic reflection seam is gone. Whether the connection enters strict mode is now decided by
+     * whether $clientKex offers kex-strict-c; $resetOnNewKeys models the matching client-side reset.
      *
      * @param array<int,string> $log
      * @param string[]          $clientKex        the client's advertised kex name-list (markers last, as OpenSSH sends them)
      * @param bool              $resetOnNewKeys   client resets its own transport seq at NEWKEYS (models a strict client)
-     * @param bool              $pretendStrictServer flip the private advertisesStrictKex bool before the client KEXINIT is fed
      * @return array{0:SshConnection,1:SshTestClient,2:string}
      */
     private function handshake(
@@ -499,8 +503,7 @@ final class SshHandshakeTest extends TestCase
         int $seed = 99,
         int $authRejectBudget = 0,
         array $clientKex = ['curve25519-sha256'],
-        bool $resetOnNewKeys = false,
-        bool $pretendStrictServer = false
+        bool $resetOnNewKeys = false
     ): array {
         $server = new SshConnection(
             SshHostKeyFixture::set(),
@@ -518,13 +521,6 @@ final class SshHandshakeTest extends TestCase
         self::assertNotFalse($pos);
         $vS = substr($buffer, 0, $pos);
         self::assertSame($vS . "\r\n", $buffer, 'banner only before the client speaks — the KEXINIT follows the client line');
-
-        if ($pretendStrictServer) {
-            // Synthetic strict-advertising server: flip the one private bool the two-sided gate reads,
-            // as if our served kex list carried kex-strict-s (FP-0291 does this for real). Must happen
-            // before the client's KEXINIT is fed — the gate is evaluated in negotiate().
-            self::pretendServerAdvertisesStrictKex($server);
-        }
 
         $client = new SshTestClient(self::V_C, $vS, $clientKex);
 
@@ -554,19 +550,6 @@ final class SshHandshakeTest extends TestCase
         self::assertSame('', $server->takeOut());
 
         return [$server, $client, $buffer];
-    }
-
-    /**
-     * Flip the one private bool the two-sided strict gate reads, so the SshConnection wiring (the
-     * real negotiate()/kexMessage()/NEWKEYS reset points and the gate expression) is exercised as if
-     * our served kex list carried kex-strict-s. Test-only seam — deleted by FP-0291 when rows B–D run
-     * against a genuinely strict-advertising server.
-     */
-    private static function pretendServerAdvertisesStrictKex(SshConnection $server): void
-    {
-        $p = new \ReflectionProperty(SshConnection::class, 'advertisesStrictKex');
-        $p->setAccessible(true); // M2: required on the PHP 8.0 floor (a no-op only since 8.1)
-        $p->setValue($server, true);
     }
 
     /** Feed the server, decrypt its reply and return the first response message type. */
