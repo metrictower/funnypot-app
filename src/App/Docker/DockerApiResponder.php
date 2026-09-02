@@ -184,10 +184,12 @@ class DockerApiResponder
     {
         // Web-app-attack category; the self-guard (FUNNYPOT_SELF_IPS) lives inside enqueue(). A create
         // carries the image the attacker tried to deploy, which is the useful bit of the report.
-        // FP-0247 (Fix H / fable #3b): both the image ref and the path are attacker-controlled and
-        // AbuseIPDB comments are PUBLIC — an `image=` ref routinely names a third-party registry host
-        // and a path can carry secrets. Route the attacker-controlled detail through
-        // ReportComment::build() to strip hosts/secrets/control bytes.
+        // FP-0247 (Fix H / fable #3b): the path and image ref are attacker-controlled and AbuseIPDB
+        // comments are PUBLIC, so route them through ReportComment::build() to strip secrets, control
+        // bytes and blobs. NOTE: the image= registry HOSTNAME is deliberately KEPT — it is intel about
+        // what the attacker tried to deploy (not attribution of an innocent third-party host), and
+        // ReportComment only strips a scheme://host / leading protocol-relative authority, not a bare
+        // registry hostname inside an image ref. Any credential embedded in the ref is still redacted.
         $comment = $kind === 'create' && $image !== ''
             ? ReportComment::build(AttackClassifier::DOCKER_API . ' container-create', 'image=' . $image)
             : ReportComment::build(AttackClassifier::DOCKER_API . ' ' . $ctx->method, $ctx->path);

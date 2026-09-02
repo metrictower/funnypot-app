@@ -20,11 +20,14 @@ namespace Funnypot\App\ThreatIntel;
 final class ReportComment
 {
     /**
-     * Credential tokens: any param NAME CONTAINING one of these has its value redacted. `key` covers
-     * apikey/api_key/x_api_key; `pass` covers password/passwd/user_password; `auth` covers
-     * authorization. `apikey`/`api_key` are listed explicitly too as belt-and-suspenders.
+     * Credential tokens. A param value is redacted when its NAME contains one of these as a
+     * SEPARATOR-DELIMITED segment (bounded by start / `?` / `&` / `_` / `.` / `-` on the left, and by
+     * `_` / `.` / `-` / `=` on the right). Delimiting avoids stripping benign params that merely embed
+     * the letters — `author=` (the WordPress user-enumeration signal we WANT), `keyword=`, `monkey=`,
+     * `turkey=`, `bypass=` — while still catching `access_token`, `refresh_token`, `client_secret`,
+     * `session_id`, `x_api_key`, `user_password`, `X-Auth-Token` and a bare `?key=AIza…`.
      */
-    private const CREDENTIAL_KEYS = 'token|secret|session|key|pass|pwd|auth|apikey|api_key';
+    private const CREDENTIAL_KEYS = 'password|passwd|pwd|pass|token|secret|session(?:id)?|apikey|api_key|auth|authorization|key';
 
     /**
      * @param string $prefix trusted, structured lead-in (e.g. "funnypot SSH honeypot, port 22: login")
@@ -50,15 +53,18 @@ final class ReportComment
         // scheme so the rule above misses it, yet nginx forwards `GET //host/path` verbatim, which
         // would name a third-party host in the public report. Keep the path.
         $s = (string) preg_replace('~(^|\s)//[^/?\#\s]*~', '$1', $s);
-        // Redact credential-bearing params (case-insensitive, key=value). The param NAME need only
-        // CONTAIN one of the credential tokens — `\b` fails on `_`-joined compounds (a word boundary
-        // sits between a word char and a non-word char, never between `_`/letters), so a bare `\btoken`
-        // would miss `access_token=`, `refresh_token=`, `client_secret=`, `session_id=`, `x_api_key=`,
-        // `user_password=`. Matching `[\w.-]*token[\w.-]*=` (etc.) catches every compound. The keyword
-        // name is preserved (forensic) while the value is dropped. Over-redaction of an incidental name
-        // like `monkey=` is acceptable: this is a PUBLIC report, so leaking more is the only unsafe
-        // direction.
-        $s = (string) preg_replace('~([\w.\-]*(?:' . self::CREDENTIAL_KEYS . ')[\w.\-]*)=([^&\s#]*)~i', '$1=[redacted]', $s);
+        // Redact credential-bearing params (case-insensitive, key=value). A plain `\b`-anchored key
+        // list misses `_`-joined compounds (no word boundary sits between `_` and a letter), so
+        // `access_token=` etc. would leak; a bare CONTAINS match over-redacts benign params like
+        // `author=`/`keyword=`. The middle ground: the credential token must appear as a
+        // SEPARATOR-DELIMITED segment of the name — bounded by start/`?`/`&`/`_`/`.`/`-` on the left
+        // and continuing only through further `_`/`.`/`-` segments up to `=`. The whole name is kept
+        // (forensic) while the value is dropped.
+        $s = (string) preg_replace(
+            '~((?:^|[?&_.\-])(?:' . self::CREDENTIAL_KEYS . ')(?:[_.\-][\w.\-]*)?)=([^&\s#]*)~i',
+            '$1=[redacted]',
+            $s
+        );
         // Redact email addresses (victim PII).
         $s = (string) preg_replace('~[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}~', '[email]', $s);
         // Collapse long base64/hex runs (exfil/exploit blobs, encoded credentials) — the hex charset

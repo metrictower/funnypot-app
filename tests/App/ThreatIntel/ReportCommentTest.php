@@ -64,6 +64,27 @@ final class ReportCommentTest extends TestCase
         }
     }
 
+    /**
+     * FP-0247 (re-review): the separator-delimited match must NOT redact benign params that merely
+     * embed the credential letters — `author=` is the classic WordPress user-enumeration probe and is
+     * a signal we want to keep. `keyword`/`monkey`/`turkey`/`bypass` likewise survive.
+     */
+    public function test_benign_params_embedding_credential_letters_survive(): void
+    {
+        foreach (['author=admin', 'keyword=login', 'monkey=banana', 'turkey=roast', 'bypass=1'] as $pair) {
+            $c = ReportComment::build('web', 'GET /?' . $pair);
+            self::assertStringContainsString($pair, $c, "benign param wrongly redacted: {$pair}");
+            self::assertStringNotContainsString('[redacted]', $c, "benign param wrongly redacted: {$pair}");
+        }
+    }
+
+    public function test_wordpress_author_enumeration_signal_preserved(): void
+    {
+        // The whole point of the delimiting: /?author=1 is intel, not a secret.
+        $c = ReportComment::build('funnypot web honeypot, port 80: [enum] GET', '/index.php?author=1');
+        self::assertStringContainsString('author=1', $c);
+    }
+
     public function test_gemini_dialect_api_key_redacted(): void
     {
         // FP-0247 (fable #3b): a Gemini-dialect AI-API request carries the Google API key in the query

@@ -26,6 +26,7 @@ final class DockerApiResponderTest extends TestCase
     private array $tmp = [];
     private ?SqliteHitStore $store = null;
     private ?AbuseIpdb $abuse = null;
+    private string $intelDb = '';
     private string $logPath = '';
     private stdClass $cap;
 
@@ -62,7 +63,8 @@ final class DockerApiResponderTest extends TestCase
     {
         $this->logPath = $this->dbPath('export') . '.log';
         $this->store = new SqliteHitStore($this->dbPath('hits'), $this->logPath);
-        $this->abuse = new AbuseIpdb('testkey', $this->dbPath('intel'), ['10.0.0.1']);
+        $this->intelDb = $this->dbPath('intel');
+        $this->abuse = new AbuseIpdb('testkey', $this->intelDb, ['10.0.0.1']);
         $cap = $this->cap;
 
         return new DockerApiResponder(
@@ -188,6 +190,33 @@ final class DockerApiResponderTest extends TestCase
 
         // reported to AbuseIPDB with the image in the comment
         self::assertSame(1, $this->abuse->queueCount());
+    }
+
+    /**
+     * FP-0247 (re-review NIT): the queued comment goes through ReportComment sanitisation. A credential
+     * embedded in the attacker-supplied image ref is redacted, but the registry HOSTNAME is KEPT — it
+     * is intel about what the attacker tried to deploy, not attribution of an innocent third party.
+     */
+    public function test_queued_comment_sanitises_secret_but_keeps_registry_host(): void
+    {
+        $responder = $this->make();
+        $responder->respond($this->ctx('POST', '/v1.24/containers/create', [
+            'Image' => 'evil-registry.example/miner:latest?access_token=SECRETXYZ',
+        ]), self::IP);
+
+        self::assertSame(1, $this->abuse->queueCount());
+        $comment = $this->lastQueuedComment();
+        self::assertStringNotContainsString('SECRETXYZ', $comment, 'a credential in the image ref must be redacted');
+        self::assertStringContainsString('[redacted]', $comment);
+        self::assertStringContainsString('evil-registry.example', $comment, 'the registry host is intel and must be kept');
+    }
+
+    private function lastQueuedComment(): string
+    {
+        $pdo = new \PDO('sqlite:' . $this->intelDb);
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        return (string) $pdo->query('SELECT comment FROM abuse_queue ORDER BY id DESC LIMIT 1')->fetchColumn();
     }
 
     public function test_create_with_a_malformed_body_still_succeeds_inertly(): void

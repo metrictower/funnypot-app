@@ -43,6 +43,7 @@ final class AiChatHandlerTest extends TestCase
     private array $tmp = [];
     private ?SqliteHitStore $store = null;
     private ?AbuseIpdb $abuse = null;
+    private string $intelDb = '';
     private stdClass $cap;
     private StreamEmitter $emitter;
 
@@ -87,7 +88,8 @@ final class AiChatHandlerTest extends TestCase
         int $realWindowS = 600
     ): AiChatHandler {
         $this->store = new SqliteHitStore($this->dbPath('hits'));
-        $this->abuse = new AbuseIpdb('testkey', $this->dbPath('intel'), ['10.0.0.1']);
+        $this->intelDb = $this->dbPath('intel');
+        $this->abuse = new AbuseIpdb('testkey', $this->intelDb, ['10.0.0.1']);
         $cap = $this->cap;
         $emitter = $this->emitter;
 
@@ -156,6 +158,34 @@ final class AiChatHandlerTest extends TestCase
 
         // reported once (self-guard passes: 9.9.9.9 is public and not a self IP)
         self::assertSame(1, $this->abuse->queueCount());
+    }
+
+    /**
+     * FP-0247 (re-review NIT): the queued abuse comment must go through ReportComment sanitisation.
+     * A Gemini-dialect request carries the Google API key in the path query string; the queued comment
+     * must NOT contain it verbatim.
+     */
+    public function test_queued_comment_is_sanitised_not_raw_path(): void
+    {
+        $handler = $this->make(fn (): array => ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])]);
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat?key=AIzaSyLEAKED1234567890', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'hi']],
+            'stream' => false,
+        ]), self::IP);
+
+        self::assertSame(1, $this->abuse->queueCount());
+        $comment = $this->lastQueuedComment();
+        self::assertStringNotContainsString('AIzaSyLEAKED1234567890', $comment, 'the API key must not reach the public comment verbatim');
+        self::assertStringContainsString('[redacted]', $comment);
+    }
+
+    private function lastQueuedComment(): string
+    {
+        $pdo = new \PDO('sqlite:' . $this->intelDb);
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        return (string) $pdo->query('SELECT comment FROM abuse_queue ORDER BY id DESC LIMIT 1')->fetchColumn();
     }
 
     public function test_identity_probe_is_answered_from_persona_without_the_sidecar(): void
