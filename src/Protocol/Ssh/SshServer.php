@@ -258,6 +258,8 @@ final class SshServer
             'matched' => true,
             'severity' => $event === 'login' ? 'high' : 'medium',
             'served' => $event === 'command',
+            // FP-0247 (Fix A): TCP accept ⇒ source verified by the three-way handshake, so reportable.
+            'reportable' => true,
         ]);
     }
 

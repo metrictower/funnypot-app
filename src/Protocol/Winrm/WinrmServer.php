@@ -770,6 +770,9 @@ final class WinrmServer
         $entry['proto'] = 'winrm';
         $entry['matched'] = 1;
         $entry['served'] = 1;
+        // FP-0247 (Fix A): TCP accept ⇒ source verified by the three-way handshake, so reportable.
+        // `??=` so a per-event override (e.g. an explicit false) stays authoritative.
+        $entry['reportable'] ??= true;
         ($this->logger)($entry);
     }
 

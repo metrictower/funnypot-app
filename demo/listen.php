@@ -19,6 +19,7 @@ use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
+use Funnypot\App\ThreatIntel\ReportGate;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\Protocol\Listener;
@@ -104,13 +105,11 @@ $categories = AbuseIpdb::categoriesForProtocol($protocol);
 
 $log = static function (array $entry) use ($store, $abuse, $threatIntel, $protocol, $port, $categories): void {
     $store->append($entry);
-    // Anti-Spoofing Guard (B2): Only report when verified/reportable (e.g. not unverified UDP)
-    if (($entry['reportable'] ?? true) && ($abuse !== null || $threatIntel !== null) && !empty($entry['ip'])) {
-        $event = (string) ($entry['event'] ?? '');
-        $data = trim(substr((string) ($entry['path'] ?? $entry['body'] ?? ''), 0, 100));
-        $comment = sprintf('funnypot %s honeypot, port %d: %s %s', strtoupper($protocol), $port, $event, $data);
-        $abuse?->enqueue((string) $entry['ip'], $comment, $categories);
-        $threatIntel?->enqueue((string) $entry['ip'], $comment, $categories);
+    // Anti-Spoofing Guard (FP-0247, Fix A): report only through the fail-closed gate. An event that
+    // does not carry an explicit `reportable => true` (e.g. a single spoofable UDP datagram) is NEVER
+    // reported. The whole gate + enqueue decision lives in ReportGate so there is one wiring to test.
+    if (ReportGate::shouldReport($entry)) {
+        ReportGate::maybeReport($entry, $abuse, $threatIntel, $protocol, $port, $categories);
     }
 };
 

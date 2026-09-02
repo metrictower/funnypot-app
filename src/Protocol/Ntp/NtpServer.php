@@ -484,6 +484,9 @@ final class NtpServer
         $entry['proto'] = 'ntp';
         $entry['matched'] = 1;
         $entry['served'] = 1;
+        // FP-0247 (Fix A): single-datagram UDP is spoofable — fail-closed. Only a verified round-trip
+        // may upgrade this (see SipServer's $validRoundTrip). `??=` so a future per-event upgrade wins.
+        $entry['reportable'] ??= false;
         ($this->logger)($entry);
     }
 
