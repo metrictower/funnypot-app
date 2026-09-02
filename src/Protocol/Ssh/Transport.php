@@ -4,16 +4,23 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Ssh;
 
+use Funnypot\Protocol\Ssh\Cipher\PacketCipher;
+use Funnypot\Protocol\Ssh\Cipher\PlainCipher;
+
 /**
  * The SSH binary packet protocol (RFC 4253 §6) for one connection: framing, padding, and — once
- * keys are installed — aes-ctr encryption with an hmac-sha2-256 MAC computed over the sequence
- * number and the plaintext packet ("encrypt-and-MAC"). Send and receive run independently, each
- * with its own cipher, MAC key and monotonic sequence number that spans the plaintext KEX packets
- * and continues into the encrypted stream.
+ * keys are installed — sealing each packet through a {@see PacketCipher}. Send and receive run
+ * independently, each with its own cipher and a monotonic 32-bit sequence number that spans the
+ * plaintext KEX packets and continues into the encrypted stream. Before NEWKEYS both directions
+ * use {@see PlainCipher} (no encryption, no MAC), so one code path serves both phases.
+ *
+ * The padding rule ({@see padLen()}) is aadlen-aware: E&M includes the 4-byte length in the
+ * alignment, while ETM/GCM/chacha exclude it (OpenSSH packet.c `ssh_packet_send2_wrapped`). Using
+ * the E&M rule for an AEAD/ETM cipher would produce a packet_length the client rejects on the first
+ * encrypted packet, so the rule is a function of the installed cipher's blockSize()/aadLen().
  *
  * `frame()` builds an outbound packet from a payload; `next()` pulls one inbound payload from the
- * running buffer, returning null when more bytes are needed. The MAC length field is encrypted, so
- * a decrypt of the first block (cached) reveals the packet length before the rest has arrived.
+ * running buffer, returning null when more bytes are needed.
  */
 final class Transport
 {
@@ -22,35 +29,37 @@ final class Transport
     private int $outSeq = 0;
     private int $inSeq = 0;
 
-    private bool $sendSecure = false;
-    private bool $recvSecure = false;
-    private ?Ctr $sendCtr = null;
-    private ?Ctr $recvCtr = null;
-    private string $macKeyOut = '';
-    private string $macKeyIn = '';
+    private PacketCipher $send;
+    private PacketCipher $recv;
 
-    // Cached decrypt of an inbound packet's first block, held until the whole packet arrives.
+    // Cached packet length once the head of an inbound packet has been read; held until the whole
+    // packet arrives (and, for E&M, so the first-block decrypt is not repeated).
     private ?int $pktLen = null;
-    private ?string $firstBlock = null;
+
+    public function __construct()
+    {
+        $this->send = new PlainCipher();
+        $this->recv = new PlainCipher();
+    }
+
+    /**
+     * RFC 4253 §6 padding. The bytes covered by the block alignment exclude the aadLen head
+     * (0 for E&M/plain, 4 for ETM/AEAD), matching OpenSSH packet.c; at least 4 pad bytes.
+     */
+    public static function padLen(int $payloadLen, int $block, int $aadLen): int
+    {
+        $aligned = (4 - $aadLen) + 1 + $payloadLen; // E&M: 4+1+payload ; ETM/AEAD: 1+payload
+        $pad = $block - ($aligned % $block);
+
+        return $pad < 4 ? $pad + $block : $pad;
+    }
 
     /** Build the wire bytes for one outbound packet carrying $payload. */
     public function frame(string $payload): string
     {
-        $block = $this->sendSecure ? 16 : 8;
-        $unpadded = 4 + 1 + strlen($payload);      // length field + padding-length field + payload
-        $pad = $block - ($unpadded % $block);
-        if ($pad < 4) {
-            $pad += $block;
-        }
-        $packetLen = 1 + strlen($payload) + $pad;
-        $plain = pack('N', $packetLen) . chr($pad) . $payload . random_bytes($pad);
-
-        if ($this->sendSecure && $this->sendCtr !== null) {
-            $mac = hash_hmac('sha256', pack('N', $this->outSeq) . $plain, $this->macKeyOut, true);
-            $wire = $this->sendCtr->crypt($plain) . $mac;
-        } else {
-            $wire = $plain;
-        }
+        $pad = self::padLen(strlen($payload), $this->send->blockSize(), $this->send->aadLen());
+        $packet = pack('N', 1 + strlen($payload) + $pad) . chr($pad) . $payload . random_bytes($pad);
+        $wire = $this->send->seal($this->outSeq, $packet);
         $this->outSeq = ($this->outSeq + 1) & 0xffffffff;
 
         return $wire;
@@ -58,95 +67,55 @@ final class Transport
 
     /**
      * Pull one inbound packet payload from $buffer (consuming its bytes), or return null if the
-     * buffer does not yet hold a complete packet. Throws on a malformed packet or bad MAC.
+     * buffer does not yet hold a complete packet. Throws on a malformed packet or bad MAC/tag.
      */
     public function next(string &$buffer): ?string
     {
-        return $this->recvSecure ? $this->nextSecure($buffer) : $this->nextPlain($buffer);
-    }
-
-    private function nextPlain(string &$buffer): ?string
-    {
-        if (strlen($buffer) < 4) {
-            return null;
+        $head = $this->recv->headLen();
+        if ($this->pktLen === null) {
+            if (strlen($buffer) < $head) {
+                return null;
+            }
+            $pktLen = $this->recv->peekLength($this->inSeq, substr($buffer, 0, $head));
+            $aligned = (4 - $this->recv->aadLen()) + $pktLen;
+            if ($pktLen < 5 || $pktLen > self::MAX_PACKET || $aligned % $this->recv->blockSize() !== 0) {
+                throw new \RuntimeException('ssh: bad packet length');
+            }
+            $this->pktLen = $pktLen;
         }
-        /** @var array{1:int} $u */
-        $u = unpack('N', substr($buffer, 0, 4));
-        $packetLen = $u[1];
-        if ($packetLen < 5 || $packetLen > self::MAX_PACKET) {
-            throw new \RuntimeException('ssh: bad packet length');
-        }
-        $total = 4 + $packetLen;
+        $total = 4 + $this->pktLen + $this->recv->tagLen();
         if (strlen($buffer) < $total) {
             return null;
         }
-        $plain = substr($buffer, 0, $total);
-        $buffer = substr($buffer, $total);
-        $this->inSeq = ($this->inSeq + 1) & 0xffffffff;
-
-        return $this->payloadOf($plain, $packetLen);
-    }
-
-    private function nextSecure(string &$buffer): ?string
-    {
-        if ($this->pktLen === null) {
-            if (strlen($buffer) < 16 || $this->recvCtr === null) {
-                return null;
-            }
-            $this->firstBlock = $this->recvCtr->crypt(substr($buffer, 0, 16));
-            /** @var array{1:int} $u */
-            $u = unpack('N', substr($this->firstBlock, 0, 4));
-            $this->pktLen = $u[1];
-            if ($this->pktLen < 5 || $this->pktLen > self::MAX_PACKET || (4 + $this->pktLen) % 16 !== 0) {
-                throw new \RuntimeException('ssh: bad encrypted packet length');
-            }
-        }
-        $total = 4 + $this->pktLen;          // ciphertext length (block-aligned)
-        if (strlen($buffer) < $total + 32) { // + MAC
-            return null;
-        }
-        $rest = substr($buffer, 16, $total - 16);
-        /** @var Ctr $ctr */
-        $ctr = $this->recvCtr;
-        $plain = $this->firstBlock . ($rest === '' ? '' : $ctr->crypt($rest));
-        $mac = substr($buffer, $total, 32);
-        $calc = hash_hmac('sha256', pack('N', $this->inSeq) . $plain, $this->macKeyIn, true);
-        if (!hash_equals($calc, $mac)) {
-            throw new \RuntimeException('ssh: MAC verification failed');
-        }
+        $packet = $this->recv->open($this->inSeq, substr($buffer, 0, $total));
         $packetLen = $this->pktLen;
-        $buffer = substr($buffer, $total + 32);
+        $buffer = substr($buffer, $total);
         $this->pktLen = null;
-        $this->firstBlock = null;
         $this->inSeq = ($this->inSeq + 1) & 0xffffffff;
 
-        return $this->payloadOf($plain, $packetLen);
+        return $this->payloadOf($packet, $packetLen);
     }
 
-    private function payloadOf(string $plain, int $packetLen): string
+    private function payloadOf(string $packet, int $packetLen): string
     {
-        $pad = ord($plain[4]);
+        $pad = ord($packet[4]);
         $payloadLen = $packetLen - 1 - $pad;
-        if ($payloadLen < 0) {
+        if ($pad < 4 || $payloadLen < 0) {
             throw new \RuntimeException('ssh: bad padding');
         }
 
-        return substr($plain, 5, $payloadLen);
+        return substr($packet, 5, $payloadLen);
     }
 
-    /** Install the server→client keys; subsequent frames are encrypted. */
-    public function enableSend(string $key, string $iv, string $macKey): void
+    /** Install the server→client cipher; subsequent frames are sealed through it. */
+    public function enableSend(PacketCipher $cipher): void
     {
-        $this->sendCtr = new Ctr($key, $iv);
-        $this->macKeyOut = $macKey;
-        $this->sendSecure = true;
+        $this->send = $cipher;
     }
 
-    /** Install the client→server keys; subsequent packets are decrypted. */
-    public function enableRecv(string $key, string $iv, string $macKey): void
+    /** Install the client→server cipher; subsequent packets are opened through it. */
+    public function enableRecv(PacketCipher $cipher): void
     {
-        $this->recvCtr = new Ctr($key, $iv);
-        $this->macKeyIn = $macKey;
-        $this->recvSecure = true;
+        $this->recv = $cipher;
     }
 }

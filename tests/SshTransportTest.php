@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests;
 
 use Funnypot\Protocol\Ssh\Buf;
+use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
 use Funnypot\Protocol\Ssh\Ctr;
 use Funnypot\Protocol\Ssh\HostKey;
 use Funnypot\Protocol\Ssh\Reader;
@@ -19,17 +20,51 @@ use PHPUnit\Framework\TestCase;
  */
 final class SshTransportTest extends TestCase
 {
-    /** Our streaming CTR must match OpenSSL's one-shot aes-256-ctr for any length and IV. */
+    /** Our streaming CTR must match OpenSSL's one-shot aes-{128,192,256}-ctr for any length and IV. */
     public function test_ctr_matches_openssl_reference(): void
     {
-        $key = hash('sha256', 'ctr-key', true);          // 32 bytes
         $iv = substr(hash('sha256', 'ctr-iv', true), 0, 16);
-        foreach ([1, 15, 16, 17, 64, 200] as $len) {
-            $data = random_bytes($len);
-            $ours = (new Ctr($key, $iv))->crypt($data);
-            $ref = openssl_encrypt($data, 'aes-256-ctr', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING, $iv);
-            self::assertSame(bin2hex($ref), bin2hex($ours), "length {$len}");
+        foreach ([16 => 'aes-128-ctr', 24 => 'aes-192-ctr', 32 => 'aes-256-ctr'] as $keyLen => $method) {
+            $key = substr(hash('sha512', "ctr-key-{$keyLen}", true), 0, $keyLen);
+            foreach ([1, 15, 16, 17, 64, 200] as $len) {
+                $data = random_bytes($len);
+                $ours = (new Ctr($key, $iv))->crypt($data);
+                $ref = openssl_encrypt($data, $method, $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING, $iv);
+                self::assertSame(bin2hex($ref), bin2hex($ours), "{$method} length {$len}");
+            }
         }
+    }
+
+    /**
+     * The one-shot counter advance (+ceil(len/16)) must carry across a partial final block AND a
+     * 128-bit counter wrap: counter ff*15‖fe, a 17-byte call (2 blocks → wraps to 00..00) then 83.
+     */
+    public function test_ctr_counter_advance_wraps_across_128_bits(): void
+    {
+        $key = random_bytes(32);
+        $iv = str_repeat("\xff", 15) . "\xfe";
+        $c = new Ctr($key, $iv);
+        $d1 = random_bytes(17);
+        $d2 = random_bytes(83);
+        $o1 = $c->crypt($d1);
+        $o2 = $c->crypt($d2);
+        // Reference: 17 bytes consume 2 full keystream blocks (32 bytes), so d2 starts at counter+2.
+        $ref = openssl_encrypt(
+            $d1 . str_repeat("\x00", 32 - 17) . $d2,
+            'aes-256-ctr',
+            $key,
+            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+            $iv
+        );
+        self::assertSame(bin2hex(substr($ref, 0, 17)), bin2hex($o1), 'first call');
+        self::assertSame(bin2hex(substr($ref, 32, 83)), bin2hex($o2), 'second call after wrap');
+    }
+
+    /** A non-standard aes key length must throw, not silently truncate (the old aes-192 gap). */
+    public function test_ctr_rejects_bad_key_length(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        new Ctr(random_bytes(20), str_repeat("\x00", 16));
     }
 
     public function test_ctr_is_symmetric(): void
@@ -123,8 +158,8 @@ final class SshTransportTest extends TestCase
         $mac = random_bytes(32);
         $send = new Transport();
         $recv = new Transport();
-        $send->enableSend($key, $iv, $mac);
-        $recv->enableRecv($key, $iv, $mac);
+        $send->enableSend(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $key, $iv, $mac));
+        $recv->enableRecv(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $key, $iv, $mac));
 
         // Three packets in sequence exercise the shared, advancing sequence numbers.
         for ($i = 0; $i < 3; $i++) {
@@ -147,8 +182,8 @@ final class SshTransportTest extends TestCase
         $mac = random_bytes(32);
         $send = new Transport();
         $recv = new Transport();
-        $send->enableSend($key, $iv, $mac);
-        $recv->enableRecv($key, $iv, $mac);
+        $send->enableSend(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $key, $iv, $mac));
+        $recv->enableRecv(CipherSuite::build('aes256-ctr', 'hmac-sha2-256', $key, $iv, $mac));
 
         $wire = $send->frame("\x05payload");
         $wire[strlen($wire) - 1] = $wire[strlen($wire) - 1] ^ "\x01"; // flip a MAC bit

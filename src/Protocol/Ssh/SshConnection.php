@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Protocol\Ssh;
 
 use Funnypot\Protocol\MalformedStream;
+use Funnypot\Protocol\Ssh\Cipher\CipherSuite;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\Shell\FakeShell;
 use Funnypot\Protocol\TrollStream;
@@ -210,7 +211,13 @@ final class SshConnection
                 // The client's NEWKEYS is the last plaintext inbound packet; only now does the
                 // receive side switch to ciphertext, using the client->server keys from the kex.
                 if ($this->kex !== null) {
-                    $this->transport->enableRecv($this->kex->keyC2S, $this->kex->ivC2S, $this->kex->macC2S);
+                    $this->transport->enableRecv(CipherSuite::build(
+                        'aes256-ctr',
+                        'hmac-sha2-256',
+                        $this->kex->keyC2S,
+                        $this->kex->ivC2S,
+                        $this->kex->macC2S
+                    ));
                 }
                 break;
             case self::MSG_SERVICE_REQUEST:
@@ -324,7 +331,13 @@ final class SshConnection
 
         // Our outbound half switches to ciphertext right after our NEWKEYS; the inbound half waits
         // for the client's NEWKEYS (still plaintext), handled in the MSG_NEWKEYS case.
-        $this->transport->enableSend($kex->keyS2C, $kex->ivS2C, $kex->macS2C);
+        $this->transport->enableSend(CipherSuite::build(
+            'aes256-ctr',
+            'hmac-sha2-256',
+            $kex->keyS2C,
+            $kex->ivS2C,
+            $kex->macS2C
+        ));
         $this->kex = $kex;
     }
 
