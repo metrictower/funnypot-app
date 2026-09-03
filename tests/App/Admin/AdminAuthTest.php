@@ -171,6 +171,7 @@ final class AdminAuthTest extends TestCase
         // maxFailures = 3, wide window.
         $auth = new AdminAuth($db, '/', false, 3, 900);
         $auth->createOrResetUser('admin', 'pw-123');
+        $auth->createOrResetUser('other-user', 'pw-456'); // isolates this test from the FP-0250 2.4 per-USERNAME backoff below
 
         for ($i = 0; $i < 3; $i++) {
             $r = $auth->login('admin', 'wrong', $ip);
@@ -182,9 +183,11 @@ final class AdminAuthTest extends TestCase
         self::assertFalse($locked['ok'], 'the correct password is still denied inside the lockout window');
         self::assertStringContainsString('locked', $locked['error']);
 
-        // A different IP is unaffected — the lockout is per source IP, not global.
-        $other = $auth->login('admin', 'pw-123', '198.51.100.2');
-        self::assertTrue($other['ok'], 'a clean IP can still log in');
+        // A different IP is unaffected — the lockout is per source IP, not global. A DIFFERENT username
+        // too (FP-0250 2.4 adds a per-username backoff alongside this per-IP lockout — AdminAuthLockoutTest
+        // covers that mechanism directly; same username here would trip both and conflate the two).
+        $other = $auth->login('other-user', 'pw-456', '198.51.100.2');
+        self::assertTrue($other['ok'], 'a clean IP + a different username can still log in');
 
         // Every attempt was recorded (the auth audit log).
         $attempts = $auth->attempts(100);

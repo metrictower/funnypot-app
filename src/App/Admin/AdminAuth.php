@@ -55,7 +55,12 @@ final class AdminAuth
         private int $lockoutWindowS = 900,
         private int $idleTimeoutS = 1800,
         private int $absoluteTimeoutS = 43200,
+        /** FP-0250 2.4: injectable time source, defaulting to time(). A test passes a fake clock so the
+         *  per-username exponential backoff (and everything else time-based in this class) is provable
+         *  without real sleeping. */
+        private ?\Closure $clock = null,
     ) {
+        $this->clock ??= static fn (): int => time();
     }
 
     // ---------------------------------------------------------------- bootstrap / users ------------
@@ -128,14 +133,24 @@ final class AdminAuth
     // ---------------------------------------------------------------- login / lockout --------------
 
     /**
+     * The one denial message shared by the per-IP hard lockout AND the per-username backoff (FP-0250
+     * 2.4) — a probe must not be able to tell which mechanism tripped from the wording alone (that
+     * would itself be an oracle for "this username exists / has failures pending").
+     */
+    private const LOCKOUT_MSG = 'too many attempts — locked out, try again later';
+
+    /**
      * Attempt a login. Order matters and is security-load-bearing:
-     *   1. lockout check FIRST — a locked-out IP is denied even with the correct password (Argon2id
-     *      slows but does not stop online guessing; the lockout does);
-     *   2. credential verify;
-     *   3. on success mint a fresh session + CSRF token and set the cookie.
+     *   1. per-IP hard lockout FIRST (unchanged) — stops a single-IP spray outright;
+     *   2. per-username exponential BACKOFF (FP-0250 2.4) — a rotating botnet buys at most one guess
+     *      per username per (capped) delay window, closing the gap a per-IP-only lockout leaves open;
+     *      capped, never a hard lock (an attacker spraying the real operator's username must not be
+     *      able to permanently lock the operator out of their own honeypot — the recovery CLI,
+     *      demo/admin-user.php, is untouched by either mechanism regardless);
+     *   3. credential verify (dummy-hash timing defence, unchanged).
      * Every attempt (lockout / fail / ok) is written to login_attempts (the auth audit log). Only 'fail'
-     * rows count toward the lockout, so a locked attempt does not itself extend the window indefinitely.
-     * Fail-CLOSED: any error returns denied.
+     * rows count toward either lockout mechanism, so a locked/backed-off attempt does not itself extend
+     * the window indefinitely. Fail-CLOSED: any error returns denied.
      *
      * @return array{ok:bool,error?:string,csrf?:string}
      */
@@ -144,31 +159,36 @@ final class AdminAuth
         $username = trim($username);
         try {
             if ($this->isLockedOut($ip)) {
-                $this->record($ip, 'lockout');
+                $this->record($ip, 'lockout', $username);
 
-                return ['ok' => false, 'error' => 'too many attempts — locked out, try again later'];
+                return ['ok' => false, 'error' => self::LOCKOUT_MSG];
+            }
+            if ($this->isUsernameBackedOff($username)) {
+                $this->record($ip, 'lockout', $username);
+
+                return ['ok' => false, 'error' => self::LOCKOUT_MSG];
             }
             $hash = $this->lookupHash($username);
             // Verify against a FIXED dummy hash when the username is unknown, so an unknown user pays the
             // same ~Argon2id cost as a known user with a wrong password — otherwise the timing gap
-            // (~0ms vs ~50-100ms) leaks which usernames exist. The lockout check above still runs first.
+            // (~0ms vs ~50-100ms) leaks which usernames exist. The lockout checks above still run first.
             $ok = $hash === null
                 ? (self::verifyPassword($password, self::dummyHash()) && false)
                 : self::verifyPassword($password, $hash);
             if (!$ok) {
-                $this->record($ip, 'fail');
+                $this->record($ip, 'fail', $username);
 
                 return ['ok' => false, 'error' => 'invalid credentials'];
             }
             $id = bin2hex(random_bytes(32));
             $csrf = bin2hex(random_bytes(32));
-            $now = time();
+            $now = ($this->clock)();
             $st = $this->db()->prepare(
                 'INSERT INTO admin_sessions (id, username, created_at, last_seen, csrf)
                  VALUES (:id, :u, :c, :s, :x)'
             );
             $st->execute([':id' => $id, ':u' => $username, ':c' => $now, ':s' => $now, ':x' => $csrf]);
-            $this->record($ip, 'ok');
+            $this->record($ip, 'ok', $username);
             $this->setCookie($id, $now + $this->absoluteTimeoutS);
             // Make the just-minted session usable within this same request (the cookie only arrives on
             // the NEXT request), so a login handler that immediately renders the authed shell works.
@@ -303,18 +323,62 @@ final class AdminAuth
         if ($ip === '') {
             return false;
         }
-        $cut = time() - $this->lockoutWindowS;
+        $cut = ($this->clock)() - $this->lockoutWindowS;
         $st = $this->db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE ip = :ip AND result = 'fail' AND ts >= :cut");
         $st->execute([':ip' => $ip, ':cut' => $cut]);
 
         return (int) $st->fetchColumn() >= $this->maxFailures;
     }
 
-    private function record(string $ip, string $result): void
+    /**
+     * Per-username exponential backoff (FP-0250 2.4) — the gap a per-IP-only lockout leaves open: a
+     * rotating botnet gets N free guesses per IP against the SAME username, i.e. effectively unlimited
+     * online guessing. Below maxFailures within the window ⇒ no backoff. At/after ⇒ a delay of
+     * `min(60, 2 ** (fails - maxFailures))` seconds since the LAST fail — capped at 60s so this can
+     * never become a permanent lock (operator-DoS guard, plan §5 risk 2): a rotating botnet buys at
+     * most ~1 guess/minute against the real operator's username at the cap, while the operator with the
+     * right password waits at most 60s worst case.
+     */
+    private function isUsernameBackedOff(string $username): bool
     {
+        if ($username === '') {
+            return false;
+        }
+        $now = ($this->clock)();
+        $cut = $now - $this->lockoutWindowS;
+        $st = $this->db()->prepare(
+            "SELECT COUNT(*) AS c, MAX(ts) AS last FROM login_attempts WHERE username = :u AND result = 'fail' AND ts >= :cut"
+        );
+        $st->execute([':u' => $username, ':cut' => $cut]);
+        $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+        $fails = (int) ($row['c'] ?? 0);
+        if ($fails < $this->maxFailures) {
+            return false;
+        }
+        $delay = min(60, 2 ** ($fails - $this->maxFailures));
+        $lastFailTs = (int) ($row['last'] ?? 0);
+
+        return $now < ($lastFailTs + $delay);
+    }
+
+    /**
+     * @param string $username the submitted username (trimmed + length-capped so a garbage/huge
+     *                          username can't bloat the table — it is audit data, not a credential)
+     */
+    private function record(string $ip, string $result, string $username = ''): void
+    {
+        $username = substr(trim($username), 0, 64);
         try {
-            $this->db()->prepare('INSERT INTO login_attempts (ip, ts, result) VALUES (:ip, :ts, :r)')
-                ->execute([':ip' => $ip, ':ts' => time(), ':r' => $result]);
+            $now = ($this->clock)();
+            $this->db()->prepare('INSERT INTO login_attempts (ip, ts, result, username) VALUES (:ip, :ts, :r, :u)')
+                ->execute([':ip' => $ip, ':ts' => $now, ':r' => $result, ':u' => $username]);
+            // Growth cap (FP-0250 2.4): the table has no cap otherwise. Prune on every successful login
+            // (cheap, infrequent) and probabilistically (~1-in-32) on every other record, so a sustained
+            // failure/lockout flood still gets pruned without paying the DELETE cost on every single row.
+            if ($result === 'ok' || random_int(1, 32) === 1) {
+                $cut = $now - max(30 * 86400, $this->lockoutWindowS);
+                $this->db()->prepare('DELETE FROM login_attempts WHERE ts < :cut')->execute([':cut' => $cut]);
+            }
         } catch (Throwable $e) {
             error_log('AdminAuth record: ' . $e->getMessage());
         }
@@ -435,6 +499,17 @@ final class AdminAuth
             result TEXT NOT NULL
         )');
         $db->exec('CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_ts ON login_attempts (ip, ts)');
+        // FP-0250 2.4: per-username backoff needs a username column on a table that predates it — a
+        // guarded ALTER so an existing admin.sqlite upgrades in place, idempotent on every re-run
+        // (SQLite has no "ADD COLUMN IF NOT EXISTS"; the duplicate-column error is the signal it is
+        // already there).
+        try {
+            $db->exec('ALTER TABLE login_attempts ADD COLUMN username TEXT NOT NULL DEFAULT ""');
+        } catch (Throwable $e) {
+            // already has the column — expected on every boot after the first.
+        }
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_login_attempts_user_ts ON login_attempts (username, ts)');
+        $db->exec('CREATE INDEX IF NOT EXISTS idx_login_attempts_ts ON login_attempts (ts)'); // prune scan
 
         return $this->db = $db;
     }
