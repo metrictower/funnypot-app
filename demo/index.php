@@ -112,7 +112,7 @@ $clientIp = HoneypotController::clientIp($config->trustedProxies);
 // body to a separate raw-capture.sqlite, for analysing a vuln scan. At the front controller so nothing is
 // missed regardless of which handler serves it; fail-open so it never affects the response.
 if ($config->captureRaw) {
-    (new RawCapture(dirname($config->dbPath) . '/raw-capture.sqlite'))->capture($context, $clientIp);
+    (new RawCapture(RawCapture::defaultPath($config->dbPath)))->capture($context, $clientIp);
 }
 
 // Coherent chrome: one consistent X-Powered-By on every response (nginx owns Server), so header

@@ -17,6 +17,7 @@ final class AppConfigTest extends TestCase
     private array $keys = [
         'FUNNYPOT_MODE', 'FUNNYPOT_STYLE', 'FUNNYPOT_DB', 'FUNNYPOT_LOG', 'FUNNYPOT_ATTACK',
         'FUNNYPOT_DECOY_ARCHIVE', 'FUNNYPOT_PROTOCOLS', 'FUNNYPOT_RETAIN_DAYS', 'FUNNYPOT_RETAIN_GB',
+        'FUNNYPOT_RAW_RETAIN_DAYS', 'FUNNYPOT_RAW_RETAIN_GB',
         'FUNNYPOT_DASHBOARD_PATH', 'FUNNYPOT_CEILING', 'FUNNYPOT_JITTER_MS',
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
@@ -103,6 +104,24 @@ final class AppConfigTest extends TestCase
         self::assertTrue($c->protocolsEnabled);
         self::assertSame(0, $c->retainDays);
         self::assertSame('/__fp/', $c->dashboardPath);
+        // FP-0249: raw-capture is bounded by default (7d / 1GB), unlike $retainDays/$retainGb above.
+        self::assertSame(7, $c->rawRetainDays);
+        self::assertSame(1.0, $c->rawRetainGb);
+    }
+
+    public function test_raw_retain_env_overrides_and_zero_means_unbounded(): void
+    {
+        putenv('FUNNYPOT_RAW_RETAIN_DAYS=14');
+        putenv('FUNNYPOT_RAW_RETAIN_GB=0.5');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertSame(14, $c->rawRetainDays);
+        self::assertSame(0.5, $c->rawRetainGb);
+
+        putenv('FUNNYPOT_RAW_RETAIN_DAYS=0');
+        putenv('FUNNYPOT_RAW_RETAIN_GB=0');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertSame(0, $c->rawRetainDays, '0 means unbounded, same convention as retainDays');
+        self::assertSame(0.0, $c->rawRetainGb);
     }
 
     public function test_style_and_http_style_fallback(): void

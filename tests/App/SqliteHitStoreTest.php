@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Storage\SqliteHitStore;
+use PDO;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -182,6 +183,11 @@ final class SqliteHitStoreTest extends TestCase
             $store->append(['ts' => '2026-08-18T10:00:00+00:00', 'ip' => '9.9.9.' . ($i % 250), 'method' => 'GET',
                 'path' => '/x', 'body' => str_repeat('A', 200)]);
         }
+        // Checkpoint first so $before (and the cap derived from it) reflects what retainBytes()'s OWN
+        // leading checkpoint will already see — otherwise a wal accumulated by the appends above would
+        // inflate $before, and retainBytes()'s checkpoint alone could satisfy a cap derived from that
+        // inflated figure without deleting a single row (FP-0249: sizeBytes() is now wal-inclusive).
+        $store->checkpointWal();
         $before = $store->sizeBytes();
         $cap = (int) ($before * 0.7);
 
@@ -189,6 +195,98 @@ final class SqliteHitStoreTest extends TestCase
         self::assertGreaterThan(0, $removed);
         self::assertLessThanOrEqual($cap, $store->sizeBytes());
         self::assertGreaterThan(0, $store->stats()['total']);   // trimmed, not drained
+    }
+
+    /** FP-0249: sizeBytes() must include the `-wal` sidecar, not just page_count*page_size — under WAL
+     *  mode the wal file holds every uncheckpointed write frame (not just the net-new pages), so its
+     *  physical size can exceed what page_count*page_size alone would suggest. */
+    public function test_size_bytes_includes_wal(): void
+    {
+        $db = $this->dbPath();
+        $store = new SqliteHitStore($db);
+        for ($i = 0; $i < 3000; $i++) {
+            $store->append(['ts' => gmdate('c'), 'ip' => '9.9.9.9', 'method' => 'GET', 'path' => '/x', 'body' => str_repeat('B', 500)]);
+        }
+
+        // Independently computed page_count*page_size (a fresh connection, same on-disk state).
+        $pdo = new PDO('sqlite:' . $db);
+        $pageOnly = (int) $pdo->query('PRAGMA page_count')->fetchColumn() * (int) $pdo->query('PRAGMA page_size')->fetchColumn();
+
+        $withWal = $store->sizeBytes();
+        self::assertGreaterThan($pageOnly, $withWal, 'sizeBytes() must count the -wal sidecar on top of page_count*page_size');
+
+        $store->checkpointWal();
+        clearstatcache(true, $db . '-wal');
+        self::assertSame(0, (int) @filesize($db . '-wal'), '-wal is truncated to 0 by checkpointWal()');
+    }
+
+    /** FP-0249: retention must never delete a hit the rollup fold hasn't reached yet — the clamp is
+     *  opt-in per call (rollups disabled => the watermark never advances => clamp must be OFF or
+     *  retention would permanently no-op). */
+    public function test_retention_is_clamped_at_the_rollup_watermark(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+        for ($i = 0; $i < 10; $i++) {
+            $store->append(['ts' => '2020-01-01T00:00:00+00:00', 'ip' => '9.9.9.' . $i, 'method' => 'GET', 'path' => '/old']);
+        }
+
+        self::assertSame(5, $store->foldRollups(5), 'only the first 5 rows folded');
+
+        // Clamp ON: the cutoff covers all 10 rows, but only the 5 already-folded rows may die.
+        self::assertSame(5, $store->retainDays(30, true));
+        self::assertSame(5, $store->stats()['total'], 'the 5 unfolded rows must survive');
+
+        // Fold the rest, retain again -> the remainder is now clear to die.
+        self::assertSame(5, $store->foldRollups(5));
+        self::assertSame(5, $store->retainDays(30, true));
+        self::assertSame(0, $store->stats()['total']);
+
+        // Clamp OFF (rollups disabled): a fresh store with NOTHING folded still has every row deleted —
+        // proves the clamp is opt-in, not an unconditional gate that would make retention no-op forever.
+        $unclamped = new SqliteHitStore($this->dbPath());
+        for ($i = 0; $i < 10; $i++) {
+            $unclamped->append(['ts' => '2020-01-01T00:00:00+00:00', 'ip' => '8.8.8.' . $i, 'method' => 'GET', 'path' => '/old']);
+        }
+        self::assertSame(10, $unclamped->retainDays(30, false));
+        self::assertSame(0, $unclamped->stats()['total']);
+    }
+
+    /** FP-0249: bounded disk outranks rollup completeness. When the rollup worker is dead/slow during a
+     *  scan burst, every remaining row sits above the watermark and the clamped loop can never delete —
+     *  the emergency fallback must still enforce the size cap, and must COUNT what it sacrificed. */
+    public function test_size_cap_emergency_deletes_past_watermark_and_counts_rollup_lost(): void
+    {
+        $db = $this->dbPath();
+        $store = new SqliteHitStore($db);
+        for ($i = 0; $i < 3000; $i++) {
+            $store->append(['ts' => '2026-08-18T10:00:00+00:00', 'ip' => '9.9.9.' . ($i % 250), 'method' => 'GET',
+                'path' => '/x', 'body' => str_repeat('A', 200)]);
+        }
+        // No fold ever ran: the watermark is 0, so every row sits above it — the clamped delete can
+        // never affect a row, forcing the emergency (unclamped) fallback from the first iteration.
+        $store->checkpointWal();
+        $cap = (int) ($store->sizeBytes() * 0.5);
+
+        $removed = $store->retainBytes($cap, true);
+        self::assertGreaterThan(0, $removed, 'the size cap must still be enforced even with nothing folded');
+        self::assertLessThanOrEqual($cap, $store->sizeBytes());
+
+        $pdo = new PDO('sqlite:' . $db);
+        $lost = (int) $pdo->query("SELECT v FROM rollup_state WHERE k = 'rollup_lost'")->fetchColumn();
+        self::assertSame($removed, $lost, 'every row sacrificed was unfolded, so rollup_lost must equal the removed count');
+
+        // Accumulates across calls (does not reset/overwrite).
+        for ($i = 0; $i < 1500; $i++) {
+            $store->append(['ts' => '2026-08-18T10:00:00+00:00', 'ip' => '9.9.9.' . ($i % 250), 'method' => 'GET',
+                'path' => '/x', 'body' => str_repeat('A', 200)]);
+        }
+        $store->checkpointWal();
+        $cap2 = (int) ($store->sizeBytes() * 0.5);
+        $removed2 = $store->retainBytes($cap2, true);
+        self::assertGreaterThan(0, $removed2);
+
+        $lost2 = (int) $pdo->query("SELECT v FROM rollup_state WHERE k = 'rollup_lost'")->fetchColumn();
+        self::assertSame($lost + $removed2, $lost2, 'rollup_lost accumulates across separate retention passes');
     }
 
     public function test_filters_narrow_the_feed(): void

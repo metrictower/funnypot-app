@@ -22,7 +22,13 @@ use Throwable;
  */
 final class SqliteHitStore implements HitStore, AnalyticsStore
 {
+    /** FP-0249 rollup-safety clamp: `id <= COALESCE(...)` — COALESCE OUTSIDE the subquery, since the
+     *  watermark row is absent until the first fold and a NULL bound would match nothing, silently
+     *  no-opping every clamped delete. */
+    private const WATERMARK_SQL = "COALESCE((SELECT CAST(v AS INTEGER) FROM rollup_state WHERE k = 'last_id'), 0)";
+
     private PDO $db;
+    private string $dbPath;
     private ?PDOStatement $insertStmt = null;
 
     /**
@@ -46,6 +52,7 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         if (!extension_loaded('pdo_sqlite')) {
             throw new \RuntimeException('SqliteHitStore needs ext-pdo_sqlite');
         }
+        $this->dbPath = $dbPath;
         $this->db = $this->open($dbPath);
 
         // First boot against an empty DB: seed it once from an existing export log so an upgrade
@@ -264,14 +271,27 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         return $n;
     }
 
-    /** Delete hits older than $days days (ISO-8601 UTC timestamps sort lexicographically). Rows removed. */
-    public function retainDays(int $days): int
+    /**
+     * Delete hits older than $days days (ISO-8601 UTC timestamps sort lexicographically). Rows removed.
+     *
+     * $clampToRollup (FP-0249): when true, never deletes a row the rollup fold hasn't reached yet — the
+     * `id <= last_id` bound is evaluated INSIDE the DELETE, atomic with it, so it cannot race
+     * {@see foldRollups()}'s watermark advance (SQLite's single-writer lock serializes the two). Must be
+     * opt-in per call: when rollups are disabled the watermark never advances, so an unconditional clamp
+     * would make retention a permanent no-op (unbounded disk — the exact invariant this guards against).
+     * Age pressure alone never overrides the clamp; only retainBytes()'s emergency size-cap path may.
+     */
+    public function retainDays(int $days, bool $clampToRollup = false): int
     {
         if ($days <= 0) {
             return 0;
         }
         $cutoff = gmdate('c', time() - $days * 86400);
-        $st = $this->db->prepare("DELETE FROM hits WHERE ts <> '' AND ts < :c");
+        $sql = "DELETE FROM hits WHERE ts <> '' AND ts < :c";
+        if ($clampToRollup) {
+            $sql .= ' AND id <= ' . self::WATERMARK_SQL;
+        }
+        $st = $this->db->prepare($sql);
         $st->execute([':c' => $cutoff]);
         $n = $st->rowCount();
         if ($n > 0) {
@@ -282,19 +302,58 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
     }
 
     /**
-     * Cap the database on disk: delete the oldest rows in chunks (reclaiming pages as we go) until
-     * the file is under $maxBytes, or nothing is left. Rows removed.
+     * Cap the database on disk: checkpoint the wal, then delete the oldest rows in chunks (reclaiming
+     * pages as we go) until the wal-inclusive size is under $maxBytes, or nothing is left. Rows removed.
+     *
+     * $clampToRollup: see {@see retainDays()}. Here, bounded disk outranks rollup completeness: if the
+     * clamped delete affects 0 rows while the store is STILL over cap, every remaining row sits above
+     * the watermark (the rollup worker is dead/slow during a scan burst) — fall through to an unclamped
+     * chunk delete so the cap is still enforced, and count the sacrificed (never-folded) rows into the
+     * persistent `rollup_state['rollup_lost']` counter so the undercount is visible, not silent.
      */
-    public function retainBytes(int $maxBytes): int
+    public function retainBytes(int $maxBytes, bool $clampToRollup = false): int
     {
-        if ($maxBytes <= 0 || $this->sizeBytes() <= $maxBytes) {
+        if ($maxBytes <= 0) {
             return 0;
         }
+        $this->checkpointWal();
+        if ($this->sizeBytes() <= $maxBytes) {
+            return 0;
+        }
+
         $removed = 0;
-        while ($this->sizeBytes() > $maxBytes) {
-            $affected = (int) $this->db->exec('DELETE FROM hits WHERE id IN (SELECT id FROM hits ORDER BY id ASC LIMIT 2000)');
+        while (true) {
+            $this->checkpointWal();
+            if ($this->sizeBytes() <= $maxBytes) {
+                break;
+            }
+            // Over-delete guard: a long reader can pin the wal so TRUNCATE can't run. If the MAIN file
+            // alone is already under cap, further deletes would only grow the (un-truncatable) wal —
+            // stop and let a later pass (once the reader is gone) finish the reclaim.
+            if ($this->mainSizeBytes() <= $maxBytes) {
+                fwrite(STDERR, "retention: hits wal pinned by a reader, stopping under cap on main file alone\n");
+                break;
+            }
+            $affected = (int) $this->db->exec(
+                'DELETE FROM hits WHERE id IN (SELECT id FROM hits'
+                . ($clampToRollup ? ' WHERE id <= ' . self::WATERMARK_SQL : '')
+                . ' ORDER BY id ASC LIMIT 2000)'
+            );
             if ($affected === 0) {
-                break; // table drained; the floor is an empty db, not an under-cap file
+                if (!$clampToRollup) {
+                    break; // table drained; the floor is an empty db, not an under-cap file
+                }
+                // Emergency path (see docblock): every remaining oldest row is unfolded. Sacrifice a
+                // chunk unclamped so the size cap is still enforced.
+                $sacrificed = (int) $this->db->exec('DELETE FROM hits WHERE id IN (SELECT id FROM hits ORDER BY id ASC LIMIT 2000)');
+                if ($sacrificed === 0) {
+                    break; // table fully drained
+                }
+                $this->addRollupLost($sacrificed);
+                fwrite(STDERR, sprintf("retention: size cap forced %d unfolded hit(s) past the rollup watermark\n", $sacrificed));
+                $removed += $sacrificed;
+                $this->db->exec('PRAGMA incremental_vacuum');
+                continue;
             }
             $removed += $affected;
             $this->db->exec('PRAGMA incremental_vacuum');
@@ -303,13 +362,53 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         return $removed;
     }
 
-    /** On-disk size of the database file in bytes (page_count * page_size, includes the freelist). */
+    /** Add $n to the persistent `rollup_state['rollup_lost']` counter. A single UPSERT statement (not
+     *  read-modify-write) so two concurrent retention passes (operator CLI + the timer loop) can never
+     *  lose an increment to a race — SQLite's writer lock serializes the two UPSERTs. */
+    private function addRollupLost(int $n): void
+    {
+        if ($n <= 0) {
+            return;
+        }
+        $this->db->prepare(
+            "INSERT INTO rollup_state (k, v) VALUES ('rollup_lost', CAST(:n AS TEXT))
+             ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS INTEGER) + CAST(excluded.v AS INTEGER) AS TEXT)"
+        )->execute([':n' => $n]);
+    }
+
+    /** On-disk footprint in bytes: the main file (page_count * page_size) PLUS the `-wal` sidecar — WAL
+     *  writes accumulate there between checkpoints, so main-file-only size understates true disk use
+     *  under a busy long-reader, e.g. the dashboard's live-feed poll (`-shm` is a fixed-size mmap index,
+     *  not counted). */
     public function sizeBytes(): int
+    {
+        return $this->mainSizeBytes() + $this->walBytes();
+    }
+
+    private function mainSizeBytes(): int
     {
         $pageCount = (int) $this->db->query('PRAGMA page_count')->fetchColumn();
         $pageSize = (int) $this->db->query('PRAGMA page_size')->fetchColumn();
 
         return $pageCount * $pageSize;
+    }
+
+    private function walBytes(): int
+    {
+        clearstatcache(true, $this->dbPath . '-wal');
+
+        return (int) @filesize($this->dbPath . '-wal');
+    }
+
+    /** Fold the wal back into the main file so deletes actually reclaim disk. Best-effort: a concurrent
+     *  reader can make this report busy — fine, the next retention pass retries. */
+    public function checkpointWal(): void
+    {
+        try {
+            $this->db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+        } catch (Throwable $e) {
+            // best-effort, see docblock
+        }
     }
 
     public function probeVelocity(string $ip): array

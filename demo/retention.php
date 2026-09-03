@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 /**
  * Periodic retention. Prunes the hit store by age (FUNNYPOT_RETAIN_DAYS) and/or on-disk size
- * (FUNNYPOT_RETAIN_GB). Both unset = unbounded, a no-op. The entrypoint runs this on a timer.
+ * (FUNNYPOT_RETAIN_GB) — both unset = unbounded, no deletes (the wal is still checkpointed). Also
+ * prunes raw-capture.sqlite (FP-0249), the FUNNYPOT_CAPTURE_RAW full-request debug capture, which is
+ * bounded by AGE AND SIZE by DEFAULT (FUNNYPOT_RAW_RETAIN_DAYS=7 / FUNNYPOT_RAW_RETAIN_GB=1) since it
+ * is opt-in and its whole failure mode is disk fill (~136KB/row worst case). The entrypoint runs this
+ * on a timer.
  */
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -12,6 +16,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\LlmFakeCache;
+use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
 
@@ -57,16 +62,44 @@ if (($config->tarpitEnabled || $config->sleepDecoy) && is_file($config->tarpitDb
     }
 }
 
-if ($config->retainDays <= 0 && $config->retainGb <= 0) {
-    exit(0); // hit store unbounded: nothing more to do
+// Raw-capture upkeep (FP-0249): guarded on the FILE existing, not on $config->captureRaw — an operator
+// who turns capture off after a pentest cleanup (docs/pentest-2026-08-29.md:82) still needs the big file
+// left behind pruned, and retention must never CREATE an empty db that capture wouldn't. Bounded by
+// default (raw_retain_days=7 / raw_retain_gb=1): see the class docblock for the legacy-VACUUM caveat.
+$rawPath = RawCapture::defaultPath($config->dbPath);
+if (is_file($rawPath)) {
+    try {
+        $raw = new RawCapture($rawPath);
+        // Unconditional wal checkpoint — disk hygiene independent of whether an age/size knob is set.
+        $raw->checkpointWal();
+        $rawByAge = $config->rawRetainDays > 0 ? $raw->retainDays($config->rawRetainDays) : 0;
+        $rawBySize = $config->rawRetainGb > 0
+            ? $raw->retainBytes((int) round($config->rawRetainGb * 1024 * 1024 * 1024))
+            : 0;
+        if ($rawByAge > 0 || $rawBySize > 0) {
+            fwrite(STDERR, sprintf("retention: raw-capture pruned %d by age + %d by size\n", $rawByAge, $rawBySize));
+        }
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'retention (raw-capture): ' . $e->getMessage() . "\n");
+    }
 }
 
+// Hit-store upkeep. NOT constructed with $config->logPath here — that would fire the import-on-empty
+// side effect (SqliteHitStore ctor) inside a retention pass, which is not this runner's job.
 try {
     $store = new SqliteHitStore($config->dbPath);
-    $byAge = $config->retainDays > 0 ? $store->retainDays($config->retainDays) : 0;
-    $bySize = $config->retainGb > 0 ? $store->retainBytes((int) round($config->retainGb * 1024 * 1024 * 1024)) : 0;
-    if ($byAge > 0 || $bySize > 0) {
-        fwrite(STDERR, sprintf("retention: pruned %d by age + %d by size\n", $byAge, $bySize));
+    // Unconditional wal checkpoint — disk hygiene independent of whether an age/size knob is set.
+    $store->checkpointWal();
+    if ($config->retainDays > 0 || $config->retainGb > 0) {
+        // Clamp deletes at the rollup watermark (FP-0249) so retention can never delete a hit the
+        // rollup fold hasn't reached yet — UNLESS rollups are disabled, in which case the watermark
+        // never advances and a clamp would make this a permanent no-op (unbounded disk).
+        $clamp = $config->rollupEnabled;
+        $byAge = $config->retainDays > 0 ? $store->retainDays($config->retainDays, $clamp) : 0;
+        $bySize = $config->retainGb > 0 ? $store->retainBytes((int) round($config->retainGb * 1024 * 1024 * 1024), $clamp) : 0;
+        if ($byAge > 0 || $bySize > 0) {
+            fwrite(STDERR, sprintf("retention: pruned %d by age + %d by size\n", $byAge, $bySize));
+        }
     }
 } catch (Throwable $e) {
     fwrite(STDERR, 'retention: ' . $e->getMessage() . "\n");

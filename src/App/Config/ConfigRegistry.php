@@ -153,6 +153,11 @@ final class ConfigRegistry
             // --- Retention (separate CLI runner; picked up on its next timer pass) ---
             'retain_days' => ['field' => 'retainDays', 'env' => 'FUNNYPOT_RETAIN_DAYS', 'type' => 'int', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
             'retain_gb' => ['field' => 'retainGb', 'env' => 'FUNNYPOT_RETAIN_GB', 'type' => 'float', 'default' => '0', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
+            // FP-0249: raw-capture.sqlite (the FUNNYPOT_CAPTURE_RAW debug capture) is bounded by default,
+            // unlike the hit store above — it is opt-in and its whole failure mode is disk fill, so an
+            // operator who truly wants it unbounded sets 0 explicitly.
+            'raw_retain_days' => ['field' => 'rawRetainDays', 'env' => 'FUNNYPOT_RAW_RETAIN_DAYS', 'type' => 'int', 'default' => '7', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
+            'raw_retain_gb' => ['field' => 'rawRetainGb', 'env' => 'FUNNYPOT_RAW_RETAIN_GB', 'type' => 'float', 'default' => '1', 'group' => 'Retention', 'live' => false, 'secret' => false], // (no clamp)
 
             // --- Analytics rollup worker (FP-0243; separate CLI runner, picked up next pass) ---
             'rollup.enabled' => ['field' => 'rollupEnabled', 'env' => 'FUNNYPOT_ROLLUP', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Rollup', 'live' => false, 'secret' => false],

@@ -47,6 +47,12 @@ final class AppConfig
         public bool $protocolsEnabled,
         public int $retainDays,
         public float $retainGb,
+        /** FP-0249: raw-capture.sqlite (FUNNYPOT_CAPTURE_RAW) age/size retention — bounded by default
+         *  (7d / 1GB), unlike $retainDays/$retainGb above (default 0=unbounded): raw capture is an
+         *  opt-in debugging capture whose whole failure mode is disk fill (~136KB/row). 0 = unbounded,
+         *  set explicitly by an operator who truly wants everything kept. */
+        public int $rawRetainDays,
+        public float $rawRetainGb,
         /** Operator dashboard path in stealth mode (public mode serves it at /). */
         public string $dashboardPath,
         /** What an UNAUTHENTICATED visitor sees on the dashboard path (FP-0242b): full | minimal | none.
@@ -289,6 +295,8 @@ final class AppConfig
             protocolsEnabled: $onUnless0('FUNNYPOT_PROTOCOLS'),
             retainDays: (int) ($str('FUNNYPOT_RETAIN_DAYS', '0')),
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),
+            rawRetainDays: (int) ($str('FUNNYPOT_RAW_RETAIN_DAYS', '7')),
+            rawRetainGb: (float) ($str('FUNNYPOT_RAW_RETAIN_GB', '1')),
             dashboardPath: '/' . trim($str('FUNNYPOT_DASHBOARD_PATH', '/__fp/'), '/') . '/',
             // Public-visibility knob (FP-0242b). Clamp toward LESS exposure: any value that is not one of
             // the three known levels resolves to 'none' (the fail-safe baseline), so a garbage stored/env
