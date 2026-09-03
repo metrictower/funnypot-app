@@ -65,7 +65,8 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_STYLE` | `realistic` | `minimal` \| `realistic` \| `taunt` |
 | `FUNNYPOT_LOG` | `demo/storage/hits.log` | where hit JSON lines are written |
 | `FUNNYPOT_DECOY_ARCHIVE` | on | serve a nested decoy archive for `.zip`/`.tar.gz` 404s; `0` to disable |
-| `FUNNYPOT_ADMIN_PASSWORD` | unset | enables the dashboard's password-gated admin actions (prune / clear / geoip). Unset = admin disabled, view stays public |
+| `FUNNYPOT_ADMIN_PASSWORD` | unset | first-boot seed for the operator login (Argon2id user + server-side session, FP-0242b). Seeds the first user only while none exists, then goes inert; unset = no operator, dashboard stays gated by `dashboard.public_view` |
+| `FUNNYPOT_ADMIN_USER` | `admin` | the operator username. The REAL login is overlaid on the public `/` sign-in decoy (FP-0295): a POST with this exact username is verified (Argon2id) and, on success, redirects to the dashboard — every other credential is the decoy. Set a **non-obvious** value: it gates the slow hash so a username-spray never triggers it, and there is no separate login route to find. Empty disables the overlay |
 | `FUNNYPOT_HONEYTOKEN_KEY` | unset | enables the tamper-evident bait cookie (returned-altered = high-signal probe) |
 | `FUNNYPOT_DB` | `demo/storage/funnypot.sqlite` | SQLite store path for real all-time stats; `off` = file-only (recent-window stats) |
 | `FUNNYPOT_GEO_DB` | `demo/storage/dbip-country.csv.gz` | DB-IP Lite CSV for the GeoIP map/country stats |

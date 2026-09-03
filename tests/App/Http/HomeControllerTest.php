@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Http;
 
+use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Storage\HitStore;
@@ -72,6 +73,106 @@ final class HomeControllerTest extends TestCase
         // Then funnelled into the no-auth admin-panel decoy — not re-rendered with an inline error.
         self::assertStringContainsString('/admin/access-login', $html);
         self::assertStringNotContainsString('Invalid username or password', $html);
+    }
+
+    // --- FP-0295: the real operator login overlaid on the decoy ---
+
+    /**
+     * Build a HomeController with a REAL AdminAuth over a temp sqlite, an operator credential seeded,
+     * and an AppConfig whose adminUser/funnypotPath are set via the environment fromEnv() reads.
+     *
+     * @return array{0:HomeController,1:AdminAuth,2:string} [controller, auth, dashboardPath]
+     */
+    private function overlay(HitStore $store, string $adminUser, string $seedPassword): array
+    {
+        $dir = sys_get_temp_dir() . '/fp-0295-' . uniqid();
+        @mkdir($dir, 0777, true);
+        putenv('FUNNYPOT_ADMIN_USER=' . $adminUser);
+        putenv('FUNNYPOT_APP_PATH=ctrl');
+        $config = AppConfig::fromEnv($dir);
+        putenv('FUNNYPOT_ADMIN_USER');   // unset so other tests are unaffected
+        putenv('FUNNYPOT_APP_PATH');
+
+        $auth = new AdminAuth($dir . '/admin.sqlite');
+        if ($adminUser !== '' && $seedPassword !== '') {
+            $auth->createOrResetUser($adminUser, $seedPassword);
+        }
+        $geo = new \Geo($dir . '/no-geo');
+        $home = new HomeController($store, $geo, $config, $dir, null, null, $auth);
+
+        return [$home, $auth, $config->funnypotPath];
+    }
+
+    public function test_correct_operator_credentials_mint_a_real_session_and_redirect_to_the_dashboard(): void
+    {
+        $spy = new HomeSpy();
+        [$home, $auth, $dash] = $this->overlay($spy, 'op-7f3a', 's3cret-pw');
+
+        $_POST = ['username' => 'op-7f3a', 'password' => 's3cret-pw'];
+        $html = $this->render(fn () => $home->login('198.51.100.7'));
+        $_POST = [];
+
+        // Redirects to the dashboard, NOT the decoy panel.
+        self::assertStringContainsString('url=' . $dash, $html);
+        self::assertStringNotContainsString('/admin/access-login', $html);
+        // A real session was minted and is live (AdminAuth set $_COOKIE in-process for the same request).
+        self::assertTrue($auth->check(), 'a successful operator login must mint a resolvable session');
+        self::assertSame('op-7f3a', $auth->currentUser());
+        // The operator password is NEVER written to the hit store — only AdminAuth's own audit records it.
+        self::assertCount(0, $spy->appended, 'the real operator password must not land in the hit store');
+        $attempts = $auth->attempts();
+        self::assertCount(1, $attempts);
+        self::assertSame('ok', $attempts[0]['result']);
+        unset($_COOKIE[AdminAuth::COOKIE]);
+    }
+
+    public function test_correct_username_wrong_password_falls_through_to_the_decoy(): void
+    {
+        $spy = new HomeSpy();
+        [$home, $auth] = $this->overlay($spy, 'op-7f3a', 's3cret-pw');
+
+        $_POST = ['username' => 'op-7f3a', 'password' => 'wrong'];
+        $html = $this->render(fn () => $home->login('198.51.100.8'));
+        $_POST = [];
+
+        // Byte-identical decoy: funnelled to the panel, creds captured.
+        self::assertStringContainsString('/admin/access-login', $html);
+        self::assertCount(1, $spy->appended);
+        self::assertStringContainsString('user=op-7f3a', (string) $spy->appended[0]['body']);
+        // AdminAuth WAS consulted (username matched) and recorded a failure.
+        $attempts = $auth->attempts();
+        self::assertCount(1, $attempts);
+        self::assertSame('fail', $attempts[0]['result']);
+    }
+
+    public function test_non_matching_username_never_runs_argon2id(): void
+    {
+        $spy = new HomeSpy();
+        [$home, $auth] = $this->overlay($spy, 'op-7f3a', 's3cret-pw');
+
+        $_POST = ['username' => 'admin', 'password' => 'whatever'];
+        $html = $this->render(fn () => $home->login('198.51.100.9'));
+        $_POST = [];
+
+        // Pure decoy, and — the load-bearing assertion — AdminAuth::login was NEVER called, so the
+        // deliberately-slow Argon2id verify did not run: there is no login_attempts row at all.
+        self::assertStringContainsString('/admin/access-login', $html);
+        self::assertCount(1, $spy->appended);
+        self::assertCount(0, $auth->attempts(), 'a non-matching username must not reach the Argon2id verify');
+    }
+
+    public function test_empty_operator_username_disables_the_overlay(): void
+    {
+        $spy = new HomeSpy();
+        [$home, $auth] = $this->overlay($spy, '', '');
+
+        // Even a blank-vs-blank username must not authenticate when the overlay is disabled.
+        $_POST = ['username' => '', 'password' => ''];
+        $html = $this->render(fn () => $home->login('198.51.100.10'));
+        $_POST = [];
+
+        self::assertStringContainsString('/admin/access-login', $html);
+        self::assertCount(0, $auth->attempts(), 'the overlay must be inert when no operator username is set');
     }
 }
 
