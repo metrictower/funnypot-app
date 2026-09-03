@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Protocol\Sip;
 
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
+use Funnypot\Protocol\UdpResponseBucket;
 
 /**
  * Pure-PHP SIP and RTP VoIP honeypot service (RFC 3261 & RFC 3550).
@@ -12,6 +13,8 @@ use Funnypot\App\ThreatIntel\OperatorBlocklist;
  */
 final class SipServer
 {
+    use UdpResponseBucket;
+
     /** @var resource|null UDP socket */
     private $udpSocket = null;
 
@@ -63,17 +66,36 @@ final class SipServer
      */
     private array $activeNonces = [];
 
-    /**
-     * Per-source-IP token bucket throttling UDP responses (F4). A spoofed request forges its source
-     * as a victim, so every UDP reply we emit lands on that victim — capping replies per apparent
-     * source bounds how hard the honeypot can be turned into a reflector. TCP is return-routable, so
-     * only UDP is metered.
-     * @var array<string, array{tokens: float, last: float}>
-     */
-    private array $udpResponseBuckets = [];
+    // Per-source-IP token bucket throttling UDP response *count* (F4); see the shared UdpResponseBucket
+    // trait (`use` above) for $udpResponseBuckets + udpResponseAllowed(). A spoofed request forges its
+    // source as a victim, so every UDP reply we emit lands on that victim — capping replies per apparent
+    // source bounds how hard the honeypot can be turned into a reflector. TCP is return-routable, so
+    // only UDP is metered.
     private const UDP_RESP_BURST = 20.0;   // bucket capacity
     private const UDP_RESP_RATE = 10.0;    // tokens refilled per second
     private const UDP_BUCKET_MAX_IPS = 4096; // cap tracked IPs so the map can't grow unbounded
+    // FP-0248: a new/evicted-and-re-admitted IP is seeded DEPLETED, not a full burst — see the trait's
+    // doc block. 2.0 (not 1.0) because handleInvite() sends TWO immediate responses (100 Trying, then
+    // 180 Ringing) from one inbound datagram; a 1.0 seed would silently drop the second one.
+    private const UDP_RESP_SEED = 2.0;
+
+    /**
+     * FP-0248 §2b: cumulative per-source UDP egress BYTE budget (F4b) — bytes_out <= udpEgressRatio *
+     * bytes_in, colocated in the SAME bucket map + LRU eviction as F4's packet-count throttle (above):
+     * `$udpResponseBuckets[$ip]` gains an extra `credit` float, written only by creditUdpIngress() /
+     * udpEgressWouldAllow() / udpEgressDebit() below. The shared trait never reads or writes `credit`,
+     * only seeds/reads `tokens`/`last`, so this composes cleanly with the trait's own writes — whichever
+     * guard's bookkeeping touches an IP first, the other's field starts absent and is lazily added. TCP
+     * is return-routable and stays unmetered, same as F4.
+     *
+     * $egressCapState is the rollup state for UDP replies withheld by this guard, per apparent source:
+     * running suppressed-drop count, when the current run started, and when a rollup was last emitted —
+     * mirrors $floodState/recordFloodDrop() below so a sustained cap collapses to ~one 'sip_egress_capped'
+     * row per source per minute instead of one row per withheld reply.
+     * @var array<string, array{count: int, since: string, lastLog: float, lastLoggedCount: int}>
+     */
+    private array $egressCapState = [];
+    private const EGRESS_CAP_ROLLUP_SECS = 60.0;
 
     /**
      * Per-apparent-source call-admission throttle. F4 (above) meters the RESPONSE bytes we emit; this
@@ -332,6 +354,14 @@ final class SipServer
         if ($this->block !== null && $this->block->isBlocked($peerIp)) {
             return;
         }
+
+        // FP-0248 §2b: bank egress credit for every inbound UDP byte BEFORE any response is considered
+        // — a blocked source is caught by the check above and keeps earning zero, everything else earns
+        // credit even if the datagram itself turns out unparseable (garbage still costs the attacker
+        // bytes, and a real scanner that retries a malformed probe banks more credit and gets its 400
+        // on a later attempt — see SipMessage::build400() below).
+        $this->creditUdpIngress($peerIp, strlen($data));
+
         $req = SipMessage::parse($data);
         if (!$req) {
             // Parseable-but-invalid: 400 like a real Asterisk (best-effort, rate-limited by the F4
@@ -1246,7 +1276,17 @@ final class SipServer
     }
 
     /**
-     * Sends a SIP response over UDP or TCP.
+     * Sends a SIP response over UDP or TCP. UDP is the reflection-sensitive path (FP-0248): the final
+     * on-the-wire bytes (after addViaReceived() has grown $raw with received=/rport=) are gated by TWO
+     * independent anti-reflection guards, checked-then-debited in this order so a refusal by either
+     * never burns budget the other guard is relying on:
+     *   1. F4b byte-budget (pure check, no mutation): udpEgressWouldAllow() — cumulative
+     *      bytes_out <= udpEgressRatio * bytes_in for this apparent source. Refused => drop, no F4
+     *      packet-rate token consumed either.
+     *   2. F4 packet-rate bucket: udpResponseAllowed() — only debits a token on a GRANTED call (refusal
+     *      is a pure check internally), so a refusal here leaves the byte credit from step 1 untouched.
+     * Only once both pass — the datagram WILL be sent — do we debit the byte credit and write the wire
+     * bytes. TCP is return-routable, so neither guard applies there.
      */
     private function sendResponse(string $raw, string $peerIp, int $peerPort, string $transport, $tcpSock = null): void
     {
@@ -1256,21 +1296,38 @@ final class SipServer
 
         if ($transport === 'tcp' && $tcpSock && is_resource($tcpSock)) {
             @fwrite($tcpSock, $raw);
-        } elseif ($this->udpSocket && is_resource($this->udpSocket)) {
-            // F4: a spoofed request aims our UDP reply at a forged victim. Meter replies per apparent
-            // source so no single source can pull an unbounded stream of reflected packets.
-            if (!$this->udpResponseAllowed($peerIp)) {
-                return;
-            }
-            $dest = "{$peerIp}:{$peerPort}";
-            @stream_socket_sendto($this->udpSocket, $raw, 0, $dest);
+
+            return;
         }
+
+        if (!($this->udpSocket && is_resource($this->udpSocket))) {
+            return;
+        }
+
+        $len = strlen($raw);
+
+        // F4b: cumulative byte-budget check FIRST and pure (no mutation) — see the method doc above.
+        if (!$this->udpEgressWouldAllow($peerIp, $len)) {
+            $this->recordEgressCapDrop($peerIp, $peerPort);
+
+            return;
+        }
+
+        // F4: a spoofed request aims our UDP reply at a forged victim. Meter reply COUNT per apparent
+        // source so no single source can pull an unbounded stream of reflected packets. Internally
+        // consumes a token only when granting, so a refusal here leaves the F4b credit checked above
+        // untouched (no wasted debit for a reply that is about to be dropped anyway).
+        if (!$this->udpResponseAllowed($peerIp)) {
+            return;
+        }
+
+        // Both guards passed and the datagram WILL be sent: only now debit the byte budget.
+        $this->udpEgressDebit($peerIp, $len);
+
+        $dest = "{$peerIp}:{$peerPort}";
+        @stream_socket_sendto($this->udpSocket, $raw, 0, $dest);
     }
 
-    /**
-     * Token-bucket admission for a UDP reply to $ip (F4 anti-reflection throttle). Returns false when
-     * the apparent source has drained its bucket, so the reply is dropped rather than reflected.
-     */
     /**
      * Echo the observed source into the first Via as received=/rport= when the client requested rport
      * (RFC 3581). Only the top Via, only when a bare ;rport is present; other responses pass through.
@@ -1287,40 +1344,123 @@ final class SipServer
         return $out ?? $raw;
     }
 
-    private function udpResponseAllowed(string $ip): bool
+    // ---- F4b: cumulative UDP egress byte-budget (FP-0248 §2b) ---------------------------------
+
+    /**
+     * Ingress credit: called once per inbound UDP datagram (handleInboundUdp(), after the operator-
+     * block check so a blocked source keeps earning zero — see the call site). Banks
+     * udpEgressRatio * strlen($data) bytes of egress credit for $ip, capped at udpEgressCreditCap so a
+     * slow drip cannot bank an unbounded reflected burst. A source first seen here is created via the
+     * SAME lazy-create-with-LRU-eviction path the F4 packet bucket uses (udpResponseBucketEnsure(), in
+     * the shared trait) — seeded at the depleted UDP_RESP_SEED token count — so eviction-cycling gains
+     * no byte credit either, only ever a couple of depleted-bucket packets (see the trait doc block).
+     * udpEgressRatio <= 0 disables the byte-budget guard entirely (tests/dev only; the F4 packet-rate
+     * bucket still applies).
+     */
+    private function creditUdpIngress(string $ip, int $len): void
+    {
+        if ($this->config->udpEgressRatio <= 0.0 || $len <= 0) {
+            return;
+        }
+
+        $now = microtime(true);
+        $this->udpResponseBucketEnsure($ip, $now);
+
+        $entry = &$this->udpResponseBuckets[$ip];
+        $earned = $this->config->udpEgressRatio * $len;
+        $entry['credit'] = min((float) $this->config->udpEgressCreditCap, ($entry['credit'] ?? 0.0) + $earned);
+    }
+
+    /**
+     * Pure predicate (no mutation): does $ip currently hold at least $len bytes of egress credit? Used
+     * as the FIRST check in sendResponse() so a refusal never touches the F4 packet bucket. Disabled
+     * (udpEgressRatio <= 0) always allows — the F4b guard is then a no-op and only F4 applies.
+     */
+    private function udpEgressWouldAllow(string $ip, int $len): bool
+    {
+        if ($this->config->udpEgressRatio <= 0.0) {
+            return true;
+        }
+
+        $credit = $this->udpResponseBuckets[$ip]['credit'] ?? 0.0;
+
+        return $credit >= $len;
+    }
+
+    /**
+     * Debits $len bytes of egress credit for $ip. Called ONLY once sendResponse() has committed to
+     * actually sending — never on a refused/dropped reply — so the byte budget is spent exactly once
+     * per byte actually reflected, never for a reply that never left the box.
+     */
+    private function udpEgressDebit(string $ip, int $len): void
+    {
+        if ($this->config->udpEgressRatio <= 0.0 || !isset($this->udpResponseBuckets[$ip])) {
+            return;
+        }
+        $this->udpResponseBuckets[$ip]['credit'] = ($this->udpResponseBuckets[$ip]['credit'] ?? 0.0) - $len;
+    }
+
+    /**
+     * Record one UDP reply withheld by the F4b byte-budget guard and, at most once per
+     * EGRESS_CAP_ROLLUP_SECS, emit a single 'sip_egress_capped' rollup — mirrors recordFloodDrop() /
+     * emitFloodRollup() below so a sustained cap never becomes per-packet log spam while still leaving
+     * the starvation observable to the operator (the §5 risk: udpEgressRatio is operator-tunable if a
+     * real deployment sees legitimate drops).
+     */
+    private function recordEgressCapDrop(string $ip, int $port): void
     {
         $now = microtime(true);
 
-        if (!isset($this->udpResponseBuckets[$ip])) {
-            // Bound the map: when full, drop the least-recently-refilled entry before adding one.
-            if (count($this->udpResponseBuckets) >= self::UDP_BUCKET_MAX_IPS) {
+        if (!isset($this->egressCapState[$ip])) {
+            if (count($this->egressCapState) >= self::CALL_BUCKET_MAX_IPS) {
                 $oldestKey = null;
                 $oldestAt = INF;
-                foreach ($this->udpResponseBuckets as $k => $b) {
-                    if ($b['last'] < $oldestAt) {
-                        $oldestAt = $b['last'];
+                foreach ($this->egressCapState as $k => $s) {
+                    if ($s['lastLog'] < $oldestAt) {
+                        $oldestAt = $s['lastLog'];
                         $oldestKey = $k;
                     }
                 }
                 if ($oldestKey !== null) {
-                    unset($this->udpResponseBuckets[$oldestKey]);
+                    unset($this->egressCapState[$oldestKey]);
                 }
             }
-            $this->udpResponseBuckets[$ip] = ['tokens' => self::UDP_RESP_BURST, 'last' => $now];
+            $this->egressCapState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now, 'lastLoggedCount' => 0];
+            $this->emitEgressCapRollup($ip, $port);
+
+            return;
         }
 
-        $bucket = &$this->udpResponseBuckets[$ip];
-        $elapsed = max(0.0, $now - $bucket['last']);
-        $bucket['tokens'] = min(self::UDP_RESP_BURST, $bucket['tokens'] + $elapsed * self::UDP_RESP_RATE);
-        $bucket['last'] = $now;
-
-        if ($bucket['tokens'] < 1.0) {
-            return false;
+        $st = &$this->egressCapState[$ip];
+        $st['count']++;
+        if (($now - $st['lastLog']) >= self::EGRESS_CAP_ROLLUP_SECS) {
+            $st['lastLog'] = $now;
+            $this->emitEgressCapRollup($ip, $port);
         }
-        $bucket['tokens'] -= 1.0;
-
-        return true;
     }
+
+    /** Emit one F4b throttle rollup event. Never reportable — same rationale as emitFloodRollup(). */
+    private function emitEgressCapRollup(string $ip, int $port): void
+    {
+        $st = &$this->egressCapState[$ip];
+        $st['lastLoggedCount'] = $st['count'];
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'sip_egress_capped',
+            'ip' => $ip,
+            'port' => $port,
+            'severity' => 'low',
+            'path' => "SIP UDP egress budget capped: {$st['count']} reply/replies withheld from {$ip} since {$st['since']}",
+            'matched' => 1,
+            'served' => 0,
+            'reportable' => false,
+        ]);
+    }
+
+    // ---- F4: UDP response-count admission (shared trait) -------------------------------------
+    // udpResponseAllowed() lives in the shared UdpResponseBucket trait (`use` above); this class
+    // extends its bucket entries with the `credit` field the F4b helpers above manage.
 
     /**
      * Call-admission token bucket for an apparent source $ip. Returns false when the source has drained

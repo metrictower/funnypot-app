@@ -130,6 +130,23 @@ final class SipConfig
          * next call (auto-recovery). While a flooder keeps sending inside this window it stays strict.
          */
         public float $callCeilingIdleReset = 300.0,
+        /**
+         * FP-0248 §2b: cumulative per-source UDP egress byte-budget ratio (SIP's answer to the anti-
+         * amplification invariant, since a strict per-packet amp<=1 is impossible here — a real PBX's
+         * 400/401/200 is legitimately larger than a tiny request). Bounds total UDP bytes emitted to any
+         * one apparent source to at most $udpEgressRatio times the bytes it has sent us, independent of
+         * — and colocated with — the F4 packet-rate bucket. k~3 gives a real INVITE dialog (100+180+200,
+         * ~1.3-1.6KB) comfortable headroom over an SDP-bearing INVITE's ingress credit (~800-1500B * 3),
+         * while capping a spoofed source's amplification factor at 3x cumulatively. <= 0 disables the
+         * byte-budget guard entirely (tests/dev only; the F4 packet-rate bucket still applies).
+         */
+        public float $udpEgressRatio = 3.0,
+        /**
+         * Ceiling on banked UDP egress credit per source (bytes), so a slow drip of tiny datagrams can't
+         * bank an unbounded reflected burst. Default ~64KiB is comfortably above one full INVITE dialog's
+         * worth of replies with margin.
+         */
+        public int $udpEgressCreditCap = 65536,
     ) {
         if ($this->audioDir === '') {
             $this->audioDir = dirname(__DIR__, 3) . '/demo/assets/audio';
@@ -318,6 +335,11 @@ final class SipConfig
         $callCeiling = ($ceilingRaw !== false && $ceilingRaw !== '') ? (int) $ceilingRaw : 20;
         $ceilingResetRaw = getenv('FUNNYPOT_SIP_CALL_CEILING_IDLE_RESET');
         $callCeilingIdleReset = ($ceilingResetRaw !== false && $ceilingResetRaw !== '') ? (float) $ceilingResetRaw : 300.0;
+        // FP-0248 §2b: cumulative UDP egress byte-budget ratio (k) + banked-credit ceiling. Empty = default.
+        $egressRatioRaw = getenv('FUNNYPOT_SIP_EGRESS_RATIO');
+        $udpEgressRatio = ($egressRatioRaw !== false && $egressRatioRaw !== '') ? (float) $egressRatioRaw : 3.0;
+        $egressCapRaw = getenv('FUNNYPOT_SIP_EGRESS_CREDIT_CAP');
+        $udpEgressCreditCap = ($egressCapRaw !== false && $egressCapRaw !== '') ? (int) $egressCapRaw : 65536;
         $idleTimeout = (int) (getenv('FUNNYPOT_SIP_IDLE_TIMEOUT') ?: '30');
         $rtpPort = (int) (getenv('FUNNYPOT_SIP_RTP_PORT') ?: '10000');
         $audioDir = getenv('FUNNYPOT_SIP_AUDIO_DIR') ?: '';
@@ -396,6 +418,8 @@ final class SipConfig
             callNoAudioTimeout: max(0, $noAudioTimeout),
             callCeiling: max(0, $callCeiling),
             callCeilingIdleReset: max(1.0, $callCeilingIdleReset),
+            udpEgressRatio: $udpEgressRatio,
+            udpEgressCreditCap: max(0, $udpEgressCreditCap),
         );
     }
 }
