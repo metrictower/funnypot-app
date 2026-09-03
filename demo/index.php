@@ -273,8 +273,13 @@ $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
 // the first 'admin' user from FUNNYPOT_ADMIN_PASSWORD only while no user exists, then goes inert.
 $adminBase = rtrim($config->mode === 'stealth' ? $config->dashboardPath : $config->funnypotPath, '/');
+// FP-0250 2.5: the bundled nginx path passes a trustworthy fastcgi_param HTTPS (funnypot-location.conf)
+// — that first condition is UNGATED, unaffected. X-Forwarded-Proto is only load-bearing behind an
+// EXTERNAL proxy, so it must be gated on HoneypotController::isTrustedPeer() exactly like XFF already
+// is (clientIp()) — otherwise any client could forge "X-Forwarded-Proto: https" straight to php-fpm and
+// flip the admin session cookie's Secure flag off over what is, to the actual browser, plain HTTP.
 $adminSecure = (($_SERVER['HTTPS'] ?? '') !== '' && ($_SERVER['HTTPS'] ?? '') !== 'off')
-    || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    || (HoneypotController::isTrustedPeer($config->trustedProxies) && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
 $adminAuth = new AdminAuth(dirname($config->dbPath) . '/admin.sqlite', $adminBase, $adminSecure);
 $adminAuth->bootstrap($config->adminPassword, $config->adminUser);
 // $store is a SqliteHitStore, which implements both HitStore and AnalyticsStore — the analytics

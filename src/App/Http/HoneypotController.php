@@ -75,7 +75,7 @@ final class HoneypotController
     public static function clientIp(array $trustedProxies = []): string
     {
         $remote = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        if ($trustedProxies === [] || !self::ipInCidrList($remote, $trustedProxies)) {
+        if ($trustedProxies === [] || !self::isTrustedPeer($trustedProxies)) {
             return $remote;
         }
 
@@ -87,6 +87,25 @@ final class HoneypotController
         }
 
         return $remote;
+    }
+
+    /**
+     * True when the TCP peer (REMOTE_ADDR) is itself a configured trusted proxy (FP-0250 2.5). Public
+     * so demo/index.php can gate honouring X-Forwarded-Proto on the SAME trust boundary XFF already
+     * uses via clientIp() above — an untrusted peer's XFP must not be believed either, else any client
+     * could forge "I'm HTTPS" and flip the admin session cookie's Secure flag off over plain HTTP.
+     * Empty $trustedProxies (the edge deployment, no proxy in front) always returns false — the
+     * default-closed direction: no declared proxy list means nothing is trusted.
+     *
+     * @param string[] $trustedProxies IPs / CIDRs of proxies in front of us
+     */
+    public static function isTrustedPeer(array $trustedProxies): bool
+    {
+        if ($trustedProxies === []) {
+            return false;
+        }
+
+        return self::ipInCidrList((string) ($_SERVER['REMOTE_ADDR'] ?? ''), $trustedProxies);
     }
 
     /** True if $ip matches any entry (a bare IP is exact-match; an a.b.c.d/n is an IPv4 CIDR). */

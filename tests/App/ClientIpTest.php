@@ -62,4 +62,18 @@ final class ClientIpTest extends TestCase
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '10.0.0.8, 10.0.0.7';
         self::assertSame('10.0.0.9', HoneypotController::clientIp(['10.0.0.0/8']));
     }
+
+    // --- isTrustedPeer() (FP-0250 2.5) — the SAME trust boundary gates X-Forwarded-Proto now, so it
+    // must default-closed exactly like the XFF gate above (clientIp() already covers ipInCidrList's
+    // matching logic; this pins isTrustedPeer's own empty-list / exact-IP / CIDR / non-member behaviour).
+
+    public function test_is_trusted_peer_matches_ips_and_cidrs_and_defaults_closed(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '10.0.0.9';
+        self::assertFalse(HoneypotController::isTrustedPeer([]), 'empty trusted-proxy list is default-closed — nothing is trusted');
+        self::assertFalse(HoneypotController::isTrustedPeer(['192.0.2.1']), 'a non-member IP is not trusted');
+        self::assertTrue(HoneypotController::isTrustedPeer(['10.0.0.9']), 'an exact IP match is trusted');
+        self::assertTrue(HoneypotController::isTrustedPeer(['10.0.0.0/8']), 'a CIDR match is trusted');
+        self::assertFalse(HoneypotController::isTrustedPeer(['10.0.1.0/24']), 'a non-matching CIDR is not trusted');
+    }
 }
