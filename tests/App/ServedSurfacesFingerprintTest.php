@@ -40,18 +40,31 @@ require_once dirname(__DIR__, 2) . '/demo/lib/geo.php';
  * is exactly how /__dl/sw.js shipped `// funnypot — endless decoy-download service worker (client-side
  * bait).` verbatim to an unauthenticated GET for three commits running.
  *
- * This suite scans every OTHER surface this app serves, enumerated from the routers/constants that
- * own them rather than a hand-written path list (AiApiRouter::CHAT_PATHS, DownloadRouter's PATH
- * constants, ConsoleRouter::PATH, CorporateController's trap prefixes) — service worker source
- * (including comments), JSON manifests, streamed archive bytes, the web-terminal console, the stealth
- * corporate front + its trap pages + its static CSS, response headers, and the decoy archives
- * (including their nested member entries, unpacked). Every checked surface is client-served, so
- * everything here is checked against BOTH leak-IN (an upstream detector's vocabulary) and leak-OUT
+ * This suite scans the served surfaces enumerated below, drawn from the routers/constants that own
+ * them rather than a hand-written path list where a router exposes one (AiApiRouter::CHAT_PATHS,
+ * DownloadRouter's PATH constants, ConsoleRouter::PATH, CorporateController's trap prefixes) — service
+ * worker source (including comments), JSON manifests, streamed archive bytes, the web-terminal console,
+ * the stealth corporate front + its trap pages + its static CSS, the public "/" decoy sign-in page
+ * (HomeController) + hidden lures, HoneypotController::robots(), response headers, and the decoy
+ * archives (including their nested member entries, unpacked). Every checked surface is client-served,
+ * so everything here is checked against BOTH leak-IN (an upstream detector's vocabulary) and leak-OUT
  * (this project's own vocabulary) — unlike FingerprintSafetyTest's LLM-exemplar rows, nothing in this
  * file is an internal-only prompt.
  *
+ * NOT covered here (reworded from an earlier "every served surface" overclaim — FP-0112 code review
+ * finding #3):
+ *   - LabyrinthController / PolluterController — real served surfaces, but scanned in their OWN test
+ *     files ({@see \Funnypot\Tests\App\Tarpit\LabyrinthNavTest},
+ *     {@see \Funnypot\Tests\App\Tarpit\ContextPolluterTest}), not duplicated here.
+ *   - HoneypotController::handle()'s catch-all — its dynamic LLM branch is covered by the runtime
+ *     LlmOutputSanitizer own_vocabulary parity fix (review #1); its static core-engine template output
+ *     is funnypot-core's own fingerprint-safety gate's responsibility, not this app's. The REMAINING
+ *     app-owned parts of handle() (the plain-404/operator-block branches, the panel-precedence
+ *     composition) are not yet scanned anywhere — deferred to
+ *     backlog/ready-to-code/FP-0304-served-surface-coverage-completion/.
+ *
  * Subsumes and removes the stopgap DownloadWorkerFingerprintTest (this suite's sw.js coverage below is
- * a strict superset: same file, same word-boundary matching, plus every other served surface).
+ * a strict superset: same file, same word-boundary matching, plus the surfaces enumerated above).
  */
 final class ServedSurfacesFingerprintTest extends TestCase
 {
