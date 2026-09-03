@@ -23,6 +23,7 @@ use Throwable;
 final class SqliteHitStore implements HitStore, AnalyticsStore
 {
     private PDO $db;
+    private string $dbPath;
     private ?PDOStatement $insertStmt = null;
 
     /**
@@ -46,6 +47,7 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         if (!extension_loaded('pdo_sqlite')) {
             throw new \RuntimeException('SqliteHitStore needs ext-pdo_sqlite');
         }
+        $this->dbPath = $dbPath;
         $this->db = $this->open($dbPath);
 
         // First boot against an empty DB: seed it once from an existing export log so an upgrade
@@ -282,16 +284,32 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
     }
 
     /**
-     * Cap the database on disk: delete the oldest rows in chunks (reclaiming pages as we go) until
-     * the file is under $maxBytes, or nothing is left. Rows removed.
+     * Cap the database on disk: checkpoint the wal, then delete the oldest rows in chunks (reclaiming
+     * pages as we go) until the wal-inclusive size is under $maxBytes, or nothing is left. Rows removed.
      */
     public function retainBytes(int $maxBytes): int
     {
-        if ($maxBytes <= 0 || $this->sizeBytes() <= $maxBytes) {
+        if ($maxBytes <= 0) {
             return 0;
         }
+        $this->checkpointWal();
+        if ($this->sizeBytes() <= $maxBytes) {
+            return 0;
+        }
+
         $removed = 0;
-        while ($this->sizeBytes() > $maxBytes) {
+        while (true) {
+            $this->checkpointWal();
+            if ($this->sizeBytes() <= $maxBytes) {
+                break;
+            }
+            // Over-delete guard: a long reader can pin the wal so TRUNCATE can't run. If the MAIN file
+            // alone is already under cap, further deletes would only grow the (un-truncatable) wal —
+            // stop and let a later pass (once the reader is gone) finish the reclaim.
+            if ($this->mainSizeBytes() <= $maxBytes) {
+                fwrite(STDERR, "retention: hits wal pinned by a reader, stopping under cap on main file alone\n");
+                break;
+            }
             $affected = (int) $this->db->exec('DELETE FROM hits WHERE id IN (SELECT id FROM hits ORDER BY id ASC LIMIT 2000)');
             if ($affected === 0) {
                 break; // table drained; the floor is an empty db, not an under-cap file
@@ -303,13 +321,39 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         return $removed;
     }
 
-    /** On-disk size of the database file in bytes (page_count * page_size, includes the freelist). */
+    /** On-disk footprint in bytes: the main file (page_count * page_size) PLUS the `-wal` sidecar — WAL
+     *  writes accumulate there between checkpoints, so main-file-only size understates true disk use
+     *  under a busy long-reader, e.g. the dashboard's live-feed poll (`-shm` is a fixed-size mmap index,
+     *  not counted). */
     public function sizeBytes(): int
+    {
+        return $this->mainSizeBytes() + $this->walBytes();
+    }
+
+    private function mainSizeBytes(): int
     {
         $pageCount = (int) $this->db->query('PRAGMA page_count')->fetchColumn();
         $pageSize = (int) $this->db->query('PRAGMA page_size')->fetchColumn();
 
         return $pageCount * $pageSize;
+    }
+
+    private function walBytes(): int
+    {
+        clearstatcache(true, $this->dbPath . '-wal');
+
+        return (int) @filesize($this->dbPath . '-wal');
+    }
+
+    /** Fold the wal back into the main file so deletes actually reclaim disk. Best-effort: a concurrent
+     *  reader can make this report busy — fine, the next retention pass retries. */
+    public function checkpointWal(): void
+    {
+        try {
+            $this->db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+        } catch (Throwable $e) {
+            // best-effort, see docblock
+        }
     }
 
     public function probeVelocity(string $ip): array

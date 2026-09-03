@@ -182,6 +182,11 @@ final class SqliteHitStoreTest extends TestCase
             $store->append(['ts' => '2026-08-18T10:00:00+00:00', 'ip' => '9.9.9.' . ($i % 250), 'method' => 'GET',
                 'path' => '/x', 'body' => str_repeat('A', 200)]);
         }
+        // Checkpoint first so $before (and the cap derived from it) reflects what retainBytes()'s OWN
+        // leading checkpoint will already see — otherwise a wal accumulated by the appends above would
+        // inflate $before, and retainBytes()'s checkpoint alone could satisfy a cap derived from that
+        // inflated figure without deleting a single row (FP-0249: sizeBytes() is now wal-inclusive).
+        $store->checkpointWal();
         $before = $store->sizeBytes();
         $cap = (int) ($before * 0.7);
 
