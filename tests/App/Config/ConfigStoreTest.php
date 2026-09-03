@@ -271,4 +271,19 @@ final class ConfigStoreTest extends TestCase
         $store->reset('style', 'admin', ''); // nothing stored — must not throw, no audit row
         self::assertSame([], $store->audits());
     }
+
+    // ------------------------------------------------------------------ sentinel perms (FP-0250 2.7) --
+
+    public function test_generation_sentinel_is_not_world_writable(): void
+    {
+        $db = $this->dbPath();
+        $store = new ConfigStore($db);
+        $store->set('style', 'taunt', 'admin', '');
+
+        $sentinel = dirname($db) . '/config.gen';
+        self::assertFileExists($sentinel);
+        $perms = fileperms($sentinel) & 0777;
+        self::assertSame(0644, $perms, sprintf('sentinel perms must be 0644, got 0%o', $perms));
+        self::assertSame(0, $perms & 0022, 'the sentinel must not be group/world-WRITABLE');
+    }
 }

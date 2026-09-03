@@ -567,7 +567,10 @@ final class ConfigStore
         $tmp = $this->sentinelPath . '.tmp';
         $wrote = false;
         if (@file_put_contents($tmp, (string) $gen) !== false) {
-            @chmod($tmp, 0666);
+            // FP-0250 2.7: 0666 -> 0644 (world-writable let any local user rewrite the generation and
+            // cache-poison/stale-config the whole box). The tmp+rename replace path needs directory-
+            // write, not file-write, so cross-process (fpm + a CLI listener) publishing is unaffected.
+            @chmod($tmp, 0644);
             $wrote = @rename($tmp, $this->sentinelPath); // atomic replace so a reader never sees a half-write
         }
         if (!$wrote) {
@@ -584,7 +587,7 @@ final class ConfigStore
             error_log($msg);
             @trigger_error($msg, E_USER_WARNING);
         }
-        @chmod($this->sentinelPath, 0666);
+        @chmod($this->sentinelPath, 0644); // FP-0250 2.7 — same rationale as the tmp file above
         if (function_exists('apcu_delete')) {
             apcu_delete($this->apcuSnapKey);
             apcu_delete($this->apcuGenKey);

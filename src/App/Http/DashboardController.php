@@ -298,9 +298,21 @@ final class DashboardController
                 'note' => 'Toggle which emulations funnypot serves. true = serve, false = off.',
                 'vulns' => $vulns,
             ];
-            @mkdir(dirname($file), 0777, true);
-            $wrote = @file_put_contents($file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-            echo json_encode(['ok' => $wrote !== false, 'saved' => $applied]);
+            // FP-0250 2.7: 0755 dir (was 0777, world-writable) + tmp+rename (atomic — a reader
+            // (EmulationPolicy::fromPackage()) must never see a torn/partial funnypot-vulns.json) + 0644
+            // on the published file (was implicit umask-only via a direct write, no explicit chmod).
+            @mkdir(dirname($file), 0755, true);
+            $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+            $tmp = $file . '.tmp';
+            $ok = @file_put_contents($tmp, $json) !== false;
+            if ($ok) {
+                @chmod($tmp, 0644);
+                $ok = @rename($tmp, $file);
+            }
+            if (!$ok) {
+                @unlink($tmp); // best-effort: never leave a stray .tmp behind on a failed write/rename
+            }
+            echo json_encode(['ok' => $ok, 'saved' => $ok ? $applied : 0]);
 
             return;
         }
