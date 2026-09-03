@@ -38,6 +38,12 @@ final class AppConfig
          *  gates the deliberately-slow hash so a username-spray never reaches it. Default 'admin'
          *  (matches the bootstrap seed); set empty to disable the overlay entirely. */
         public string $adminUser,
+        /** FP-0250 2.6: a shared knock token gating the GET/POST ?admin=login oracle (FUNNYPOT_ADMIN_KNOCK,
+         *  default ''). Env-only like the password/username above (kept OUT of ConfigRegistry so it is
+         *  never shown in the admin config panel) — when non-empty, the login form/action require
+         *  ?k=<token> (hash_equals) or fall through to the believable-404 decoy; default empty preserves
+         *  today's behaviour (form still reachable, unbranded + rate-limited regardless). */
+        public string $adminKnock,
         public bool $protocolsEnabled,
         public int $retainDays,
         public float $retainGb,
@@ -279,6 +285,7 @@ final class AppConfig
             decoyArchive: $onUnless0('FUNNYPOT_DECOY_ARCHIVE'),
             adminPassword: $str('FUNNYPOT_ADMIN_PASSWORD', ''),
             adminUser: $str('FUNNYPOT_ADMIN_USER', 'admin'),
+            adminKnock: $str('FUNNYPOT_ADMIN_KNOCK', ''),
             protocolsEnabled: $onUnless0('FUNNYPOT_PROTOCOLS'),
             retainDays: (int) ($str('FUNNYPOT_RETAIN_DAYS', '0')),
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),

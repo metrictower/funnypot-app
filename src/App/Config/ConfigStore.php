@@ -121,7 +121,7 @@ final class ConfigStore
         $out = [];
         foreach ($this->registry->entries() as $key => $e) {
             if (array_key_exists($key, $overrides)) {
-                $out[$key] = (string) $overrides[$key];
+                $out[$key] = $this->clampProtected($key, (string) $overrides[$key]);
                 continue;
             }
             $env = getenv((string) $e['env']);
@@ -141,7 +141,7 @@ final class ConfigStore
     {
         $overrides = $this->overrides();
         if (array_key_exists($key, $overrides)) {
-            return (string) $overrides[$key];
+            return $this->clampProtected($key, (string) $overrides[$key]);
         }
         $env = getenv($envKey);
         if ($env !== false && $env !== '') {
@@ -165,7 +165,7 @@ final class ConfigStore
         if ($key !== null) {
             $overrides = $this->overrides();
             if (array_key_exists($key, $overrides)) {
-                return (string) $overrides[$key];
+                return $this->clampProtected($key, (string) $overrides[$key]);
             }
         }
 
@@ -266,6 +266,10 @@ final class ConfigStore
         if (!$ok) {
             throw new RuntimeException($coerced);
         }
+        // FP-0250 2.3: env-as-ceiling for protected exposure knobs (fail-closed, BEFORE the txn — no
+        // partial write, no generation bump, no sentinel publish on a rejected set). A hijacked admin
+        // session must never be able to store a value LESS safe than the environment's own baseline.
+        $this->rejectIfLoosensProtectedCeiling($key, $coerced);
         $db = null;
         try {
             $db = $this->db();
@@ -394,6 +398,128 @@ final class ConfigStore
         }
     }
 
+    // ---------------------------------------------------------------- protected knobs (FP-0250 2.3) ---
+
+    /**
+     * The public FACE of {@see protectedBaseline()} — the current env-as-ceiling for $key, or null when
+     * $key is not a protected knob. Used by {@see \Funnypot\App\Admin\ConfigAdmin::listPayload()} so the
+     * admin UI can grey out unreachable options instead of round-tripping a rejected write.
+     */
+    public function protectedCeiling(string $key): ?string
+    {
+        return $this->registry->isProtected($key) ? $this->protectedBaseline($key) : null;
+    }
+
+    /**
+     * The env-as-ceiling baseline for a protected key: the SAME value + precedence `snapshot()` uses
+     * (stored overrides play no part here — the ceiling is env/default, on purpose, never itself
+     * clamped by a stored value), canonicalized through {@see ConfigRegistry::validate()} exactly as a
+     * real write would coerce it. Fail-closed: an uncoercible value, or an ordered knob's value that
+     * ends up with no {@see ConfigRegistry::safetyRank()} at all (a garbage enum/bool spelling that
+     * validate() itself could not normalise — should not happen given validate()'s own coercion, but
+     * this is the last line of defence), resolves to the SAFEST value in `safety_order` rather than to
+     * whatever came out of coercion. A protected+UNORDERED key (no `safety_order` — the hidden-path
+     * strings) has no notion of "safer": its baseline is simply the coerced env/default value itself.
+     *
+     * Deliberately diverges from {@see AppConfig::build()}'s OWN garbage-env fallback in one documented
+     * case: a garbage FUNNYPOT_MODE resolves to the RUNNING value 'public' there (only the exact string
+     * 'stealth' selects stealth), but the CEILING computed here falls back to 'stealth' (the safest
+     * value) — so a garbage env can never be leveraged to justify STORING a looser override. The store
+     * may then refuse to materialize even the value that is actually running; that is intended (env
+     * repair is the fix for a garbage FUNNYPOT_MODE, not a stored override).
+     */
+    private function protectedBaseline(string $key): string
+    {
+        $e = $this->registry->get($key);
+        if ($e === null) {
+            return '';
+        }
+        $env = (string) ($e['env'] ?? '');
+        $raw = $env !== '' ? getenv($env) : false;
+        if ($raw === false || $raw === '') {
+            $raw = (string) ($e['default'] ?? '');
+        }
+        [$ok, $coerced] = $this->registry->validate($key, $raw);
+        $order = $e['safety_order'] ?? null;
+        if (!is_array($order) || $order === []) {
+            // Protected + unordered: no "safer" — the baseline is the coerced value itself (a 'string'
+            // type never fails validate(), so $ok is always true in practice for this branch).
+            return $ok ? $coerced : $raw;
+        }
+        if (!$ok || $this->registry->safetyRank($key, $coerced) === null) {
+            return (string) $order[count($order) - 1]; // fail-closed: the SAFEST value, ascending order
+        }
+
+        return $coerced;
+    }
+
+    /**
+     * Write-side enforcement (FP-0250 2.3): throws when $coerced would store a value LESS safe than
+     * the current env-as-ceiling for a protected key. No-op for a non-protected key.
+     *
+     * @throws RuntimeException when the write would loosen exposure below the environment baseline
+     */
+    private function rejectIfLoosensProtectedCeiling(string $key, string $coerced): void
+    {
+        if (!$this->registry->isProtected($key)) {
+            return;
+        }
+        $baseline = $this->protectedBaseline($key);
+        $e = $this->registry->get($key);
+        $order = $e['safety_order'] ?? null;
+        if (!is_array($order) || $order === []) {
+            if ($coerced !== $baseline) {
+                throw new RuntimeException(
+                    "config set failed: '{$key}' is protected: it can only be changed via its environment variable"
+                );
+            }
+
+            return;
+        }
+        $rank = $this->registry->safetyRank($key, $coerced);
+        $baseRank = $this->registry->safetyRank($key, $baseline);
+        if ($rank === null || $baseRank === null || $rank < $baseRank) {
+            throw new RuntimeException(
+                "config set failed: '{$key}' is protected: a stored value may not be less safe than "
+                . "the environment ceiling ('{$baseline}')"
+            );
+        }
+    }
+
+    /**
+     * Read-side enforcement (FP-0250 2.3): clamp a resolved value back to the env-as-ceiling baseline
+     * when it is a protected key and $value is less safe than the CURRENT env (a row that was a
+     * legitimate override when written can become stale-unsafe purely because the operator tightened
+     * env afterward — write-time rejection alone cannot catch that). No-op for a non-protected key, or
+     * when $value already meets/exceeds the ceiling. Never baked into the APCu/memo snapshot — callers
+     * apply this AFTER {@see overrides()} resolves, so it is always evaluated against the live env.
+     */
+    private function clampProtected(string $key, string $value): string
+    {
+        if (!$this->registry->isProtected($key)) {
+            return $value;
+        }
+        $baseline = $this->protectedBaseline($key);
+        $e = $this->registry->get($key);
+        $order = $e['safety_order'] ?? null;
+        if (!is_array($order) || $order === []) {
+            if ($value === $baseline) {
+                return $value;
+            }
+            error_log("ConfigStore: ignoring a stale/unsafe stored override for protected key '{$key}' (env-only)");
+
+            return $baseline;
+        }
+        $rank = $this->registry->safetyRank($key, $value);
+        $baseRank = $this->registry->safetyRank($key, $baseline);
+        if ($rank !== null && $baseRank !== null && $rank >= $baseRank) {
+            return $value;
+        }
+        error_log("ConfigStore: clamping a stale/unsafe stored override for protected key '{$key}' back to the environment ceiling '{$baseline}'");
+
+        return $baseline;
+    }
+
     // ---------------------------------------------------------------- internals --------------------
 
     private function currentValue(PDO $db, string $key): ?string
@@ -441,7 +567,10 @@ final class ConfigStore
         $tmp = $this->sentinelPath . '.tmp';
         $wrote = false;
         if (@file_put_contents($tmp, (string) $gen) !== false) {
-            @chmod($tmp, 0666);
+            // FP-0250 2.7: 0666 -> 0644 (world-writable let any local user rewrite the generation and
+            // cache-poison/stale-config the whole box). The tmp+rename replace path needs directory-
+            // write, not file-write, so cross-process (fpm + a CLI listener) publishing is unaffected.
+            @chmod($tmp, 0644);
             $wrote = @rename($tmp, $this->sentinelPath); // atomic replace so a reader never sees a half-write
         }
         if (!$wrote) {
@@ -458,7 +587,7 @@ final class ConfigStore
             error_log($msg);
             @trigger_error($msg, E_USER_WARNING);
         }
-        @chmod($this->sentinelPath, 0666);
+        @chmod($this->sentinelPath, 0644); // FP-0250 2.7 — same rationale as the tmp file above
         if (function_exists('apcu_delete')) {
             apcu_delete($this->apcuSnapKey);
             apcu_delete($this->apcuGenKey);

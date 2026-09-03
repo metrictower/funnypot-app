@@ -70,13 +70,21 @@ final class DashboardController
         if (!$this->authed()) {
             $view = $this->publicView();
             if ($view === 'none') {
-                http_response_code(404);
+                // FP-0250 2.8: the believable honeypot 404, byte-identical to a probe of ANY other path
+                // — not an empty body (§1.6's bare-GET oracle: an empty 404 was the ONE zero-byte 404 on
+                // the box, precisely spotting the hidden dashboard path on a plain GET sweep, no
+                // ?admin=login knock needed). Runs before any header (header discipline, same as 2.6).
+                // FP-0250 2.9: pay the same latencyMs/jitterMs delay a genuine miss pays (timing parity
+                // — see HoneypotController::serveDelayFor()) before the 404 itself.
+                HoneypotController::serveDelayFor($this->config);
+                HoneypotController::serveBelievable404();
 
                 return;
             }
             if ($view === 'minimal') {
                 header('Content-Type: application/json');
                 header('Cache-Control: no-store');
+                header('Referrer-Policy: no-referrer');
                 echo json_encode(['reset' => false, 'rows' => [], 'cursor' => 0, 'stats' => [], 'widgets' => []]);
 
                 return;
@@ -85,6 +93,9 @@ final class DashboardController
 
         header('Content-Type: application/json');
         header('Cache-Control: no-store');
+        // Referrer-Policy on every real feed response (FP-0250 2.2) — belt over 2.1's removal of every
+        // external load; never emitted on the 'none' 404 decoy above (header discipline, 2.6/2.8).
+        header('Referrer-Policy: no-referrer');
 
         // JSON_INVALID_UTF8_SUBSTITUTE: a stored row can still hold non-UTF-8 bytes from the binary
         // protocol honeypots; without this one bad byte makes json_encode return false and the feed
@@ -143,14 +154,20 @@ final class DashboardController
      */
     public function admin(string $action): void
     {
-        header('Content-Type: application/json');
-        header('Cache-Control: no-store');
-
+        // 'login' is dispatched BEFORE the generic headers below (FP-0250 2.6 header discipline):
+        // handleLogin() runs the knock-token check first and, on a decoy, must emit ONLY the honeypot
+        // 404's own headers — no Content-Type: application/json, no Cache-Control: no-store, so a wrong
+        // knock never carries a header-shaped tell either. handleLogin() sets those headers itself on
+        // the real (non-decoy) path.
         if ($action === 'login') {
             $this->handleLogin();
 
             return;
         }
+
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+
         if ($action === 'logout') {
             $this->auth?->logout();
             echo json_encode(['ok' => true]);
@@ -284,9 +301,21 @@ final class DashboardController
                 'note' => 'Toggle which emulations funnypot serves. true = serve, false = off.',
                 'vulns' => $vulns,
             ];
-            @mkdir(dirname($file), 0777, true);
-            $wrote = @file_put_contents($file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-            echo json_encode(['ok' => $wrote !== false, 'saved' => $applied]);
+            // FP-0250 2.7: 0755 dir (was 0777, world-writable) + tmp+rename (atomic — a reader
+            // (EmulationPolicy::fromPackage()) must never see a torn/partial funnypot-vulns.json) + 0644
+            // on the published file (was implicit umask-only via a direct write, no explicit chmod).
+            @mkdir(dirname($file), 0755, true);
+            $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+            $tmp = $file . '.tmp';
+            $ok = @file_put_contents($tmp, $json) !== false;
+            if ($ok) {
+                @chmod($tmp, 0644);
+                $ok = @rename($tmp, $file);
+            }
+            if (!$ok) {
+                @unlink($tmp); // best-effort: never leave a stray .tmp behind on a failed write/rename
+            }
+            echo json_encode(['ok' => $ok, 'saved' => $ok ? $applied : 0]);
 
             return;
         }
@@ -370,6 +399,17 @@ final class DashboardController
     /** POST ?admin=login — verify credentials + mint a session (runs the lockout path). No prior session. */
     private function handleLogin(): void
     {
+        // Knock-token check FIRST, before any header (FP-0250 2.6 header discipline — see admin()'s
+        // dispatch comment above). A wrong/missing ?k= gets the SAME believable 404 the GET form gives.
+        // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
+        if (!$this->knockOk()) {
+            HoneypotController::serveDelayFor($this->config);
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
         if ($this->auth === null) {
             http_response_code(403);
             echo json_encode(['ok' => false, 'error' => 'auth unavailable']);
@@ -380,6 +420,23 @@ final class DashboardController
         $pass = (string) ($_POST['pass'] ?? ($_POST['password'] ?? ''));
         $ip = HoneypotController::clientIp($this->config->trustedProxies);
         echo json_encode($this->auth->login($user, $pass, $ip));
+    }
+
+    /**
+     * FP-0250 2.6 knock token: true when the login form/action is reachable for this request. When
+     * FUNNYPOT_ADMIN_KNOCK is empty (default), the knock is off and this is always true (today's
+     * behaviour — the form is still unbranded + rate-limited regardless). When set, the SAME token must
+     * be present as ?k= (constant-time compared) on both the GET form and the POST action.
+     */
+    private function knockOk(): bool
+    {
+        $knock = $this->config->adminKnock;
+        if ($knock === '') {
+            return true;
+        }
+        $given = (string) ($_GET['k'] ?? '');
+
+        return $given !== '' && hash_equals($knock, $given);
     }
 
     /** config-list / config-audit (reads) and config-set / config-reset (already CSRF-checked). */
@@ -439,6 +496,43 @@ final class DashboardController
     }
 
     /**
+     * A fresh per-request nonce for every inline <style>/<script> tag this response emits. CSPRNG,
+     * never reused across requests (FP-0250 2.2) — {@see securityHeaders()} echoes the SAME value in
+     * the CSP header, so a tag missing it is rejected by the browser rather than silently trusted.
+     */
+    private function newNonce(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Emit the CSP + hardening headers for real dashboard surface (shell/minimalShell/loginForm).
+     * NEVER call this on a decoy/404 branch (FP-0250 2.6/2.8 header discipline) — a 404 that uniquely
+     * carried these headers would itself be a new oracle for the hidden dashboard path.
+     *
+     * CSP is deliberately strict: default-src 'none', script-src/style-src nonce-only (no external
+     * origin, no 'unsafe-inline') so a compromised/MITM'd third party can never run in this session —
+     * the operator session holds the CSRF token (now no longer even a JS global, see the meta tag
+     * below). style-src-attr allows inline style="" ATTRIBUTES only (app.js writes style="width:X%"
+     * bar-widget templates; the shell has a few inline style= attrs) — attribute styles cannot execute
+     * script, so the strict nonce-only script-src is uncompromised by this allowance. Referrer-Policy:
+     * no-referrer is belt-over-suspenders now that 2.1 removed every external load — it also means an
+     * operator clicking any future external link never leaks the hidden dashboard path in the Referer.
+     */
+    private function securityHeaders(string $nonce): void
+    {
+        header(
+            "Content-Security-Policy: default-src 'none'; script-src 'nonce-{$nonce}'; "
+            . "style-src 'nonce-{$nonce}'; style-src-attr 'unsafe-inline'; img-src 'self' data:; "
+            . "connect-src 'self'; media-src 'self'; form-action 'self'; base-uri 'none'; "
+            . "frame-ancestors 'none'"
+        );
+        header('Referrer-Policy: no-referrer');
+        header('X-Content-Type-Options: nosniff');
+        header('X-Frame-Options: DENY');
+    }
+
+    /**
      * The login form (GET ?admin=login). Served regardless of public_view so the operator can always
      * reach a way in even under 'none' (a known-query knock, not a visible tell — a bare GET of the
      * dashboard path still 404s under 'none'). A tiny standalone page: username/password → POST
@@ -446,34 +540,67 @@ final class DashboardController
      */
     public function loginForm(string $base = '/'): void
     {
+        // Knock + rate-limit checks FIRST, before ANY header (FP-0250 2.6 header discipline): the decoy
+        // branches below emit ONLY the honeypot 404's own headers — no Content-Type: text/html, no
+        // Cache-Control: no-store, no securityHeaders() — so a 404 never uniquely carries a header-shaped
+        // tell distinguishing the hidden dashboard path from any other probed path.
+        // FP-0250 2.9: timing parity with a genuine miss on both decoy branches below (see
+        // HoneypotController::serveDelayFor()).
+        if (!$this->knockOk()) {
+            HoneypotController::serveDelayFor($this->config);
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        $ip = HoneypotController::clientIp($this->config->trustedProxies);
+        if ($this->auth !== null && $this->auth->isFormRateLimited($ip)) {
+            HoneypotController::serveDelayFor($this->config);
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        $this->auth?->recordFormView($ip);
+
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-store');
+        $this->securityHeaders($nonce);
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $baseJs = json_encode($base, JSON_UNESCAPED_SLASHES);
+        // The knock (if any) rides the POST URL too, so the login JS keeps working under a configured
+        // FUNNYPOT_ADMIN_KNOCK — the operator already proved they know it just to see this form.
+        $knockJs = json_encode($this->config->adminKnock, JSON_UNESCAPED_SLASHES);
         echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style>{$css}"
+        // FP-0250 2.6: unbranded — a neutral title, no "funnypot" string, no honey class. A scanner
+        // spraying ?admin=login across paths must not learn "this is funnypot" from the form itself
+        // (the authed shell() may keep its branding — it is only ever served to a logged-in operator).
+        echo "<title>Sign in</title><style nonce=\"{$nonce}\">{$css}"
             . '.lf{max-width:320px;margin:12vh auto;padding:24px;border:1px solid var(--line,#333);border-radius:10px}'
             . '.lf input{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:8px}'
             . '.lf .err{color:#e66;min-height:1.2em;font-size:13px}</style></head><body><div class=wrap>';
-        echo '<form class=lf id=lf onsubmit="return false">';
-        echo '<h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>';
+        // No inline onsubmit= handler (CSP has no 'unsafe-inline' for script-src attributes either) —
+        // the nonced listener below calls e.preventDefault() instead.
+        echo '<form class=lf id=lf>';
+        echo '<h1>Sign in</h1>';
         echo '<input id=lf_user placeholder=username autocomplete=username autofocus>';
         echo '<input id=lf_pass type=password placeholder=password autocomplete=current-password>';
         echo '<div class=err id=lf_err></div>';
         echo '<button class=btn id=lf_go type=submit>Sign in</button>';
         echo '</form>';
-        echo '<script>window.FP_BASE=' . $baseJs . ';</script>';
-        echo '<script>(function(){var b=window.FP_BASE||"/";'
+        echo "<script nonce=\"{$nonce}\">window.FP_BASE=" . $baseJs . ';</script>';
+        echo "<script nonce=\"{$nonce}\">(function(){var b=window.FP_BASE||\"/\";var k=" . $knockJs . ';'
             . 'function q(id){return document.getElementById(id);}'
-            . 'q("lf").addEventListener("submit",async function(){'
+            . 'q("lf").addEventListener("submit",function(e){'
+            . 'e.preventDefault();'
             . 'q("lf_err").textContent="";'
             . 'var body="user="+encodeURIComponent(q("lf_user").value)+"&pass="+encodeURIComponent(q("lf_pass").value);'
-            . 'try{var r=await fetch(b+"?admin=login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});'
-            . 'var j=await r.json();'
-            . 'if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}'
-            . '}catch(e){q("lf_err").textContent="login failed";}'
-            . 'return false;});})();</script>';
+            . 'var url=b+"?admin=login"+(k?"&k="+encodeURIComponent(k):"");'
+            . 'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body})'
+            . '.then(function(r){return r.json();})'
+            . '.then(function(j){if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}})'
+            . '.catch(function(){q("lf_err").textContent="login failed";});'
+            . '});})();</script>';
         echo '</div></body></html>';
     }
 
@@ -484,11 +611,13 @@ final class DashboardController
      */
     private function minimalShell(): void
     {
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
+        $this->securityHeaders($nonce);
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style>{$css}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}</style></head><body><div class=wrap>";
         echo '<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1></div>';
         echo '<p class=lead>This host is a honeypot. Each request is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted.</p>';
         echo '<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time.</footer>';
@@ -510,7 +639,11 @@ final class DashboardController
         if (!$authed) {
             $view = $this->publicView();
             if ($view === 'none') {
-                http_response_code(404);
+                // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment) — header
+                // discipline: runs before any header this method would otherwise emit.
+                // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
+                HoneypotController::serveDelayFor($this->config);
+                HoneypotController::serveBelievable404();
 
                 return;
             }
@@ -521,7 +654,9 @@ final class DashboardController
             }
         }
 
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
+        $this->securityHeaders($nonce);
 
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $js = (string) @file_get_contents($this->assetsDir . '/app.js');
@@ -530,11 +665,19 @@ final class DashboardController
         $uplotCss = (string) @file_get_contents($this->assetsDir . '/uplot.min.css');
         $uplotJs = (string) @file_get_contents($this->assetsDir . '/uplot.min.js');
         $analyticsJs = (string) @file_get_contents($this->assetsDir . '/analytics.js');
+        // FP-0250 (2.1): Leaflet 1.9.4 is vendored + inlined the SAME way uPlot is above — no unpkg.com
+        // load in the authed shell (third-party JS in a session holding the CSRF token, plus a Referer
+        // leak of the hidden dashboard path on the default referrer policy). The world outline (below,
+        // near the map init script) replaces the CARTO raster tile layer, so there is no second
+        // external load either; L.circleMarker (app.js) needs no image assets, so Leaflet's own
+        // default-icon URLs (referenced only in leaflet.min.css, never applied) are never fetched.
+        $leafletCss = (string) @file_get_contents($this->assetsDir . '/leaflet.min.css');
+        $leafletJs = (string) @file_get_contents($this->assetsDir . '/leaflet.min.js');
+        $worldOutline = (string) @file_get_contents($this->assetsDir . '/world-outline.json');
 
         echo "<!doctype html><html lang=en><head><meta charset=utf-8>";
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<link rel=stylesheet href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' crossorigin>";
-        echo "<title>funnypot</title><style>{$css}{$uplotCss}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}{$uplotCss}{$leafletCss}</style></head><body><div class=wrap>";
         echo "<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>";
         echo "<span id=live class=live><span class=dot></span> live</span></div>";
         echo "<p class=lead>This host is a honeypot. Each row is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted. Updates live.</p>";
@@ -603,7 +746,7 @@ final class DashboardController
             ? "<button id=alogout class=btn title='sign out of the operator session'>logout</button>"
             : "<button id=alogin class=btn title='operator sign in'>login</button>";
         echo "</span></div>";
-        echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map &copy; OpenStreetMap, CARTO</footer>";
+        echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map outline &copy; Natural Earth (public domain)</footer>";
         echo "<div id=vmodal class=modal hidden><div class=modal-box>";
         echo "<div class=modal-head><b>Emulations</b><input id=vsearch class=filter placeholder='search&hellip;'><span class=grow></span><button id=vclose class=x title=close>&times;</button></div>";
         echo "<div id=vlist class=vlist></div>";
@@ -651,16 +794,24 @@ final class DashboardController
         echo "<button id=caudit class=btn title='show the change audit log'>audit</button><button id=crefresh class=btn>refresh</button><button id=cclose class=x title=close>&times;</button></div>";
         echo "<div class=abody><div id=cstat class=note style='margin:0 0 8px'></div><div id=clist></div><div id=cauditbox class=vlist hidden></div></div>";
         echo "</div></div>";
-        echo "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' crossorigin></script>";
-        echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
-        // Session state for the JS: whether this viewer is authenticated, and (only then) the
-        // per-session CSRF token to attach to mutating POSTs. FP_CSRF is empty for an unauthenticated
-        // viewer — a token is never emitted to a page that has no session.
-        echo '<script>window.FP_AUTHED=' . ($authed ? 'true' : 'false')
-            . ';window.FP_CSRF=' . json_encode($authed ? (string) $this->auth->csrfToken() : '', JSON_UNESCAPED_SLASHES) . ';</script>';
-        echo "<script>{$uplotJs}</script>";
-        echo "<script>{$js}</script>";
-        echo "<script>{$analyticsJs}</script>";
+        // Session-scoped CSRF token (FP-0250 2.2): a <meta> tag, authed-only, exactly like today's
+        // window.FP_CSRF conditional — never emitted to a page with no session. NOT a JS global: it is
+        // no longer reachable by enumerating window or a later DOM query once app.js reads + removes
+        // this node at startup (see the closure-scoped read in app.js). window.FP_AUTHED stays a global
+        // (a boolean, not a secret).
+        if ($authed) {
+            echo '<meta name="fp-csrf" content="' . htmlspecialchars((string) $this->auth->csrfToken(), ENT_QUOTES) . '">';
+        }
+        echo "<script nonce=\"{$nonce}\">{$leafletJs}</script>";
+        // The tile-free basemap (FP-0250 2.1): a simplified world-outline GeoJSON, inlined same-origin
+        // like every other asset on this page, rendered via L.geoJSON on the dark background instead of
+        // fetching raster tiles from a CDN. app.js reads window.FP_WORLD_OUTLINE from initMap().
+        echo "<script nonce=\"{$nonce}\">window.FP_WORLD_OUTLINE=" . ($worldOutline !== '' ? $worldOutline : 'null') . ';</script>';
+        echo "<script nonce=\"{$nonce}\">window.FP_BASE=" . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
+        echo "<script nonce=\"{$nonce}\">window.FP_AUTHED=" . ($authed ? 'true' : 'false') . ';</script>';
+        echo "<script nonce=\"{$nonce}\">{$uplotJs}</script>";
+        echo "<script nonce=\"{$nonce}\">{$js}</script>";
+        echo "<script nonce=\"{$nonce}\">{$analyticsJs}</script>";
         echo "</div></body></html>";
     }
 
@@ -671,7 +822,12 @@ final class DashboardController
         // it; an unauthenticated visitor gets it ONLY under explicit public_view=full — under 'none'/
         // 'minimal' it is a 404 decoy with no audio bytes (fails toward less exposure).
         if (!$this->authed() && $this->publicView() !== 'full') {
-            http_response_code(404);
+            // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment). Covers BOTH
+            // 'none' and 'minimal' here — captured call audio stays fully gated even under the reduced
+            // public chrome, unlike shell()/feed()'s own 'minimal' branches.
+            // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
+            HoneypotController::serveDelayFor($this->config);
+            HoneypotController::serveBelievable404();
 
             return;
         }

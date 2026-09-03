@@ -8,6 +8,8 @@ use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Http\DashboardController;
+use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\Storage\Sqlite;
 use Funnypot\App\Storage\SqliteHitStore;
 use PHPUnit\Framework\TestCase;
 
@@ -19,8 +21,10 @@ require_once dirname(__DIR__, 3) . '/demo/lib/geo.php';
  * enforcement fails toward LESS exposure: the registry/AppConfig baseline is 'none', a config-read
  * fault resolves to that baseline, and any unknown value clamps to 'none'.
  *
- * The CLI SAPI makes http_response_code() unreadable, so a 'none' 404 is asserted as an EMPTY body
- * (the controller returns before emitting any dashboard bytes) and the other levels by body content.
+ * FP-0250 2.8: a 'none' 404 is no longer an empty body — it is the honeypot's own believable 404
+ * (HoneypotController::serveBelievable404()), closing the bare-GET oracle where the one zero-byte 404
+ * on the box precisely spotted the hidden dashboard path on a plain GET sweep. Asserted here via
+ * {@see believable404Body()} against the SAME bytes any other probed path gets.
  */
 final class DashboardPublicViewTest extends TestCase
 {
@@ -127,6 +131,13 @@ final class DashboardPublicViewTest extends TestCase
         return (string) ob_get_clean();
     }
 
+    /** The exact believable-404 body (FP-0250 2.8) — captured through the SAME public helper so a
+     *  future edit to the shared constant is picked up here automatically, never hand-duplicated. */
+    private function believable404Body(): string
+    {
+        return $this->body(static fn () => HoneypotController::serveBelievable404());
+    }
+
     // --- T-PV-1: none ⇒ unauth sees nothing, authed sees full ---
 
     public function test_none_unauthenticated_shell_and_feed_emit_nothing(): void
@@ -134,9 +145,10 @@ final class DashboardPublicViewTest extends TestCase
         $config = $this->configFor('none');
         self::assertSame('none', $config->dashboardPublicView);
         $c = $this->controller($config, $this->auth_noSession());
+        $decoy = $this->believable404Body();
 
-        self::assertSame('', $this->body(fn () => $c->shell('/__fp/')), 'a 404 decoy emits no dashboard HTML');
-        self::assertSame('', $this->body(fn () => $c->feed()), 'the feed emits no bytes to an unauth visitor under none');
+        self::assertSame($decoy, $this->body(fn () => $c->shell('/__fp/')), 'a 404 decoy emits no dashboard HTML — the honeypot 404, not empty (FP-0250 2.8)');
+        self::assertSame($decoy, $this->body(fn () => $c->feed()), 'the feed emits the honeypot 404 to an unauth visitor under none, not empty bytes');
     }
 
     public function test_none_authenticated_operator_sees_the_full_view(): void
@@ -192,9 +204,9 @@ final class DashboardPublicViewTest extends TestCase
         $config = $this->configFor('none');
         $c = $this->controller($config, $this->auth_noSession());
 
-        // Even though the recording FILE exists, an unauthenticated visitor under 'none' gets a bare
-        // 404 with NO audio bytes.
-        self::assertSame('', $this->body(fn () => $c->recording($id)), 'no audio may leak to an unauth visitor under none');
+        // Even though the recording FILE exists, an unauthenticated visitor under 'none' gets the
+        // honeypot's believable 404 with NO audio bytes (FP-0250 2.8 — not an empty body).
+        self::assertSame($this->believable404Body(), $this->body(fn () => $c->recording($id)), 'no audio may leak to an unauth visitor under none');
     }
 
     public function test_authenticated_operator_is_served_the_recording_under_none(): void
@@ -224,17 +236,34 @@ final class DashboardPublicViewTest extends TestCase
         $config = $this->configFor('garbage');
         self::assertSame('none', $config->dashboardPublicView, 'an unknown value clamps to the least-exposed level');
         $c = $this->controller($config, $this->auth_noSession());
-        self::assertSame('', $this->body(fn () => $c->shell('/__fp/')), 'and an unknown value 404s the unauth visitor');
+        self::assertSame($this->believable404Body(), $this->body(fn () => $c->shell('/__fp/')), 'and an unknown value 404s the unauth visitor with the honeypot 404');
     }
 
     public function test_config_read_fault_resolves_to_the_baseline_none(): void
     {
-        // A stored 'full' override that becomes UNREADABLE (corrupt db) must not leave 'full' resolved:
-        // the store fails safe to the baseline, and the baseline is the least-exposed 'none'.
+        // A stored 'full' row that becomes UNREADABLE (corrupt db) must not leave 'full' resolved: the
+        // store fails safe to the baseline, and the baseline is the least-exposed 'none'. Planted via a
+        // raw SQL row (not ConfigStore::set(), which FP-0250 2.3 now rejects outright when it would
+        // loosen exposure below the CURRENT env ceiling) while env FUNNYPOT_PUBLIC_VIEW=full so the row
+        // is a legitimate, non-clamped override right up until the fault — isolating THIS test's fault
+        // path (overrides() itself throwing, an orthogonal fail-safe mechanism to 2.3's protected-knob
+        // clamp) from 2.3's own read-time clamp, which ConfigStoreProtectedTest covers directly.
         $dbPath = $this->path('cfg');
-        $store = new ConfigStore($dbPath);
-        $store->set('dashboard.public_view', 'full', 'admin', '203.0.113.5');
-        self::assertSame('full', $store->get('dashboard.public_view', 'FUNNYPOT_PUBLIC_VIEW', 'none'));
+        $raw = Sqlite::open($dbPath);
+        $raw->exec('CREATE TABLE IF NOT EXISTS config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT ""
+        )');
+        $raw->exec('CREATE TABLE IF NOT EXISTS config_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)');
+        $raw->exec("INSERT INTO config (key, value, updated_at, updated_by) VALUES ('dashboard.public_view', 'full', '2026-01-01T00:00:00Z', 'legacy')");
+        $raw->exec("INSERT INTO config_meta (k, v) VALUES ('generation', 1) ON CONFLICT(k) DO UPDATE SET v = v + 1");
+        @file_put_contents(dirname($dbPath) . '/config.gen', '1');
+        putenv('FUNNYPOT_PUBLIC_VIEW=full');
+        $planted = new ConfigStore($dbPath);
+        self::assertSame('full', $planted->get('dashboard.public_view', 'FUNNYPOT_PUBLIC_VIEW', 'none'), 'sanity: the planted row resolves (env=full is its own ceiling) before the fault');
+        putenv('FUNNYPOT_PUBLIC_VIEW'); // unset again — the fault below must resolve to the DEFAULT baseline 'none', not env
 
         // Make the store UNREADABLE: drop the db + its WAL sidecars and put a DIRECTORY at the path so
         // any open/query throws (a plain corrupt-header file is silently recovered from the intact -wal,
@@ -247,7 +276,7 @@ final class DashboardPublicViewTest extends TestCase
         self::assertSame('none', $config->dashboardPublicView, 'a config-read fault resolves to the baseline none, never full');
 
         $c = $this->controller($config, $this->auth_noSession());
-        self::assertSame('', $this->body(fn () => $c->shell('/__fp/')), 'and the unauth visitor then 404s');
+        self::assertSame($this->believable404Body(), $this->body(fn () => $c->shell('/__fp/')), 'and the unauth visitor then 404s with the honeypot 404');
     }
 
     public function test_documented_edge_a_store_fault_falls_back_to_env_not_the_stored_override(): void

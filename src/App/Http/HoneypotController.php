@@ -44,14 +44,42 @@ final class HoneypotController
     ) {
     }
 
-    /** A small delay applied to the LLM fake and the plain 404 so their timing matches a served
-     *  template fake (which already delays inside the engine), leaving at most one timing bucket. */
-    private function serveDelay(): void
+    /**
+     * FP-0250 2.9: the config-driven latency delay a genuine honeypot miss pays before its 404
+     * (latencyMs + jitter, same math serveDelay() below has always used). Extracted static + public
+     * so DashboardController's decoy-404 branches (feed/handleLogin/loginForm/shell/recording — a
+     * knock-fail, a rate-limit, or public_view=none) can pay the SAME cost immediately before
+     * HoneypotController::serveBelievable404(), closing the timing side-channel that let the hidden
+     * dashboard path be fingerprinted by latency even though its bytes/headers already matched a
+     * genuine miss: an unauthenticated 404 there previously called serveBelievable404() directly with
+     * none of the delay a real miss pays via handle() below, so it answered several ms faster
+     * (dominated by the missing 0-jitterMs term) than a random-unmapped-path control — a gap easily
+     * distinguished by medianing a few dozen timed requests per candidate path. Config-driven (reads
+     * $config->latencyMs/jitterMs, not a hardcoded constant) so an operator who tunes jitter keeps
+     * both surfaces matched automatically. Deliberately does NOT reproduce the engine detect/respond
+     * pass, the store->append() write, or the geo->lookup() a real miss also does inside handle() —
+     * that would (a) mislog the operator's own decoy hits into the hit store/geo cache as if they were
+     * attacker traffic, which is a worse correctness problem than a residual timing gap, and (b) is
+     * unnecessary: jitterMs defaults to 40 (a 0-40ms uniform term, ~20ms mean) which swamps the ~1ms
+     * that engine+store+geo work costs, so the jitter term alone closes the exploitable gap within the
+     * noise floor of both the jitter distribution and ordinary network latency. See
+     * DashboardHttpServerTrait-based timing test for the empirical check.
+     */
+    public static function serveDelayFor(AppConfig $config): void
     {
-        $ms = $this->config->latencyMs + ($this->config->jitterMs > 0 ? random_int(0, $this->config->jitterMs) : 0);
+        $ms = $config->latencyMs + ($config->jitterMs > 0 ? random_int(0, $config->jitterMs) : 0);
         if ($ms > 0) {
             usleep($ms * 1000);
         }
+    }
+
+    /** A small delay applied to the LLM fake and the plain 404 so their timing matches a served
+     *  template fake (which already delays inside the engine), leaving at most one timing bucket.
+     *  Delegates to serveDelayFor() (FP-0250 2.9) so this controller's three call sites below and the
+     *  dashboard's decoy-404 branches share one implementation and cannot drift apart. */
+    private function serveDelay(): void
+    {
+        self::serveDelayFor($this->config);
     }
 
     /** True if the client IP is a known attacker (present in the intel blocklist). */
@@ -75,7 +103,7 @@ final class HoneypotController
     public static function clientIp(array $trustedProxies = []): string
     {
         $remote = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        if ($trustedProxies === [] || !self::ipInCidrList($remote, $trustedProxies)) {
+        if ($trustedProxies === [] || !self::isTrustedPeer($trustedProxies)) {
             return $remote;
         }
 
@@ -87,6 +115,45 @@ final class HoneypotController
         }
 
         return $remote;
+    }
+
+    /**
+     * True when the TCP peer (REMOTE_ADDR) is itself a configured trusted proxy (FP-0250 2.5). Public
+     * so demo/index.php can gate honouring X-Forwarded-Proto on the SAME trust boundary XFF already
+     * uses via clientIp() above — an untrusted peer's XFP must not be believed either, else any client
+     * could forge "I'm HTTPS" and flip the admin session cookie's Secure flag off over plain HTTP.
+     * Empty $trustedProxies (the edge deployment, no proxy in front) always returns false — the
+     * default-closed direction: no declared proxy list means nothing is trusted.
+     *
+     * @param string[] $trustedProxies IPs / CIDRs of proxies in front of us
+     */
+    public static function isTrustedPeer(array $trustedProxies): bool
+    {
+        if ($trustedProxies === []) {
+            return false;
+        }
+
+        return self::ipInCidrList((string) ($_SERVER['REMOTE_ADDR'] ?? ''), $trustedProxies);
+    }
+
+    /**
+     * The honeypot's own believable 404 — byte-for-byte the SAME body + Content-Type (no charset) a
+     * probe of any non-dashboard path already gets from the two call sites below. FP-0250 2.6/2.8 reuse
+     * this SAME constant for the dashboard's decoy branches (a wrong knock token, a rate-limited login
+     * form, and the bare-GET public_view=none 404 in DashboardController) so the hidden dashboard
+     * surface is byte-indistinguishable from any other probed path — extracting this common body is
+     * what makes that reuse a guaranteed match rather than two copies that could drift apart. Emits
+     * ONLY the status + this one header + this one body — never a security header, never
+     * Cache-Control: no-store, so a 404 never uniquely carries a header-shaped tell either. Callers on
+     * the dashboard surface MUST run this before emitting ANY other header (order is load-bearing).
+     */
+    public static function serveBelievable404(): void
+    {
+        http_response_code(404);
+        header('Content-Type: text/html');
+        echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
+            . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
+            . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
     }
 
     /** True if $ip matches any entry (a bare IP is exact-match; an a.b.c.d/n is an IPv4 CIDR). */
@@ -167,11 +234,7 @@ final class HoneypotController
         // surface. Checked before the engine so a blocked source costs one O(1) lookup + a static 404.
         if ($this->operatorBlock !== null && $this->operatorBlock->isBlocked($clientIp)) {
             $this->serveDelay();
-            http_response_code(404);
-            header('Content-Type: text/html');
-            echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
-                . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
-                . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+            self::serveBelievable404();
 
             return;
         }
@@ -282,11 +345,7 @@ final class HoneypotController
                 ResponseEmitter::emit($llm);
             } else {
                 // Non-detection (or matched-but-declined): a believable server 404, not a constant string.
-                http_response_code(404);
-                header('Content-Type: text/html');
-                echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
-                    . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
-                    . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+                self::serveBelievable404();
             }
         }
 
