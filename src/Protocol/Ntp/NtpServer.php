@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Ntp;
 
+use Funnypot\Protocol\UdpResponseBucket;
+
 /**
  * Zero-dependency, single-process UDP server for the low-interaction NTP honeypot (port 123).
  * Parses the 48-byte NTP packet in pure PHP on a non-blocking stream_select loop over one UDP socket
@@ -28,6 +30,8 @@ namespace Funnypot\Protocol\Ntp;
  */
 final class NtpServer
 {
+    use UdpResponseBucket;
+
     private const TICK_INTERVAL_US = 200000; // 200ms select tick
     private const READ_CHUNK = 65535;        // a single UDP datagram
     private const INBUF_CAP = 65535;         // an NTP message never legitimately approaches this
@@ -50,16 +54,15 @@ final class NtpServer
     private const RX_DELTA_FRAC = 0x00010000; // ~15 microseconds
     private const TX_DELTA_FRAC = 0x00008000; // ~7.5 microseconds
 
-    /**
-     * Per-source-IP token bucket throttling UDP responses (anti-reflection). A spoofed request forges
-     * its source as a victim, so every reply we emit lands on that victim — capping replies per
-     * apparent source bounds how hard the honeypot can be turned into a reflector.
-     * @var array<string, array{tokens: float, last: float}>
-     */
-    private array $udpResponseBuckets = [];
+    // Per-source-IP token bucket throttling UDP responses (anti-reflection); see UdpResponseBucket.
+    // A spoofed request forges its source as a victim, so every reply we emit lands on that victim —
+    // capping replies per apparent source bounds how hard the honeypot can be turned into a reflector.
     private const UDP_RESP_BURST = 20.0;      // bucket capacity
     private const UDP_RESP_RATE = 10.0;       // tokens refilled per second
     private const UDP_BUCKET_MAX_IPS = 4096;  // cap tracked IPs so the map can't grow unbounded
+    // FP-0248: a new/evicted-and-re-admitted IP is seeded DEPLETED, not a full burst — see the trait's
+    // doc block for why this defeats spoofed-source-rotation LRU cycling and why 2.0 (not 1.0).
+    private const UDP_RESP_SEED = 2.0;
 
     /**
      * @param callable(array<string,mixed>):void $logger
@@ -346,45 +349,7 @@ final class NtpServer
     }
 
     // ---- Anti-reflection throttle -------------------------------------------------------------
-
-    /**
-     * Token-bucket admission for a UDP reply to $ip. Returns false when the apparent source has
-     * drained its bucket, so the reply is dropped rather than reflected.
-     */
-    private function udpResponseAllowed(string $ip): bool
-    {
-        $now = microtime(true);
-
-        if (!isset($this->udpResponseBuckets[$ip])) {
-            // Bound the map: when full, drop the least-recently-refilled entry before adding one.
-            if (count($this->udpResponseBuckets) >= self::UDP_BUCKET_MAX_IPS) {
-                $oldestKey = null;
-                $oldestAt = INF;
-                foreach ($this->udpResponseBuckets as $k => $b) {
-                    if ($b['last'] < $oldestAt) {
-                        $oldestAt = $b['last'];
-                        $oldestKey = $k;
-                    }
-                }
-                if ($oldestKey !== null) {
-                    unset($this->udpResponseBuckets[$oldestKey]);
-                }
-            }
-            $this->udpResponseBuckets[$ip] = ['tokens' => self::UDP_RESP_BURST, 'last' => $now];
-        }
-
-        $bucket = &$this->udpResponseBuckets[$ip];
-        $elapsed = max(0.0, $now - $bucket['last']);
-        $bucket['tokens'] = min(self::UDP_RESP_BURST, $bucket['tokens'] + $elapsed * self::UDP_RESP_RATE);
-        $bucket['last'] = $now;
-
-        if ($bucket['tokens'] < 1.0) {
-            return false;
-        }
-        $bucket['tokens'] -= 1.0;
-
-        return true;
-    }
+    // udpResponseAllowed() lives in the shared UdpResponseBucket trait (`use` above).
 
     // ---- Logging ------------------------------------------------------------------------------
 
