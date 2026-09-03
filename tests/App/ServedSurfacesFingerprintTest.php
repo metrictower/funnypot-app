@@ -203,12 +203,23 @@ final class ServedSurfacesFingerprintTest extends TestCase
 
     // --- 3a. AiApiRouter::CHAT_PATHS, enumerated from the constant, not a hand list ------------------
 
-    /** @return array<string,array{0:string}> */
-    public static function chatPaths(): array
+    /**
+     * FP-0112 review #2: every row used to send 'stream' => true, so AiChatHandler::handle() always
+     * took the streaming branch — $bufferedHeaders stayed [] and assertHeadersClean() on it vacuously
+     * passed, while the REAL emitted headers ($emitter->headers()) were never scanned at all. Cross
+     * every declared chat path with BOTH stream=true (the streaming branch, now actually scanned via
+     * $emitter->headers()) and stream=false (the buffered branch, now genuinely exercised instead of
+     * assumed empty), so no combination goes unchecked.
+     *
+     * @return array<string,array{0:string,1:bool}>
+     */
+    public static function chatPathsByStreamMode(): array
     {
         $out = [];
         foreach (AiApiRouter::CHAT_PATHS as $path) {
-            $out[$path] = [$path];
+            foreach ([true, false] as $stream) {
+                $out[$path . ' (stream=' . ($stream ? 'true' : 'false') . ')'] = [$path, $stream];
+            }
         }
 
         return $out;
@@ -217,13 +228,15 @@ final class ServedSurfacesFingerprintTest extends TestCase
     /**
      * Forces the deterministic troll (NonsenseFallback) path — no sidecar network call — by pinning
      * the fake IP as bulk-flagged, so ProbeGate::decide() declines before the LLM would ever be
-     * touched. Scans the streamed response bytes AND every emitted header for every one of
-     * AiApiRouter's declared chat paths (currently /api/chat, /api/generate, /v1/chat/completions,
-     * /v1/messages — adding a fifth to CHAT_PATHS scans it here automatically, no test edit needed).
+     * touched. Scans the ACTUAL response bytes AND the ACTUAL emitted headers for whichever branch the
+     * request drove — streamed ($emitter->captured()/$emitter->headers()) or buffered ($bufferedBody/
+     * $bufferedHeaders) — for every one of AiApiRouter's declared chat paths (currently /api/chat,
+     * /api/generate, /v1/chat/completions, /v1/messages — adding a fifth to CHAT_PATHS scans it here
+     * automatically, no test edit needed) crossed with both stream modes.
      *
-     * @dataProvider chatPaths
+     * @dataProvider chatPathsByStreamMode
      */
-    public function test_ai_api_chat_response_stream_carries_no_fingerprint_signature(string $path): void
+    public function test_ai_api_chat_response_stream_carries_no_fingerprint_signature(string $path, bool $stream): void
     {
         $ip = '203.0.113.50';
         $store = new AlwaysBulkFlaggedHitStore();
@@ -261,20 +274,30 @@ final class ServedSurfacesFingerprintTest extends TestCase
         $body = (string) json_encode([
             'model' => 'served-surfaces-test-model',
             'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
-            'stream' => true,
+            'stream' => $stream,
         ]);
         $ctx = new RequestContext('POST', $path, '', ['x-api-key' => 'sk-ant-test'], $body);
         $router->handle($ctx, $ip);
 
         $streamed = $emitter->captured();
-        // Whichever branch actually ran (streamed on a clean parse; buffered on a parse/error fallback)
-        // must have emitted something, and BOTH are scanned regardless — a route that unexpectedly
-        // falls back to the buffered/error framing must not go unchecked just because streaming was
-        // requested.
-        self::assertTrue($streamed !== '' || $bufferedBody !== '', "no response captured at all for chat path {$path}");
+        $streamedHeaders = $emitter->headers();
+        // Whichever branch actually ran (streamed on a clean parse; buffered on a parse/error fallback
+        // OR on a request that asked stream=false) must have emitted something, and BOTH branches'
+        // captures are scanned regardless — a route that unexpectedly falls back to the other framing
+        // must not go unchecked just because a particular stream mode was requested.
+        self::assertTrue($streamed !== '' || $bufferedBody !== '', "no response captured at all for chat path {$path} (stream={$stream})");
+        // The requested branch must be the one that actually ran — otherwise this test would silently
+        // stop exercising the streaming path (or the buffered one) the way review #2 found it had.
+        if ($stream) {
+            self::assertNotSame('', $streamed, "stream=true must drive the STREAMING branch for {$path}");
+            self::assertNotSame([], $streamedHeaders, "stream=true must emit real headers via StreamEmitter::begin() for {$path}");
+        } else {
+            self::assertNotSame('', $bufferedBody, "stream=false must drive the BUFFERED branch for {$path}");
+        }
         self::assertServedClean($streamed, "AiApiRouter streamed chat response for {$path}");
         self::assertServedClean($bufferedBody, "AiApiRouter buffered/error chat response for {$path}");
         self::assertHeadersClean($bufferedHeaders, "AiApiRouter buffered/error chat response for {$path}");
+        self::assertHeadersClean($streamedHeaders, "AiApiRouter streamed chat response for {$path}");
     }
 
     // --- 3b. DownloadRouter's three declared paths ---------------------------------------------------
