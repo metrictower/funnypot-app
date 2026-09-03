@@ -77,6 +77,7 @@ final class DashboardController
             if ($view === 'minimal') {
                 header('Content-Type: application/json');
                 header('Cache-Control: no-store');
+                header('Referrer-Policy: no-referrer');
                 echo json_encode(['reset' => false, 'rows' => [], 'cursor' => 0, 'stats' => [], 'widgets' => []]);
 
                 return;
@@ -85,6 +86,9 @@ final class DashboardController
 
         header('Content-Type: application/json');
         header('Cache-Control: no-store');
+        // Referrer-Policy on every real feed response (FP-0250 2.2) — belt over 2.1's removal of every
+        // external load; never emitted on the 'none' 404 decoy above (header discipline, 2.6/2.8).
+        header('Referrer-Policy: no-referrer');
 
         // JSON_INVALID_UTF8_SUBSTITUTE: a stored row can still hold non-UTF-8 bytes from the binary
         // protocol honeypots; without this one bad byte makes json_encode return false and the feed
@@ -439,6 +443,43 @@ final class DashboardController
     }
 
     /**
+     * A fresh per-request nonce for every inline <style>/<script> tag this response emits. CSPRNG,
+     * never reused across requests (FP-0250 2.2) — {@see securityHeaders()} echoes the SAME value in
+     * the CSP header, so a tag missing it is rejected by the browser rather than silently trusted.
+     */
+    private function newNonce(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Emit the CSP + hardening headers for real dashboard surface (shell/minimalShell/loginForm).
+     * NEVER call this on a decoy/404 branch (FP-0250 2.6/2.8 header discipline) — a 404 that uniquely
+     * carried these headers would itself be a new oracle for the hidden dashboard path.
+     *
+     * CSP is deliberately strict: default-src 'none', script-src/style-src nonce-only (no external
+     * origin, no 'unsafe-inline') so a compromised/MITM'd third party can never run in this session —
+     * the operator session holds the CSRF token (now no longer even a JS global, see the meta tag
+     * below). style-src-attr allows inline style="" ATTRIBUTES only (app.js writes style="width:X%"
+     * bar-widget templates; the shell has a few inline style= attrs) — attribute styles cannot execute
+     * script, so the strict nonce-only script-src is uncompromised by this allowance. Referrer-Policy:
+     * no-referrer is belt-over-suspenders now that 2.1 removed every external load — it also means an
+     * operator clicking any future external link never leaks the hidden dashboard path in the Referer.
+     */
+    private function securityHeaders(string $nonce): void
+    {
+        header(
+            "Content-Security-Policy: default-src 'none'; script-src 'nonce-{$nonce}'; "
+            . "style-src 'nonce-{$nonce}'; style-src-attr 'unsafe-inline'; img-src 'self' data:; "
+            . "connect-src 'self'; media-src 'self'; form-action 'self'; base-uri 'none'; "
+            . "frame-ancestors 'none'"
+        );
+        header('Referrer-Policy: no-referrer');
+        header('X-Content-Type-Options: nosniff');
+        header('X-Frame-Options: DENY');
+    }
+
+    /**
      * The login form (GET ?admin=login). Served regardless of public_view so the operator can always
      * reach a way in even under 'none' (a known-query knock, not a visible tell — a bare GET of the
      * dashboard path still 404s under 'none'). A tiny standalone page: username/password → POST
@@ -446,34 +487,39 @@ final class DashboardController
      */
     public function loginForm(string $base = '/'): void
     {
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-store');
+        $this->securityHeaders($nonce);
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $baseJs = json_encode($base, JSON_UNESCAPED_SLASHES);
         echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style>{$css}"
+        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}"
             . '.lf{max-width:320px;margin:12vh auto;padding:24px;border:1px solid var(--line,#333);border-radius:10px}'
             . '.lf input{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:8px}'
             . '.lf .err{color:#e66;min-height:1.2em;font-size:13px}</style></head><body><div class=wrap>';
-        echo '<form class=lf id=lf onsubmit="return false">';
+        // No inline onsubmit= handler (CSP has no 'unsafe-inline' for script-src attributes either) —
+        // the nonced listener below calls e.preventDefault() instead.
+        echo '<form class=lf id=lf>';
         echo '<h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>';
         echo '<input id=lf_user placeholder=username autocomplete=username autofocus>';
         echo '<input id=lf_pass type=password placeholder=password autocomplete=current-password>';
         echo '<div class=err id=lf_err></div>';
         echo '<button class=btn id=lf_go type=submit>Sign in</button>';
         echo '</form>';
-        echo '<script>window.FP_BASE=' . $baseJs . ';</script>';
-        echo '<script>(function(){var b=window.FP_BASE||"/";'
+        echo "<script nonce=\"{$nonce}\">window.FP_BASE=" . $baseJs . ';</script>';
+        echo "<script nonce=\"{$nonce}\">(function(){var b=window.FP_BASE||\"/\";"
             . 'function q(id){return document.getElementById(id);}'
-            . 'q("lf").addEventListener("submit",async function(){'
+            . 'q("lf").addEventListener("submit",function(e){'
+            . 'e.preventDefault();'
             . 'q("lf_err").textContent="";'
             . 'var body="user="+encodeURIComponent(q("lf_user").value)+"&pass="+encodeURIComponent(q("lf_pass").value);'
-            . 'try{var r=await fetch(b+"?admin=login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});'
-            . 'var j=await r.json();'
-            . 'if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}'
-            . '}catch(e){q("lf_err").textContent="login failed";}'
-            . 'return false;});})();</script>';
+            . 'fetch(b+"?admin=login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body})'
+            . '.then(function(r){return r.json();})'
+            . '.then(function(j){if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}})'
+            . '.catch(function(){q("lf_err").textContent="login failed";});'
+            . '});})();</script>';
         echo '</div></body></html>';
     }
 
@@ -484,11 +530,13 @@ final class DashboardController
      */
     private function minimalShell(): void
     {
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
+        $this->securityHeaders($nonce);
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style>{$css}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}</style></head><body><div class=wrap>";
         echo '<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1></div>';
         echo '<p class=lead>This host is a honeypot. Each request is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted.</p>';
         echo '<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time.</footer>';
@@ -521,7 +569,9 @@ final class DashboardController
             }
         }
 
+        $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
+        $this->securityHeaders($nonce);
 
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $js = (string) @file_get_contents($this->assetsDir . '/app.js');
@@ -542,7 +592,7 @@ final class DashboardController
 
         echo "<!doctype html><html lang=en><head><meta charset=utf-8>";
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style>{$css}{$uplotCss}{$leafletCss}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}{$uplotCss}{$leafletCss}</style></head><body><div class=wrap>";
         echo "<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>";
         echo "<span id=live class=live><span class=dot></span> live</span></div>";
         echo "<p class=lead>This host is a honeypot. Each row is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted. Updates live.</p>";
@@ -659,20 +709,24 @@ final class DashboardController
         echo "<button id=caudit class=btn title='show the change audit log'>audit</button><button id=crefresh class=btn>refresh</button><button id=cclose class=x title=close>&times;</button></div>";
         echo "<div class=abody><div id=cstat class=note style='margin:0 0 8px'></div><div id=clist></div><div id=cauditbox class=vlist hidden></div></div>";
         echo "</div></div>";
-        echo "<script>{$leafletJs}</script>";
+        // Session-scoped CSRF token (FP-0250 2.2): a <meta> tag, authed-only, exactly like today's
+        // window.FP_CSRF conditional — never emitted to a page with no session. NOT a JS global: it is
+        // no longer reachable by enumerating window or a later DOM query once app.js reads + removes
+        // this node at startup (see the closure-scoped read in app.js). window.FP_AUTHED stays a global
+        // (a boolean, not a secret).
+        if ($authed) {
+            echo '<meta name="fp-csrf" content="' . htmlspecialchars((string) $this->auth->csrfToken(), ENT_QUOTES) . '">';
+        }
+        echo "<script nonce=\"{$nonce}\">{$leafletJs}</script>";
         // The tile-free basemap (FP-0250 2.1): a simplified world-outline GeoJSON, inlined same-origin
         // like every other asset on this page, rendered via L.geoJSON on the dark background instead of
         // fetching raster tiles from a CDN. app.js reads window.FP_WORLD_OUTLINE from initMap().
-        echo '<script>window.FP_WORLD_OUTLINE=' . ($worldOutline !== '' ? $worldOutline : 'null') . ';</script>';
-        echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
-        // Session state for the JS: whether this viewer is authenticated, and (only then) the
-        // per-session CSRF token to attach to mutating POSTs. FP_CSRF is empty for an unauthenticated
-        // viewer — a token is never emitted to a page that has no session.
-        echo '<script>window.FP_AUTHED=' . ($authed ? 'true' : 'false')
-            . ';window.FP_CSRF=' . json_encode($authed ? (string) $this->auth->csrfToken() : '', JSON_UNESCAPED_SLASHES) . ';</script>';
-        echo "<script>{$uplotJs}</script>";
-        echo "<script>{$js}</script>";
-        echo "<script>{$analyticsJs}</script>";
+        echo "<script nonce=\"{$nonce}\">window.FP_WORLD_OUTLINE=" . ($worldOutline !== '' ? $worldOutline : 'null') . ';</script>';
+        echo "<script nonce=\"{$nonce}\">window.FP_BASE=" . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
+        echo "<script nonce=\"{$nonce}\">window.FP_AUTHED=" . ($authed ? 'true' : 'false') . ';</script>';
+        echo "<script nonce=\"{$nonce}\">{$uplotJs}</script>";
+        echo "<script nonce=\"{$nonce}\">{$js}</script>";
+        echo "<script nonce=\"{$nonce}\">{$analyticsJs}</script>";
         echo "</div></body></html>";
     }
 

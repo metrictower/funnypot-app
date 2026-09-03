@@ -115,9 +115,17 @@ async function loadOlder(){
   }finally{b.disabled=false;}
 }
 // Admin auth (FP-0242b): a server-side session cookie (sent automatically, same-origin) + a
-// per-session CSRF token embedded as window.FP_CSRF. Mutating POSTs carry the token in the body; the
-// server ignores it on reads. On a 403 an unauthenticated viewer is bounced to the login knock.
-function adminBody(body){const c='csrf='+encodeURIComponent(window.FP_CSRF||'');return body?(body+'&'+c):c;}
+// per-session CSRF token. On a 403 an unauthenticated viewer is bounced to the login knock.
+// FP-0250 (2.2): the token arrives as a <meta name=fp-csrf> tag (authed pages only), read ONCE here
+// into this closure-scoped const and the node then removed from the DOM — it is no longer a
+// `window.*` global reachable by enumerating window, and a later DOM query finds nothing either.
+const FP_CSRF=(function(){
+  const m=document.querySelector('meta[name=fp-csrf]');
+  const v=m?m.getAttribute('content')||'':'';
+  if(m)m.remove();
+  return v;
+})();
+function adminBody(body){const c='csrf='+encodeURIComponent(FP_CSRF);return body?(body+'&'+c):c;}
 async function adminReq(action,body){
   const r=await fetch(BASE+'?admin='+action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:adminBody(body),cache:'no-store'});
   if(r.status===403){if(!window.FP_AUTHED){location.href=BASE+'?admin=login';}else{alert('Action denied — session expired or CSRF mismatch. Reloading.');location.reload();}return null;}
