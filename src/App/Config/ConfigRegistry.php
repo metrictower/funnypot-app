@@ -35,6 +35,16 @@ namespace Funnypot\App\Config;
  * `live` marks whether a change takes effect without a process restart (spec §4) — metadata for the
  * future admin UI; it does not affect resolution here. `secret` knobs (none are registered today —
  * secrets live in the env-only set) would never be echoed back to the UI.
+ *
+ * `protected` (FP-0250 2.3) marks an exposure knob whose ENV value is a CEILING a stored override may
+ * never loosen — a hijacked admin session must not be able to unmask/reconfigure the honeypot with one
+ * CSRF'd write. `safety_order` (present only on protected knobs with an ordered value space) lists the
+ * knob's values from least to MOST safe; {@see safetyRank()} indexes into it. A protected knob with NO
+ * `safety_order` (the hidden-path strings) has no notion of "safer" — it rejects any stored override at
+ * all, so it is effectively env-only in practice. {@see ConfigStore::set()} enforces this at write time
+ * (fail-closed) and {@see ConfigStore::rawForEnv()}/`get()`/`snapshot()` re-enforce it at READ time (a
+ * stored value that was legitimate when written can become unsafe later purely because the operator
+ * tightened env — the resolution-time clamp catches that stale row without needing a write).
  */
 final class ConfigRegistry
 {
@@ -69,7 +79,9 @@ final class ConfigRegistry
     {
         return [
             // --- Deception / behaviour ---
-            'mode' => ['field' => 'mode', 'env' => 'FUNNYPOT_MODE', 'type' => 'enum', 'enum' => ['public', 'stealth'], 'default' => 'public', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            // FP-0250 2.3: 'protected' + 'safety_order' (ascending safety) on the exposure knobs below —
+            // env is the ceiling a stored override may never loosen (ConfigStore::set()/rawForEnv()).
+            'mode' => ['field' => 'mode', 'env' => 'FUNNYPOT_MODE', 'type' => 'enum', 'enum' => ['public', 'stealth'], 'default' => 'public', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true, 'safety_order' => ['public', 'stealth']],
             'style' => ['field' => 'style', 'env' => 'FUNNYPOT_STYLE', 'type' => 'enum', 'enum' => ['realistic', 'taunt', 'malformed'], 'default' => 'realistic', 'group' => 'Deception', 'live' => true, 'secret' => false],
             'powered_by' => ['field' => 'poweredBy', 'env' => 'FUNNYPOT_POWERED_BY', 'type' => 'string', 'default' => '', 'group' => 'Deception', 'live' => true, 'secret' => false], // (effective default is persona-derived, resolved in build())
             'severity_ceiling' => ['field' => 'severityCeiling', 'env' => 'FUNNYPOT_CEILING', 'type' => 'string', 'default' => 'critical', 'group' => 'Deception', 'live' => true, 'secret' => false], // (free string in fromEnv; not clamped)
@@ -77,15 +89,18 @@ final class ConfigRegistry
             'jitter_ms' => ['field' => 'jitterMs', 'env' => 'FUNNYPOT_JITTER_MS', 'type' => 'int', 'default' => '40', 'group' => 'Deception', 'live' => true, 'secret' => false], // (no clamp)
             'attack_emulation' => ['field' => 'attackEmulation', 'env' => 'FUNNYPOT_ATTACK', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false],
             'decoy_archive' => ['field' => 'decoyArchive', 'env' => 'FUNNYPOT_DECOY_ARCHIVE', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Deception', 'live' => true, 'secret' => false],
-            'dashboard_path' => ['field' => 'dashboardPath', 'env' => 'FUNNYPOT_DASHBOARD_PATH', 'type' => 'string', 'default' => '/__fp/', 'group' => 'Deception', 'live' => true, 'secret' => false], // (build() normalises to /trim/)
-            'funnypot_path' => ['field' => 'funnypotPath', 'env' => 'FUNNYPOT_APP_PATH', 'type' => 'string', 'default' => 'funnypot', 'group' => 'Deception', 'live' => true, 'secret' => false],
-            'hide_main_page' => ['field' => 'hideMainPage', 'env' => 'FUNNYPOT_HIDE_MAIN', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            // Protected + UNORDERED (no safety_order): a string has no notion of "safer", so a hijacked
+            // session must never be able to move OR unmask the hidden path — any stored override is
+            // rejected outright (ConfigStore::set()). The operator changes these via env + redeploy.
+            'dashboard_path' => ['field' => 'dashboardPath', 'env' => 'FUNNYPOT_DASHBOARD_PATH', 'type' => 'string', 'default' => '/__fp/', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true], // (build() normalises to /trim/)
+            'funnypot_path' => ['field' => 'funnypotPath', 'env' => 'FUNNYPOT_APP_PATH', 'type' => 'string', 'default' => 'funnypot', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true],
+            'hide_main_page' => ['field' => 'hideMainPage', 'env' => 'FUNNYPOT_HIDE_MAIN', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true, 'safety_order' => ['0', '1']], // hidden (1) is safer
             'capture_raw' => ['field' => 'captureRaw', 'env' => 'FUNNYPOT_CAPTURE_RAW', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false],
             // FP-0242b: what an UNAUTHENTICATED visitor sees on the dashboard path. Default 'none' is the
             // fail-safe/least-exposed baseline (operator decision, comments.md 2026-09-01): the store
             // returns this default on a read fault, so the baseline MUST be the least-exposed value for
             // "config-read error ⇒ less exposure" to hold. The authed operator always sees full regardless.
-            'dashboard.public_view' => ['field' => 'dashboardPublicView', 'env' => 'FUNNYPOT_PUBLIC_VIEW', 'type' => 'enum', 'enum' => ['full', 'minimal', 'none'], 'default' => 'none', 'group' => 'Deception', 'live' => true, 'secret' => false],
+            'dashboard.public_view' => ['field' => 'dashboardPublicView', 'env' => 'FUNNYPOT_PUBLIC_VIEW', 'type' => 'enum', 'enum' => ['full', 'minimal', 'none'], 'default' => 'none', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true, 'safety_order' => ['full', 'minimal', 'none']],
 
             // --- Feature toggles (opt-in unless noted) — restart-required: each gates object construction at bootstrap (spec §4) ---
             'protocols_enabled' => ['field' => 'protocolsEnabled', 'env' => 'FUNNYPOT_PROTOCOLS', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false],
@@ -192,6 +207,35 @@ final class ConfigRegistry
     public function keyForEnv(string $env): ?string
     {
         return $this->byEnv[$env] ?? null;
+    }
+
+    /**
+     * True when a stored override for $key is subject to the env-as-ceiling rule (FP-0250 2.3):
+     * {@see ConfigStore} must reject/clamp a stored value less safe than the env baseline. Unknown key
+     * ⇒ false (nothing to protect — validate() already rejects it elsewhere).
+     */
+    public function isProtected(string $key): bool
+    {
+        return (bool) ($this->entries[$key]['protected'] ?? false);
+    }
+
+    /**
+     * The safety rank of $value for a protected+ORDERED knob: its index into `safety_order` (0 = least
+     * safe, higher = safer). Null when $key is not protected, has no `safety_order` (protected+
+     * unordered — a string with no notion of "safer", handled separately by the write/read paths), or
+     * $value is not one of the listed values (a garbage/unknown value — the caller must treat this as
+     * "no rank", never as rank 0, so a malformed value can never be silently treated as least-safe-but-
+     * storable; {@see ConfigStore::protectedBaseline()} maps an unranked baseline to the SAFEST value).
+     */
+    public function safetyRank(string $key, string $value): ?int
+    {
+        $order = $this->entries[$key]['safety_order'] ?? null;
+        if (!is_array($order)) {
+            return null;
+        }
+        $i = array_search($value, $order, true);
+
+        return $i === false ? null : (int) $i;
     }
 
     /**

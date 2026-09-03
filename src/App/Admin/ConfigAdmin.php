@@ -61,6 +61,13 @@ final class ConfigAdmin
                 'env' => $env,
                 'default' => (string) ($e['default'] ?? ''),
             ];
+            // FP-0250 2.3: a protected knob's effective ceiling, so the UI can grey out unreachable
+            // options (e.g. a looser dashboard.public_view) up front instead of round-tripping a
+            // rejected config-set. Non-protected rows carry neither key.
+            if ((bool) ($e['protected'] ?? false)) {
+                $row['protected'] = true;
+                $row['ceiling'] = $this->store->protectedCeiling($key);
+            }
             if (isset($e['enum'])) {
                 $row['enum'] = array_values((array) $e['enum']);
             }

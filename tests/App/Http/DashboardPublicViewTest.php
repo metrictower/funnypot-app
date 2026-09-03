@@ -8,6 +8,7 @@ use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Http\DashboardController;
+use Funnypot\App\Storage\Sqlite;
 use Funnypot\App\Storage\SqliteHitStore;
 use PHPUnit\Framework\TestCase;
 
@@ -229,12 +230,29 @@ final class DashboardPublicViewTest extends TestCase
 
     public function test_config_read_fault_resolves_to_the_baseline_none(): void
     {
-        // A stored 'full' override that becomes UNREADABLE (corrupt db) must not leave 'full' resolved:
-        // the store fails safe to the baseline, and the baseline is the least-exposed 'none'.
+        // A stored 'full' row that becomes UNREADABLE (corrupt db) must not leave 'full' resolved: the
+        // store fails safe to the baseline, and the baseline is the least-exposed 'none'. Planted via a
+        // raw SQL row (not ConfigStore::set(), which FP-0250 2.3 now rejects outright when it would
+        // loosen exposure below the CURRENT env ceiling) while env FUNNYPOT_PUBLIC_VIEW=full so the row
+        // is a legitimate, non-clamped override right up until the fault — isolating THIS test's fault
+        // path (overrides() itself throwing, an orthogonal fail-safe mechanism to 2.3's protected-knob
+        // clamp) from 2.3's own read-time clamp, which ConfigStoreProtectedTest covers directly.
         $dbPath = $this->path('cfg');
-        $store = new ConfigStore($dbPath);
-        $store->set('dashboard.public_view', 'full', 'admin', '203.0.113.5');
-        self::assertSame('full', $store->get('dashboard.public_view', 'FUNNYPOT_PUBLIC_VIEW', 'none'));
+        $raw = Sqlite::open($dbPath);
+        $raw->exec('CREATE TABLE IF NOT EXISTS config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT ""
+        )');
+        $raw->exec('CREATE TABLE IF NOT EXISTS config_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)');
+        $raw->exec("INSERT INTO config (key, value, updated_at, updated_by) VALUES ('dashboard.public_view', 'full', '2026-01-01T00:00:00Z', 'legacy')");
+        $raw->exec("INSERT INTO config_meta (k, v) VALUES ('generation', 1) ON CONFLICT(k) DO UPDATE SET v = v + 1");
+        @file_put_contents(dirname($dbPath) . '/config.gen', '1');
+        putenv('FUNNYPOT_PUBLIC_VIEW=full');
+        $planted = new ConfigStore($dbPath);
+        self::assertSame('full', $planted->get('dashboard.public_view', 'FUNNYPOT_PUBLIC_VIEW', 'none'), 'sanity: the planted row resolves (env=full is its own ceiling) before the fault');
+        putenv('FUNNYPOT_PUBLIC_VIEW'); // unset again — the fault below must resolve to the DEFAULT baseline 'none', not env
 
         // Make the store UNREADABLE: drop the db + its WAL sidecars and put a DIRECTORY at the path so
         // any open/query throws (a plain corrupt-header file is silently recovered from the intact -wal,
