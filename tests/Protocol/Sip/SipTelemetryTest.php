@@ -266,17 +266,39 @@ final class SipTelemetryTest extends TestCase
         $allow->setAccessible(true);
 
         $burst = (new \ReflectionClassConstant(SipServer::class, 'UDP_RESP_BURST'))->getValue();
+        $rate = (new \ReflectionClassConstant(SipServer::class, 'UDP_RESP_RATE'))->getValue();
+        $seed = (new \ReflectionClassConstant(SipServer::class, 'UDP_RESP_SEED'))->getValue();
 
+        // FP-0248: a brand-new source is admitted DEPLETED (UDP_RESP_SEED tokens — 2.0, enough for the
+        // 100 Trying + 180 Ringing double-send one INVITE draws), never the full UDP_RESP_BURST — that
+        // full-burst re-seed on every new/evicted IP was exactly the reflection-amplification gap this
+        // ticket closes (see UdpReflectionInvariantTest::test_lru_cycling_cannot_restore_burst).
         $granted = 0;
         for ($i = 0; $i < $burst + 5; $i++) {
             if ($allow->invoke($server, '7.7.7.7')) {
                 $granted++;
             }
         }
+        $this->assertSame((int) $seed, $granted, 'a tight-loop flood from a fresh source is capped at the depleted seed, never the full burst');
 
-        // The bucket starts full at the burst size and refills negligibly within a tight loop, so a
-        // sustained flood from one source is capped near the burst — never unbounded reflection.
-        $this->assertSame((int) $burst, $granted);
+        // The bucket still refills up to the full burst rate over real elapsed time — a sustained flood
+        // is bounded at the intended steady rate (never unbounded), it just no longer STARTS at 20.
+        $bucketsProp = new \ReflectionProperty($server, 'udpResponseBuckets');
+        $bucketsProp->setAccessible(true);
+        $buckets = $bucketsProp->getValue($server);
+        $buckets['7.7.7.7']['last'] -= 10.0; // simulate 10s of elapsed real time
+        $bucketsProp->setValue($server, $buckets);
+
+        $grantedAfterRefill = 0;
+        for ($i = 0; $i < $burst + 5; $i++) {
+            if ($allow->invoke($server, '7.7.7.7')) {
+                $grantedAfterRefill++;
+            }
+        }
+        // 10s * rate tokens refilled, capped at the bucket capacity (burst) — sanity-check the
+        // simulated window is actually long enough to saturate the bucket before trusting that.
+        $this->assertGreaterThanOrEqual($burst, 10.0 * $rate, 'sanity: the simulated 10s window must be enough to fully refill the bucket');
+        $this->assertSame((int) $burst, $grantedAfterRefill, 'after real elapsed time the bucket refills up to (but never beyond) the full burst capacity');
     }
 
     public function test_tcp_source_ip_comes_from_accept_time_peer_not_a_fabricated_loopback(): void
