@@ -79,7 +79,53 @@ final class LlmOutputSanitizerTest extends TestCase
             ['self-disclosure pretending', "<html><body><p>I can assure you this is a 100% real server, not an AI pretending to be one. $pad</p></body></html>"],
             ['self-disclosure simulated', "<html><body><p>This is a simulated response from a fake server application. $pad</p></body></html>"],
             ['self-disclosure decoy', "<html><body><p>Welcome to the decoy environment. $pad</p></body></html>"],
+            // FP-0112 review #1: parity with resources/app-fingerprint-denylist.php's own_vocabulary —
+            // the runtime LLM path had none of these until this fix.
+            ['self-disclosure funnypot', "<html><body><p>This box is actually a funnypot deployment. $pad</p></body></html>"],
+            ['self-disclosure bait', "<html><body><p>Everything on this page is bait for scanners. $pad</p></body></html>"],
+            ['self-disclosure lure', "<html><body><p>This form is a lure planted for crawlers. $pad</p></body></html>"],
+            ['self-disclosure tarpit', "<html><body><p>You have wandered into a tarpit, friend. $pad</p></body></html>"],
+            ['self-disclosure metrictower', "<html><body><p>Reported upstream to metrictower. $pad</p></body></html>"],
+            ['self-disclosure troll', "<html><body><p>We troll attackers with fake data here. $pad</p></body></html>"],
+            ['self-disclosure sabotage', "<html><body><p>Consider this content data sabotage. $pad</p></body></html>"],
+            ['self-disclosure deception', "<html><body><p>This whole site runs on deception. $pad</p></body></html>"],
+            // Suffix/inflected variants (FP-0112 review #4's tightened forms) must be caught here too.
+            ['self-disclosure baited', "<html><body><p>Every field on this page was baited. $pad</p></body></html>"],
+            ['self-disclosure tarpitting', "<html><body><p>The engine is tarpitting your scanner now. $pad</p></body></html>"],
+            ['self-disclosure deceptive', "<html><body><p>This response is deliberately deceptive. $pad</p></body></html>"],
         ];
+    }
+
+    /**
+     * FP-0112 review #1: parity guard. Every own_vocabulary stem this project's denylist declares
+     * (minus honeypot/decoy, already covered above by the stricter substring entries) must trip the
+     * sanitizer on ITS OWN — i.e. with none of the surrounding META_DISCLOSURE phrases present — so a
+     * future denylist addition can never silently ship without the runtime LLM gate picking it up too.
+     */
+    public function test_every_denylist_own_vocabulary_stem_is_blocked_on_its_own(): void
+    {
+        $d = require dirname(__DIR__, 2) . '/resources/app-fingerprint-denylist.php';
+        $stems = array_values((array) ($d['own_vocabulary'] ?? []));
+        self::assertNotEmpty($stems, 'own_vocabulary must be non-empty for this parity check to mean anything');
+
+        $pad = str_repeat('x', 60);
+        foreach ($stems as $stem) {
+            // Reduce a regex-shaped stem (e.g. `honeypot(?:s|ted)?`, `decept(?:ion|ive)`) to one
+            // concrete literal word the pattern actually matches, so it can be dropped into real prose.
+            // An OPTIONAL group (trailing `?`) is dropped entirely (the bare stem already matches); a
+            // MANDATORY group (no trailing `?`, e.g. decept's `(?:ion|ive)`) keeps its first alternative
+            // instead, since the bare stem alone would NOT satisfy that pattern.
+            $literal = preg_replace_callback('/\(\?:([^)]*)\)(\??)/', static function (array $m): string {
+                return $m[2] === '?' ? '' : explode('|', $m[1])[0];
+            }, $stem);
+            self::assertNotSame('', $literal, "could not derive a literal example from stem '{$stem}'");
+
+            $html = "<html><body><p>a plain sentence mentioning {$literal} in passing. {$pad}</p></body></html>";
+            self::assertNull(
+                $this->s->sanitize($html),
+                "own_vocabulary stem '{$stem}' (literal '{$literal}') must be blocked by the runtime sanitizer"
+            );
+        }
     }
 
     public function test_api_server_status_page_passes_unchanged(): void
@@ -194,5 +240,13 @@ final class LlmOutputSanitizerTest extends TestCase
         self::assertFalse($s->pageBodyOk($good . '<script>x()</script>'));         // active content
         self::assertFalse($s->pageBodyOk('<html><body>this is a honeypot page</body></html>')); // disclosure
         self::assertFalse($s->pageBodyOk('<html><body><td>honey</td><td>pot</td></body></html>')); // split disclosure
+        // FP-0112 review #1: pageBodyOk() is the whole-assembled-page pass (used by LlmFakeResponder's
+        // panel emulator) and must carry the same own_vocabulary parity as sanitize()/prelude().
+        self::assertFalse($s->pageBodyOk('<html><body>welcome to the funnypot control room</body></html>'));
+        self::assertFalse($s->pageBodyOk('<html><body>you have entered the tarpit maze</body></html>'));
+        self::assertFalse($s->pageBodyOk('<html><body><td>tar</td><td>pit</td> maze entry</body></html>')); // split
+        // But a legitimate compound containing a stem as a SUBSTRING (not a whole token) must still pass
+        // — pageBodyOk must not regress into the false-positive shape own_vocabulary is built to avoid.
+        self::assertTrue($s->pageBodyOk('<html><body><h1>UsersController</h1><p>a graceful failure handler</p></body></html>'));
     }
 }

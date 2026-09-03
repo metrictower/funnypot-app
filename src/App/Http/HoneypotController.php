@@ -233,6 +233,10 @@ final class HoneypotController
             }
         }
 
+        // FP-0112 review #3: $response's body is funnypot-core's own STATIC template output — its
+        // fingerprint safety is funnypot-core's own denylist's responsibility (this app's own_vocabulary
+        // gate covers only what THIS repo generates: skins, LLM prompts/output, the tarpit polluters,
+        // and the routers above). Deliberately not duplicated/re-scanned here.
         $response = $funnypot->respond($context);
 
         // When a fake was served, log what it actually satisfied; else the detect() signal.
@@ -269,6 +273,9 @@ final class HoneypotController
         } elseif (!$this->serveDecoyArchive($context, $clientIp)) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,
             // failed, or the responder being off) falls through to the believable plain 404.
+            // FP-0112 review #1: this LLM-generated output (like the panel emulator's above) is
+            // already gated by LlmOutputSanitizer's own_vocabulary parity check before it can reach
+            // $llm — see LlmFakeResponder.
             $llm = $this->llmFakes?->respond($context, $clientIp);
             $this->serveDelay();
             if ($llm !== null) {

@@ -43,7 +43,7 @@ final class ContextPolluterTest extends TestCase
         return $out;
     }
 
-    /** @return array{literals:list<string>,patterns:list<string>} the app fingerprint denylist */
+    /** @return array{literals:list<string>,patterns:list<string>,own_vocabulary:list<string>} the app fingerprint denylist */
     private static function denylist(): array
     {
         $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
@@ -51,10 +51,13 @@ final class ContextPolluterTest extends TestCase
         return [
             'literals' => array_values((array) ($d['literals'] ?? [])),
             'patterns' => array_values((array) ($d['patterns'] ?? [])),
+            'own_vocabulary' => array_values((array) ($d['own_vocabulary'] ?? [])),
         ];
     }
 
-    /** Assert $text carries no denylisted upstream-detector signature (the fingerprint gate). */
+    /** Assert $text carries no denylisted upstream-detector signature (leak-IN) AND no own_vocabulary
+     *  self-identifying term (leak-OUT, FP-0112 review #3 — these polluters are a real served surface,
+     *  see PolluterControllerTest, so both directions of the gate apply here too). */
     private static function assertFingerprintClean(string $text, string $where): void
     {
         $d = self::denylist();
@@ -66,6 +69,8 @@ final class ContextPolluterTest extends TestCase
         foreach ($d['patterns'] as $pattern) {
             self::assertSame(0, @preg_match('~' . $pattern . '~i', $text), "fingerprint pattern /{$pattern}/ leaked in {$where}");
         }
+        $ownVocabularyPattern = '/(?<![a-zA-Z0-9])(' . implode('|', $d['own_vocabulary']) . ')(?![a-zA-Z0-9])/i';
+        self::assertSame(0, preg_match($ownVocabularyPattern, $text), "own_vocabulary term leaked in {$where}");
     }
 
     /** Assert $text names no real third-party host / ARN / live-key — only inert synthetic identities. */

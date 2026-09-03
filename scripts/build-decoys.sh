@@ -53,9 +53,13 @@ ENV
 AWS_ACCESS_KEY_ID=AKIA0000000000000000
 AWS_SECRET_ACCESS_KEY=0000000000000000000000000000000000000000
 CREDS
+    # FP-0112: this text is inside the deepest layer of every nested decoy archive, so it is what a
+    # fully-patient attacker sees last. It must NEVER self-identify (no "honeypot"/"decoy"/etc — see
+    # resources/app-fingerprint-denylist.php's own_vocabulary) — a scanner that automates recursive
+    # extraction + greps the leaves would otherwise fingerprint the box from a single downloaded file.
     cat > "$dir/NOTICE.txt" <<'NOTE'
-This archive was served by a honeypot. Every value inside it is fabricated
-and useless. There was never any real data here. Your request has been logged.
+This archive is fabricated. Every value inside it is fake and useless.
+There was never any real data here. Your request has been logged.
 NOTE
 }
 

@@ -37,7 +37,11 @@ final class LlmOutputSanitizer
     /** Self-disclosure the honeypot must never reveal in a body — a probe like /are-you-a-honeypot
      *  can otherwise coax the model into echoing its own framing (the system prompt itself names
      *  "honeypot" / "defensive security-research"). Scanned over the WHOLE body, not just the opening
-     *  like the refusal check, since the leak can surface mid-page. A rare false reject just 404s. */
+     *  like the refusal check, since the leak can surface mid-page. A rare false reject just 404s.
+     *  Plain (non-word-boundary) substring match on purpose: a false reject just falls through to the
+     *  plain 404, so erring toward over-rejection is the safe direction here — 'honeypot' and 'decoy'
+     *  therefore also catch any suffixed form (honeypotted, decoyed, …) as a side effect of matching
+     *  substring-not-whole-token. FP-0112 review #1: do not remove or narrow either entry. */
     private const META_DISCLOSURE = [
         'honeypot', 'security research', 'security-research', 'defensive security',
         'as an ai', 'as a language model', 'i am an ai', "i'm an ai", 'system prompt',
@@ -46,6 +50,63 @@ final class LlmOutputSanitizer
         // passes — bare 'server'/'fake'/'ai' would false-reject.
         'fake server', 'fake web server', 'decoy', 'pretending to be', 'simulated response',
     ];
+
+    /** FP-0112 review #1: this project's OWN remaining self-identifying vocabulary — funnypot, bait,
+     *  lure(s), tarpit(s), metrictower, troll(s|ing), sabotage, deception — the same leak-OUT terms
+     *  resources/app-fingerprint-denylist.php's `own_vocabulary` guards on every OTHER served surface.
+     *  This is the runtime LLM path (live sidecar-model output via LlmFakeResponder / AiChatHandler),
+     *  the least-controllable surface of all, and it had NO parity with that list until this fix — a
+     *  reply like "this looks like a funnypot" or "you're in a tarpit" would have passed unblocked.
+     *
+     *  Sourced from the SAME resource file at construction (never duplicated as a literal here) so the
+     *  two lists cannot drift apart again; see loadSharedOwnVocabularyStems(). Unlike META_DISCLOSURE
+     *  above, this is matched delimiter-safe / whole-token (see hasSharedOwnVocabularyLeak()) — plain
+     *  substring matching on 'troll'/'lure' would false-reject every legitimate "…Controller" class
+     *  name or "failure" mention a generated admin page routinely contains, which would quietly gut
+     *  this app's plausibility. 'honeypot'/'decoy' stay OUT of this second list — they are already
+     *  covered, more strictly, by the substring entries above; duplicating them here would not add
+     *  coverage and would risk two matchers disagreeing on the same term. */
+    private const SHARED_OWN_VOCABULARY_EXCLUDE = ['honeypot', 'decoy'];
+
+    /** Compiled once per process: the delimiter-safe, whole-token regex over the shared own_vocabulary
+     *  stems (funnypot/bait/lure/tarpit/metrictower/troll/sabotage/deception — honeypot/decoy excluded,
+     *  see SHARED_OWN_VOCABULARY_EXCLUDE), read from the same resources/app-fingerprint-denylist.php
+     *  the served-surface tests scan. Mirrors FingerprintSafetyTest::ownVocabularyPattern() exactly,
+     *  digits-stay-word-characters included (a stem glued to a digit, e.g. `decoy2`, is a deliberate
+     *  non-catch — see that resource file's own_vocabulary doc comment for the false-positive this
+     *  avoids against this app's own random-token generation). */
+    private static ?string $ownVocabularyPattern = null;
+
+    /** @return list<string> the own_vocabulary stems, minus SHARED_OWN_VOCABULARY_EXCLUDE */
+    private static function loadSharedOwnVocabularyStems(): array
+    {
+        $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
+        $stems = array_values((array) ($d['own_vocabulary'] ?? []));
+
+        return array_values(array_filter($stems, static function ($stem): bool {
+            foreach (self::SHARED_OWN_VOCABULARY_EXCLUDE as $excluded) {
+                if (strpos((string) $stem, $excluded) === 0) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
+    }
+
+    /** True if $text (already lower-cased by the caller is NOT assumed — this matches case-insensitively
+     *  itself) carries any shared own_vocabulary term as a whole token. */
+    private static function hasSharedOwnVocabularyLeak(string $text): bool
+    {
+        if (self::$ownVocabularyPattern === null) {
+            $stems = self::loadSharedOwnVocabularyStems();
+            self::$ownVocabularyPattern = $stems === []
+                ? ''
+                : '/(?<![a-zA-Z0-9])(' . implode('|', $stems) . ')(?![a-zA-Z0-9])/i';
+        }
+
+        return self::$ownVocabularyPattern !== '' && preg_match(self::$ownVocabularyPattern, $text) === 1;
+    }
 
     /** A leading refusal / self-identification / fence — the tell a grammar-free body must not open
      *  with (grammar-backed kinds can't reach these). Checked over the first 80 chars only. */
@@ -131,6 +192,12 @@ final class LlmOutputSanitizer
                 return false;
             }
         }
+        // FP-0112 review #1: same shared own_vocabulary parity as prelude() (see that call site's
+        // comment); pageBodyOk() is the whole-assembled-page pass so this must run here too, not just
+        // per-slot, and both the raw-markup pass here and the tag-stripped pass below.
+        if (self::hasSharedOwnVocabularyLeak($html)) {
+            return false;
+        }
         // The active-content checks (<script>/<iframe>/on-handlers) guard UNTRUSTED, model-supplied markup.
         // Trusted panel chrome is escape-by-construction with no model text in it, so its own scoped inline
         // JS/handlers (the deep panel's interactivity) are safe and exempt — but the disclosure-tell scans
@@ -152,6 +219,9 @@ final class LlmOutputSanitizer
             if (strpos($text, $tell) !== false) {
                 return false;
             }
+        }
+        if (self::hasSharedOwnVocabularyLeak($text)) {
+            return false;
         }
 
         return true;
@@ -201,6 +271,12 @@ final class LlmOutputSanitizer
             if (strpos($low, $tell) !== false) {
                 return false;
             }
+        }
+        // FP-0112 review #1: parity with resources/app-fingerprint-denylist.php's own_vocabulary —
+        // the runtime path had none until this check (funnypot/bait/lure/tarpit/metrictower/troll/
+        // sabotage/deception). Runs for EVERY kind, same as META_DISCLOSURE above.
+        if (self::hasSharedOwnVocabularyLeak($s)) {
+            return false;
         }
 
         return true;

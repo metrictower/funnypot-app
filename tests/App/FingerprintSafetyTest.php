@@ -33,7 +33,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class FingerprintSafetyTest extends TestCase
 {
-    /** @return array{literals: list<string>, patterns: list<string>} */
+    /** @return array{literals: list<string>, patterns: list<string>, own_vocabulary: list<string>} */
     private static function denylist(): array
     {
         $d = require dirname(__DIR__, 2) . '/resources/app-fingerprint-denylist.php';
@@ -41,10 +41,30 @@ final class FingerprintSafetyTest extends TestCase
         return [
             'literals' => array_values((array) ($d['literals'] ?? [])),
             'patterns' => array_values((array) ($d['patterns'] ?? [])),
+            'own_vocabulary' => array_values((array) ($d['own_vocabulary'] ?? [])),
         ];
     }
 
-    /** @return list<string> every denylist signature found in $text (empty => clean) */
+    /**
+     * The leak-OUT (own_vocabulary) regex: whole-token, delimiter-safe. Compiled once from the
+     * denylist's word-stem fragments — `(?<![a-zA-Z0-9])` / `(?![a-zA-Z0-9])` lookaround, so a run of
+     * underscores/punctuation/whitespace/string-start-or-end all count as a boundary (matching
+     * `is_decoy`/`decoy_file`) while `controller` and `failure` do NOT contain `troll`/`lure` as a
+     * WHOLE token and so stay clean. Digits are deliberately KEPT as word characters (FP-0112 #4
+     * considered treating a digit run as a boundary too, to catch a glued-digit stem like `decoy2`;
+     * reverted after it produced real false positives against this app's own random-token generation —
+     * see resources/app-fingerprint-denylist.php's own_vocabulary doc comment for the specifics).
+     * See that same doc comment for the full false-positive/true-positive matrix this was measured
+     * against.
+     */
+    private static function ownVocabularyPattern(): string
+    {
+        $vocab = self::denylist()['own_vocabulary'];
+
+        return '/(?<![a-zA-Z0-9])(' . implode('|', $vocab) . ')(?![a-zA-Z0-9])/i';
+    }
+
+    /** @return list<string> every leak-IN denylist signature found in $text (empty => clean) */
     private static function scan(string $text): array
     {
         $d = self::denylist();
@@ -63,10 +83,35 @@ final class FingerprintSafetyTest extends TestCase
         return $hits;
     }
 
+    /** @return list<string> every own_vocabulary (leak-OUT) term found in $text (empty => clean) */
+    private static function scanOwnVocabulary(string $text): array
+    {
+        if (preg_match_all(self::ownVocabularyPattern(), $text, $m) < 1) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map('strtolower', $m[0])));
+    }
+
+    /** Leak-IN only: someone else's vocabulary must not appear. Used for surfaces that are NOT bytes
+     *  served to a client — chiefly the LLM prompt exemplars below, which legitimately instruct the
+     *  sidecar model that it IS a honeypot generating fake bait data, so own_vocabulary would false-
+     *  positive on every one of them (see FP-0112 plan review finding #1). */
     private static function assertClean(string $text, string $source): void
     {
         $hits = self::scan($text);
         self::assertSame([], $hits, "fingerprint leak in {$source}: " . implode(', ', $hits));
+    }
+
+    /** Leak-IN AND leak-OUT: for surfaces actually served to an unauthenticated client (rendered
+     *  skins, fake filesystem/host/Docker output). Neither an upstream detector's vocabulary NOR this
+     *  project's own vocabulary may appear. */
+    private static function assertCleanServed(string $text, string $source): void
+    {
+        $hits = self::scan($text);
+        self::assertSame([], $hits, "fingerprint leak-IN in {$source}: " . implode(', ', $hits));
+        $own = self::scanOwnVocabulary($text);
+        self::assertSame([], $own, "fingerprint leak-OUT (own vocabulary) in {$source}: " . implode(', ', $own));
     }
 
     /**
@@ -122,7 +167,7 @@ final class FingerprintSafetyTest extends TestCase
     public function test_skin_render_carries_no_denylisted_signature(string $path, int $seed): void
     {
         $html = self::renderPath($path, $seed);
-        self::assertClean($html, "skin render of {$path} (seed {$seed})");
+        self::assertCleanServed($html, "skin render of {$path} (seed {$seed})");
     }
 
     /** @return array<string,list<string>> factory method name => args, so the provider stays
@@ -193,6 +238,79 @@ final class FingerprintSafetyTest extends TestCase
         );
     }
 
+    /**
+     * FP-0112: false-positive immunity for the leak-OUT (own_vocabulary) word-boundary matching.
+     * Measured, not hypothetical (see spec.md) — `failure` is the dangerous one, since error-handling
+     * code is full of it; a naive substring match on `lure` would fire on every one.
+     */
+    public function test_own_vocabulary_does_not_false_positive_on_benign_words_containing_its_stems(): void
+    {
+        $benign = [
+            'a plain MVC controller class',
+            'the ferris wheel and trolley line',
+            'graceful failure handling and a fail-fast default',
+            'classic arbitrage between two exchanges',
+            'CorporateController::TRAP_PREFIXES', // "trap"/"controller", never a whole-token stem hit
+            'a card class of fp-9a2c on this seeded persona', // funnypot-core's real v0.6.x class prefix
+        ];
+        foreach ($benign as $text) {
+            self::assertSame([], self::scanOwnVocabulary($text), "false positive on: {$text}");
+        }
+    }
+
+    /**
+     * FP-0112: the boundary rule must still bite on a delimited compound — underscore is deliberately
+     * NOT a word character for this match, so `is_decoy` / `decoy_file` / `honeypot_token` all catch.
+     */
+    public function test_own_vocabulary_catches_snake_case_identifiers(): void
+    {
+        foreach (['is_decoy', 'decoy_file', 'honeypot_token', 'metrictower_build_id'] as $text) {
+            self::assertNotSame([], self::scanOwnVocabulary($text), "expected a hit on: {$text}");
+        }
+    }
+
+    /**
+     * FP-0112 finding #4: the tightened suffix handling must catch the false negatives the reviewer
+     * found — a conjugated/inflected form (honeypotted, baited, tarpitting, deceptive) — which the
+     * untightened bare-stem list let through.
+     */
+    public function test_own_vocabulary_catches_tightened_suffix_variants(): void
+    {
+        foreach (['honeypotted', 'baited', 'baiting', 'tarpitting', 'tarpits', 'deceptive', 'deception'] as $text) {
+            self::assertNotSame([], self::scanOwnVocabulary($text), "expected a hit on: {$text}");
+        }
+    }
+
+    /**
+     * FP-0112 finding #4: a stem glued directly to a digit (`decoy2`) is a DELIBERATE, KNOWN non-catch
+     * — see resources/app-fingerprint-denylist.php's own_vocabulary doc comment for why (treating a
+     * digit as a boundary was tried and reverted after it false-positived on this app's own random
+     * base36 region/slug and AWS-key-shaped token generation in ConfigDump). This regression-locks the
+     * accepted trade-off so a future "fix" of the digit case doesn't reintroduce that false-positive
+     * class without someone reading this test first.
+     */
+    public function test_own_vocabulary_deliberately_does_not_catch_a_digit_glued_stem(): void
+    {
+        self::assertSame([], self::scanOwnVocabulary('decoy2'), 'decoy2 is a known, deliberate non-catch');
+        // But a stem at a REAL (non-digit) delimiter must still bite, digit elsewhere in the text or not.
+        self::assertNotSame([], self::scanOwnVocabulary('build2-is_decoy'), 'a genuine delimiter must still catch');
+    }
+
+    /**
+     * FP-0112 "prove the gate bites": the exact production disclosure — /__dl/sw.js's leaked first
+     * line (three commits shipped it; see ticket.md) — must trip the leak-OUT scanner on all three of
+     * its self-identifying terms. An assertion never observed failing on the real historical defect is
+     * not evidence the gate would have caught it.
+     */
+    public function test_own_vocabulary_catches_the_historical_sw_js_disclosure(): void
+    {
+        $historicalFirstLine = '// funnypot — endless decoy-download service worker (client-side bait).';
+        $hits = self::scanOwnVocabulary($historicalFirstLine);
+        self::assertContains('funnypot', $hits);
+        self::assertContains('decoy', $hits);
+        self::assertContains('bait', $hits);
+    }
+
     /** Same pattern must still catch a genuine bare CRS rule id sitting in prose (not hex-adjacent). */
     public function test_bare_crs_rule_id_in_prose_is_still_flagged(): void
     {
@@ -255,7 +373,7 @@ final class FingerprintSafetyTest extends TestCase
             }
         }
 
-        self::assertClean($blob, "fake-filesystem output for role {$role}");
+        self::assertCleanServed($blob, "fake-filesystem output for role {$role}");
     }
 
     /**
@@ -295,7 +413,7 @@ final class FingerprintSafetyTest extends TestCase
             $blob .= ' ' . $d->containerName($cid);
         }
 
-        self::assertClean((string) $blob, "Docker daemon output for seed {$seed}");
+        self::assertCleanServed((string) $blob, "Docker daemon output for seed {$seed}");
     }
 
     /**
@@ -356,6 +474,6 @@ final class FingerprintSafetyTest extends TestCase
         foreach ($hf->netstat() as $n) {
             $blob .= implode(' ', $n) . "\n";
         }
-        self::assertClean($blob, "HostFacts output for identity seed {$seed}");
+        self::assertCleanServed($blob, "HostFacts output for identity seed {$seed}");
     }
 }

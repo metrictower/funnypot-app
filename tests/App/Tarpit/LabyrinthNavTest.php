@@ -246,13 +246,19 @@ final class LabyrinthNavTest extends TestCase
      * The token path is routed through the SAME systemic clean-gate as the polluters; assert that across
      * a sweep of seeds AND deep pages/shards/records NO rendered page trips the app fingerprint denylist.
      * (Fable found seed 5 / page 29 before the fix; this sweep covers it and a broad range.)
+     *
+     * FP-0112 review #3: this is a real unauthenticated GET surface (LabyrinthController), so it must
+     * be scanned for own_vocabulary (leak-OUT — this project's own name) too, not just literals/patterns
+     * (leak-IN — someone else's vocabulary). Both directions run on every rendered page below.
      */
     public function test_no_rendered_page_trips_the_fingerprint_denylist_across_seeds_and_depth(): void
     {
         $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
         $literals = array_values((array) ($d['literals'] ?? []));
         $patterns = array_values((array) ($d['patterns'] ?? []));
-        $scan = static function (string $t) use ($literals, $patterns): ?string {
+        $ownVocabulary = array_values((array) ($d['own_vocabulary'] ?? []));
+        $ownVocabularyPattern = '/(?<![a-zA-Z0-9])(' . implode('|', $ownVocabulary) . ')(?![a-zA-Z0-9])/i';
+        $scan = static function (string $t) use ($literals, $patterns, $ownVocabularyPattern): ?string {
             foreach ($literals as $n) {
                 if ($n !== '' && stripos($t, (string) $n) !== false) {
                     return 'lit:' . $n;
@@ -262,6 +268,9 @@ final class LabyrinthNavTest extends TestCase
                 if (@preg_match('~' . $p . '~i', $t) === 1) {
                     return 'pat:' . $p;
                 }
+            }
+            if (preg_match($ownVocabularyPattern, $t, $m) === 1) {
+                return 'own_vocabulary:' . strtolower($m[0]);
             }
 
             return null;

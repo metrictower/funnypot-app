@@ -119,6 +119,31 @@ final class DownloadRouterTest extends TestCase
         $this->assertSame('/', $emitter->headers()['Service-Worker-Allowed'] ?? '');
     }
 
+    /**
+     * FP-0112: every other case in this file injects the "/* sw *\/" stub, which is exactly how the
+     * router-level plumbing test suite kept passing while the REAL src/App/Download/sw.js shipped a
+     * self-identifying comment to production for three commits (nothing here ever read the real
+     * bytes). This one case wires the actual on-disk file through — the same construction
+     * demo/index.php uses in production — and asserts the served body is byte-identical to it, so a
+     * change to demo/index.php's wiring (or a future stub creeping into every case again) cannot
+     * silently stop this suite from ever touching the real artifact. Fingerprint-safety of the real
+     * file's content is FingerprintSafetyTest/ServedSurfacesFingerprintTest's job, not this one's.
+     */
+    public function testSwPathServesTheRealOnDiskWorkerFileByteIdentical(): void
+    {
+        $realSw = (string) file_get_contents(dirname(__DIR__, 3) . '/src/App/Download/sw.js');
+        $this->assertNotSame('', $realSw, 'src/App/Download/sw.js must exist and be non-empty for this test to mean anything');
+
+        $captured = '';
+        $emitter = new StreamEmitter(static function (string $b) use (&$captured): void { $captured .= $b; }, 0);
+        $r = new DownloadRouter($this->hits, self::SEED, $realSw, 100, 200, 100, 50, 20, 2, static fn (): StreamEmitter => $emitter);
+        $r->handle(new RequestContext('GET', '/__dl/sw.js'), '203.0.113.6');
+
+        $this->assertSame($realSw, $captured, 'the served body must be byte-identical to the real on-disk worker');
+        $this->assertSame('application/javascript; charset=utf-8', $emitter->headers()['Content-Type'] ?? '');
+        $this->assertSame('/', $emitter->headers()['Service-Worker-Allowed'] ?? '');
+    }
+
     public function testFallbackStaysUnderCapAndStartsWithZipHeader(): void
     {
         $out = $this->handle('/__dl/backup.zip', 'host=' . $this->host, 'GET');
