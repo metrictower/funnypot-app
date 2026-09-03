@@ -89,9 +89,19 @@ return [
         // FP-0112 finding #4: suffix-aware so a conjugated/inflected form (honeypotted, baited,
         // tarpitting, deceptive, …) can't slip past a bare-stem match the way `honeypot`/`bait`/
         // `tarpit`/`deception` alone did. See FingerprintSafetyTest/ServedSurfacesFingerprintTest's
-        // ownVocabularyPattern() for the delimiter-safe lookaround this compiles into (letters are
-        // delimiters on both sides; a glued digit, e.g. `decoy2`, is deliberately NOT — the fp-9a2c
-        // seeded-class-prefix carve-out above is about the separate bare `fp` token, not this).
+        // ownVocabularyPattern() for the delimiter-safe lookaround this compiles into.
+        //
+        // A stem glued directly to a DIGIT (`decoy2`) is a DELIBERATE, KNOWN non-catch — digits stay
+        // word characters here, same as before this ticket. Tried making a digit a boundary too (so
+        // `decoy2` would catch); reverted it after it produced REAL false positives against this app's
+        // own random-token generation the very first time it ran against a full-cap surface: ConfigDump
+        // (A1 context-polluter) draws random base36 region/slug identifiers, and at 8 MiB some of them
+        // coincidentally place a bare `lure`/`bait` between two digits (`region-6xgn-lure0l`, an AWS-
+        // key-shaped `AKIATFJ3JZN0LURE2YN6`) — see FP-0112 comments.md. This app generates enormous
+        // volumes of random hex/base36 tokens (fake keys, hostnames, container/region ids), so a stem
+        // is far more likely to land next to a coincidental digit than next to a deliberate delimiter;
+        // treating digits as boundaries trades one narrow, low-value catch (a literal `decoyN` in
+        // prose) for a much larger source of noise. `decoy2` therefore stays uncaught by design.
         'honeypot(?:s|ted)?',
         'decoy(?:s)?',
         'bait(?:ed|ing)?',

@@ -47,21 +47,21 @@ final class FingerprintSafetyTest extends TestCase
 
     /**
      * The leak-OUT (own_vocabulary) regex: whole-token, delimiter-safe. Compiled once from the
-     * denylist's word-stem fragments — `(?<![a-zA-Z])` / `(?![a-zA-Z])` lookaround, so a run of
-     * underscores/punctuation/whitespace/DIGITS/string-start-or-end all count as a boundary (matching
-     * `is_decoy`/`decoy_file` AND a digit-glued `decoy2`) while `controller` and `failure` do NOT
-     * contain `troll`/`lure` as a WHOLE token and so stay clean. Digits are deliberately NOT word
-     * characters here (FP-0112 finding #4) — unlike the leak-IN `patterns` matching elsewhere in this
-     * file, own_vocabulary has no bare-CRS-rule-id-style reason to treat a digit run as part of the
-     * token, and a stem directly glued to a digit (`decoy2`) is exactly the kind of leak this guards.
-     * See resources/app-fingerprint-denylist.php's own_vocabulary doc comment for the
-     * false-positive/true-positive matrix this was measured against.
+     * denylist's word-stem fragments — `(?<![a-zA-Z0-9])` / `(?![a-zA-Z0-9])` lookaround, so a run of
+     * underscores/punctuation/whitespace/string-start-or-end all count as a boundary (matching
+     * `is_decoy`/`decoy_file`) while `controller` and `failure` do NOT contain `troll`/`lure` as a
+     * WHOLE token and so stay clean. Digits are deliberately KEPT as word characters (FP-0112 #4
+     * considered treating a digit run as a boundary too, to catch a glued-digit stem like `decoy2`;
+     * reverted after it produced real false positives against this app's own random-token generation —
+     * see resources/app-fingerprint-denylist.php's own_vocabulary doc comment for the specifics).
+     * See that same doc comment for the full false-positive/true-positive matrix this was measured
+     * against.
      */
     private static function ownVocabularyPattern(): string
     {
         $vocab = self::denylist()['own_vocabulary'];
 
-        return '/(?<![a-zA-Z])(' . implode('|', $vocab) . ')(?![a-zA-Z])/i';
+        return '/(?<![a-zA-Z0-9])(' . implode('|', $vocab) . ')(?![a-zA-Z0-9])/i';
     }
 
     /** @return list<string> every leak-IN denylist signature found in $text (empty => clean) */
@@ -271,14 +271,29 @@ final class FingerprintSafetyTest extends TestCase
 
     /**
      * FP-0112 finding #4: the tightened suffix handling must catch the false negatives the reviewer
-     * found — a conjugated/inflected form (honeypotted, baited, tarpitting, deceptive) and a stem
-     * glued directly to a digit (decoy2) — all of which the untightened bare-stem list let through.
+     * found — a conjugated/inflected form (honeypotted, baited, tarpitting, deceptive) — which the
+     * untightened bare-stem list let through.
      */
     public function test_own_vocabulary_catches_tightened_suffix_variants(): void
     {
-        foreach (['decoy2', 'honeypotted', 'baited', 'baiting', 'tarpitting', 'tarpits', 'deceptive', 'deception'] as $text) {
+        foreach (['honeypotted', 'baited', 'baiting', 'tarpitting', 'tarpits', 'deceptive', 'deception'] as $text) {
             self::assertNotSame([], self::scanOwnVocabulary($text), "expected a hit on: {$text}");
         }
+    }
+
+    /**
+     * FP-0112 finding #4: a stem glued directly to a digit (`decoy2`) is a DELIBERATE, KNOWN non-catch
+     * — see resources/app-fingerprint-denylist.php's own_vocabulary doc comment for why (treating a
+     * digit as a boundary was tried and reverted after it false-positived on this app's own random
+     * base36 region/slug and AWS-key-shaped token generation in ConfigDump). This regression-locks the
+     * accepted trade-off so a future "fix" of the digit case doesn't reintroduce that false-positive
+     * class without someone reading this test first.
+     */
+    public function test_own_vocabulary_deliberately_does_not_catch_a_digit_glued_stem(): void
+    {
+        self::assertSame([], self::scanOwnVocabulary('decoy2'), 'decoy2 is a known, deliberate non-catch');
+        // But a stem at a REAL (non-digit) delimiter must still bite, digit elsewhere in the text or not.
+        self::assertNotSame([], self::scanOwnVocabulary('build2-is_decoy'), 'a genuine delimiter must still catch');
     }
 
     /**

@@ -101,14 +101,15 @@ final class ServedSurfacesFingerprintTest extends TestCase
         ];
     }
 
-    /** FP-0112 finding #4: digits are deliberately NOT word characters in this lookaround — see
-     *  FingerprintSafetyTest::ownVocabularyPattern()'s doc comment for why (a digit-glued stem like
-     *  `decoy2` must still be caught; this is a mirror of the same regex, kept in sync by hand). */
+    /** Mirrors FingerprintSafetyTest::ownVocabularyPattern() exactly (kept in sync by hand) — see that
+     *  method's doc comment for why digits stay word characters (a digit-glued stem like `decoy2` is a
+     *  deliberate, documented non-catch; see resources/app-fingerprint-denylist.php's own_vocabulary
+     *  doc comment for the false-positive this avoided). */
     private static function ownVocabularyPattern(): string
     {
         $vocab = self::denylist()['own_vocabulary'];
 
-        return '/(?<![a-zA-Z])(' . implode('|', $vocab) . ')(?![a-zA-Z])/i';
+        return '/(?<![a-zA-Z0-9])(' . implode('|', $vocab) . ')(?![a-zA-Z0-9])/i';
     }
 
     /** @return list<string> every signature (leak-IN or leak-OUT) found in $text (empty => clean) */

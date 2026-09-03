@@ -71,8 +71,10 @@ final class LlmOutputSanitizer
     /** Compiled once per process: the delimiter-safe, whole-token regex over the shared own_vocabulary
      *  stems (funnypot/bait/lure/tarpit/metrictower/troll/sabotage/deception — honeypot/decoy excluded,
      *  see SHARED_OWN_VOCABULARY_EXCLUDE), read from the same resources/app-fingerprint-denylist.php
-     *  the served-surface tests scan. Mirrors FingerprintSafetyTest::ownVocabularyPattern() exactly
-     *  (same `(?<![a-zA-Z])`/`(?![a-zA-Z])` lookaround — a digit run is a boundary, per FP-0112 #4). */
+     *  the served-surface tests scan. Mirrors FingerprintSafetyTest::ownVocabularyPattern() exactly,
+     *  digits-stay-word-characters included (a stem glued to a digit, e.g. `decoy2`, is a deliberate
+     *  non-catch — see that resource file's own_vocabulary doc comment for the false-positive this
+     *  avoids against this app's own random-token generation). */
     private static ?string $ownVocabularyPattern = null;
 
     /** @return list<string> the own_vocabulary stems, minus SHARED_OWN_VOCABULARY_EXCLUDE */
@@ -100,7 +102,7 @@ final class LlmOutputSanitizer
             $stems = self::loadSharedOwnVocabularyStems();
             self::$ownVocabularyPattern = $stems === []
                 ? ''
-                : '/(?<![a-zA-Z])(' . implode('|', $stems) . ')(?![a-zA-Z])/i';
+                : '/(?<![a-zA-Z0-9])(' . implode('|', $stems) . ')(?![a-zA-Z0-9])/i';
         }
 
         return self::$ownVocabularyPattern !== '' && preg_match(self::$ownVocabularyPattern, $text) === 1;
