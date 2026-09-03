@@ -316,6 +316,39 @@ final class AdminAuth
         }
     }
 
+    // ---------------------------------------------------------------- login-form oracle rate limit ---
+    // (FP-0250 2.6 — the GET ?admin=login knock itself, distinct from the credential lockout above.)
+
+    /**
+     * Record that the GET ?admin=login form was rendered for $ip. A 'form' result — like 'lockout', it
+     * never counts toward the credential lockout/backoff above (only 'fail' does); it exists solely so
+     * {@see isFormRateLimited()} can bound how many times the form itself may be fetched.
+     */
+    public function recordFormView(string $ip): void
+    {
+        $this->record($ip, 'form');
+    }
+
+    /**
+     * True when the login-form oracle should be decoyed for $ip: the per-IP 'form'+'fail' count within
+     * the lockout window exceeds $cap. A scanner spraying `?admin=login` across many paths (only one of
+     * which is the real hidden dashboard path) trips this on the real path long before it could ever
+     * brute-force a credential — the point is bounding the SCAN rate of the knock itself, not guessing.
+     */
+    public function isFormRateLimited(string $ip, int $cap = 30): bool
+    {
+        if ($ip === '') {
+            return false;
+        }
+        $cut = ($this->clock)() - $this->lockoutWindowS;
+        $st = $this->db()->prepare(
+            "SELECT COUNT(*) FROM login_attempts WHERE ip = :ip AND result IN ('form', 'fail') AND ts >= :cut"
+        );
+        $st->execute([':ip' => $ip, ':cut' => $cut]);
+
+        return (int) $st->fetchColumn() > $cap;
+    }
+
     // ---------------------------------------------------------------- internals --------------------
 
     private function isLockedOut(string $ip): bool

@@ -108,6 +108,26 @@ final class HoneypotController
         return self::ipInCidrList((string) ($_SERVER['REMOTE_ADDR'] ?? ''), $trustedProxies);
     }
 
+    /**
+     * The honeypot's own believable 404 — byte-for-byte the SAME body + Content-Type (no charset) a
+     * probe of any non-dashboard path already gets from the two call sites below. FP-0250 2.6/2.8 reuse
+     * this SAME constant for the dashboard's decoy branches (a wrong knock token, a rate-limited login
+     * form, and the bare-GET public_view=none 404 in DashboardController) so the hidden dashboard
+     * surface is byte-indistinguishable from any other probed path — extracting this common body is
+     * what makes that reuse a guaranteed match rather than two copies that could drift apart. Emits
+     * ONLY the status + this one header + this one body — never a security header, never
+     * Cache-Control: no-store, so a 404 never uniquely carries a header-shaped tell either. Callers on
+     * the dashboard surface MUST run this before emitting ANY other header (order is load-bearing).
+     */
+    public static function serveBelievable404(): void
+    {
+        http_response_code(404);
+        header('Content-Type: text/html');
+        echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
+            . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
+            . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+    }
+
     /** True if $ip matches any entry (a bare IP is exact-match; an a.b.c.d/n is an IPv4 CIDR). */
     private static function ipInCidrList(string $ip, array $list): bool
     {
@@ -186,11 +206,7 @@ final class HoneypotController
         // surface. Checked before the engine so a blocked source costs one O(1) lookup + a static 404.
         if ($this->operatorBlock !== null && $this->operatorBlock->isBlocked($clientIp)) {
             $this->serveDelay();
-            http_response_code(404);
-            header('Content-Type: text/html');
-            echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
-                . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
-                . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+            self::serveBelievable404();
 
             return;
         }
@@ -294,11 +310,7 @@ final class HoneypotController
                 ResponseEmitter::emit($llm);
             } else {
                 // Non-detection (or matched-but-declined): a believable server 404, not a constant string.
-                http_response_code(404);
-                header('Content-Type: text/html');
-                echo "<html>\r\n<head><title>404 Not Found</title></head>\r\n"
-                    . "<body>\r\n<center><h1>404 Not Found</h1></center>\r\n"
-                    . "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+                self::serveBelievable404();
             }
         }
 

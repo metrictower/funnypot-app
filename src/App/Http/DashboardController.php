@@ -70,7 +70,11 @@ final class DashboardController
         if (!$this->authed()) {
             $view = $this->publicView();
             if ($view === 'none') {
-                http_response_code(404);
+                // FP-0250 2.8: the believable honeypot 404, byte-identical to a probe of ANY other path
+                // — not an empty body (§1.6's bare-GET oracle: an empty 404 was the ONE zero-byte 404 on
+                // the box, precisely spotting the hidden dashboard path on a plain GET sweep, no
+                // ?admin=login knock needed). Runs before any header (header discipline, same as 2.6).
+                HoneypotController::serveBelievable404();
 
                 return;
             }
@@ -147,14 +151,20 @@ final class DashboardController
      */
     public function admin(string $action): void
     {
-        header('Content-Type: application/json');
-        header('Cache-Control: no-store');
-
+        // 'login' is dispatched BEFORE the generic headers below (FP-0250 2.6 header discipline):
+        // handleLogin() runs the knock-token check first and, on a decoy, must emit ONLY the honeypot
+        // 404's own headers — no Content-Type: application/json, no Cache-Control: no-store, so a wrong
+        // knock never carries a header-shaped tell either. handleLogin() sets those headers itself on
+        // the real (non-decoy) path.
         if ($action === 'login') {
             $this->handleLogin();
 
             return;
         }
+
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+
         if ($action === 'logout') {
             $this->auth?->logout();
             echo json_encode(['ok' => true]);
@@ -374,6 +384,15 @@ final class DashboardController
     /** POST ?admin=login — verify credentials + mint a session (runs the lockout path). No prior session. */
     private function handleLogin(): void
     {
+        // Knock-token check FIRST, before any header (FP-0250 2.6 header discipline — see admin()'s
+        // dispatch comment above). A wrong/missing ?k= gets the SAME believable 404 the GET form gives.
+        if (!$this->knockOk()) {
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
         if ($this->auth === null) {
             http_response_code(403);
             echo json_encode(['ok' => false, 'error' => 'auth unavailable']);
@@ -384,6 +403,23 @@ final class DashboardController
         $pass = (string) ($_POST['pass'] ?? ($_POST['password'] ?? ''));
         $ip = HoneypotController::clientIp($this->config->trustedProxies);
         echo json_encode($this->auth->login($user, $pass, $ip));
+    }
+
+    /**
+     * FP-0250 2.6 knock token: true when the login form/action is reachable for this request. When
+     * FUNNYPOT_ADMIN_KNOCK is empty (default), the knock is off and this is always true (today's
+     * behaviour — the form is still unbranded + rate-limited regardless). When set, the SAME token must
+     * be present as ?k= (constant-time compared) on both the GET form and the POST action.
+     */
+    private function knockOk(): bool
+    {
+        $knock = $this->config->adminKnock;
+        if ($knock === '') {
+            return true;
+        }
+        $given = (string) ($_GET['k'] ?? '');
+
+        return $given !== '' && hash_equals($knock, $given);
     }
 
     /** config-list / config-audit (reads) and config-set / config-reset (already CSRF-checked). */
@@ -487,35 +523,59 @@ final class DashboardController
      */
     public function loginForm(string $base = '/'): void
     {
+        // Knock + rate-limit checks FIRST, before ANY header (FP-0250 2.6 header discipline): the decoy
+        // branches below emit ONLY the honeypot 404's own headers — no Content-Type: text/html, no
+        // Cache-Control: no-store, no securityHeaders() — so a 404 never uniquely carries a header-shaped
+        // tell distinguishing the hidden dashboard path from any other probed path.
+        if (!$this->knockOk()) {
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        $ip = HoneypotController::clientIp($this->config->trustedProxies);
+        if ($this->auth !== null && $this->auth->isFormRateLimited($ip)) {
+            HoneypotController::serveBelievable404();
+
+            return;
+        }
+        $this->auth?->recordFormView($ip);
+
         $nonce = $this->newNonce();
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-store');
         $this->securityHeaders($nonce);
         $css = (string) @file_get_contents($this->assetsDir . '/app.css');
         $baseJs = json_encode($base, JSON_UNESCAPED_SLASHES);
+        // The knock (if any) rides the POST URL too, so the login JS keeps working under a configured
+        // FUNNYPOT_ADMIN_KNOCK — the operator already proved they know it just to see this form.
+        $knockJs = json_encode($this->config->adminKnock, JSON_UNESCAPED_SLASHES);
         echo '<!doctype html><html lang=en><head><meta charset=utf-8>';
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<title>funnypot</title><style nonce=\"{$nonce}\">{$css}"
+        // FP-0250 2.6: unbranded — a neutral title, no "funnypot" string, no honey class. A scanner
+        // spraying ?admin=login across paths must not learn "this is funnypot" from the form itself
+        // (the authed shell() may keep its branding — it is only ever served to a logged-in operator).
+        echo "<title>Sign in</title><style nonce=\"{$nonce}\">{$css}"
             . '.lf{max-width:320px;margin:12vh auto;padding:24px;border:1px solid var(--line,#333);border-radius:10px}'
             . '.lf input{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:8px}'
             . '.lf .err{color:#e66;min-height:1.2em;font-size:13px}</style></head><body><div class=wrap>';
         // No inline onsubmit= handler (CSP has no 'unsafe-inline' for script-src attributes either) —
         // the nonced listener below calls e.preventDefault() instead.
         echo '<form class=lf id=lf>';
-        echo '<h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>';
+        echo '<h1>Sign in</h1>';
         echo '<input id=lf_user placeholder=username autocomplete=username autofocus>';
         echo '<input id=lf_pass type=password placeholder=password autocomplete=current-password>';
         echo '<div class=err id=lf_err></div>';
         echo '<button class=btn id=lf_go type=submit>Sign in</button>';
         echo '</form>';
         echo "<script nonce=\"{$nonce}\">window.FP_BASE=" . $baseJs . ';</script>';
-        echo "<script nonce=\"{$nonce}\">(function(){var b=window.FP_BASE||\"/\";"
+        echo "<script nonce=\"{$nonce}\">(function(){var b=window.FP_BASE||\"/\";var k=" . $knockJs . ';'
             . 'function q(id){return document.getElementById(id);}'
             . 'q("lf").addEventListener("submit",function(e){'
             . 'e.preventDefault();'
             . 'q("lf_err").textContent="";'
             . 'var body="user="+encodeURIComponent(q("lf_user").value)+"&pass="+encodeURIComponent(q("lf_pass").value);'
-            . 'fetch(b+"?admin=login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body})'
+            . 'var url=b+"?admin=login"+(k?"&k="+encodeURIComponent(k):"");'
+            . 'fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body})'
             . '.then(function(r){return r.json();})'
             . '.then(function(j){if(j&&j.ok){location.href=b;}else{q("lf_err").textContent=(j&&j.error)||"login failed";}})'
             . '.catch(function(){q("lf_err").textContent="login failed";});'
@@ -558,7 +618,9 @@ final class DashboardController
         if (!$authed) {
             $view = $this->publicView();
             if ($view === 'none') {
-                http_response_code(404);
+                // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment) — header
+                // discipline: runs before any header this method would otherwise emit.
+                HoneypotController::serveBelievable404();
 
                 return;
             }
@@ -737,7 +799,10 @@ final class DashboardController
         // it; an unauthenticated visitor gets it ONLY under explicit public_view=full — under 'none'/
         // 'minimal' it is a 404 decoy with no audio bytes (fails toward less exposure).
         if (!$this->authed() && $this->publicView() !== 'full') {
-            http_response_code(404);
+            // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment). Covers BOTH
+            // 'none' and 'minimal' here — captured call audio stays fully gated even under the reduced
+            // public chrome, unlike shell()/feed()'s own 'minimal' branches.
+            HoneypotController::serveBelievable404();
 
             return;
         }
