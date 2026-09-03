@@ -15,6 +15,8 @@ use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DownloadRouter;
+use Funnypot\App\Http\HomeController;
+use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeClassifier;
@@ -471,6 +473,57 @@ final class ServedSurfacesFingerprintTest extends TestCase
         [, $assetsDir] = $this->corporateController();
         $css = (string) file_get_contents($assetsDir . '/corporate.css');
         self::assertServedClean($css, 'demo/assets/corporate.css (served verbatim)');
+    }
+
+    // --- 3e. HomeController: the public "/" decoy sign-in page + hidden lures ------------------------
+
+    /** FP-0112 review #3: HomeController is the public front door (/) — a real unauthenticated
+     *  GET/POST surface — and had no served-surface scan of its own. */
+    private function homeController(): HomeController
+    {
+        $geo = new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
+
+        return new HomeController(new NoopHitStore(), $geo, AppConfig::fromEnv(sys_get_temp_dir()), sys_get_temp_dir());
+    }
+
+    public function test_home_index_page_carries_no_fingerprint_signature(): void
+    {
+        $html = $this->render(fn () => $this->homeController()->index());
+        self::assertStringContainsString('Sign in', $html, 'sanity: still the real login page, not vacuously empty');
+        self::assertServedClean($html, 'HomeController::index() (public / decoy sign-in page)');
+    }
+
+    /** The invalid-credential decoy response — what an unauthenticated POST actually gets served
+     *  (the real-operator overlay is disabled here: no AdminAuth was wired in). */
+    public function test_home_login_post_decoy_response_carries_no_fingerprint_signature(): void
+    {
+        $_POST = ['username' => 'not-the-operator', 'password' => 'whatever'];
+        $html = $this->render(fn () => $this->homeController()->login('203.0.113.56'));
+        $_POST = [];
+        self::assertStringContainsString('/admin/access-login', $html, 'sanity: still the funnel-to-decoy response');
+        self::assertServedClean($html, "HomeController::login('POST') decoy response");
+    }
+
+    // --- 3f. HoneypotController::robots() — a small, self-contained static surface -------------------
+
+    /**
+     * FP-0112 review #3: HoneypotController's catch-all handle() is NOT scanned here — its dynamic
+     * LLM branch (LlmFakeResponder) is covered by the review #1 runtime sanitizer fix
+     * (LlmOutputSanitizer::hasSharedOwnVocabularyLeak), and its STATIC core-engine template output is
+     * funnypot-core's own fingerprint-safety gate's responsibility, not this app's — duplicating that
+     * gate here would test funnypot-core's compiled artifacts through an app-repo test, which is out of
+     * this app's scope. Wiring handle() end-to-end (the real Honeypot engine + Config) was judged too
+     * heavy to add opportunistically here; see backlog/ready-to-code/FP-0304-served-surface-coverage-completion/
+     * for the deferred scope. robots() is scanned below because it is small, self-contained, and needs
+     * none of that wiring — no reason to leave a five-line static method unscanned.
+     */
+    public function test_robots_txt_carries_no_fingerprint_signature(): void
+    {
+        $geo = new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
+        $honeypot = new HoneypotController(new NoopHitStore(), $geo, AppConfig::fromEnv(sys_get_temp_dir()), sys_get_temp_dir());
+        $body = $this->render(fn () => $honeypot->robots());
+        self::assertStringContainsString('Disallow:', $body, 'sanity: still the real robots.txt, not vacuously empty');
+        self::assertServedClean($body, 'HoneypotController::robots()');
     }
 
     // --- 4. Decoy archives — text decoys + recursive member-entry inspection of the nested archives -
