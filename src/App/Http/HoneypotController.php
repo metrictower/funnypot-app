@@ -44,14 +44,42 @@ final class HoneypotController
     ) {
     }
 
-    /** A small delay applied to the LLM fake and the plain 404 so their timing matches a served
-     *  template fake (which already delays inside the engine), leaving at most one timing bucket. */
-    private function serveDelay(): void
+    /**
+     * FP-0250 2.9: the config-driven latency delay a genuine honeypot miss pays before its 404
+     * (latencyMs + jitter, same math serveDelay() below has always used). Extracted static + public
+     * so DashboardController's decoy-404 branches (feed/handleLogin/loginForm/shell/recording — a
+     * knock-fail, a rate-limit, or public_view=none) can pay the SAME cost immediately before
+     * HoneypotController::serveBelievable404(), closing the timing side-channel that let the hidden
+     * dashboard path be fingerprinted by latency even though its bytes/headers already matched a
+     * genuine miss: an unauthenticated 404 there previously called serveBelievable404() directly with
+     * none of the delay a real miss pays via handle() below, so it answered several ms faster
+     * (dominated by the missing 0-jitterMs term) than a random-unmapped-path control — a gap easily
+     * distinguished by medianing a few dozen timed requests per candidate path. Config-driven (reads
+     * $config->latencyMs/jitterMs, not a hardcoded constant) so an operator who tunes jitter keeps
+     * both surfaces matched automatically. Deliberately does NOT reproduce the engine detect/respond
+     * pass, the store->append() write, or the geo->lookup() a real miss also does inside handle() —
+     * that would (a) mislog the operator's own decoy hits into the hit store/geo cache as if they were
+     * attacker traffic, which is a worse correctness problem than a residual timing gap, and (b) is
+     * unnecessary: jitterMs defaults to 40 (a 0-40ms uniform term, ~20ms mean) which swamps the ~1ms
+     * that engine+store+geo work costs, so the jitter term alone closes the exploitable gap within the
+     * noise floor of both the jitter distribution and ordinary network latency. See
+     * DashboardHttpServerTrait-based timing test for the empirical check.
+     */
+    public static function serveDelayFor(AppConfig $config): void
     {
-        $ms = $this->config->latencyMs + ($this->config->jitterMs > 0 ? random_int(0, $this->config->jitterMs) : 0);
+        $ms = $config->latencyMs + ($config->jitterMs > 0 ? random_int(0, $config->jitterMs) : 0);
         if ($ms > 0) {
             usleep($ms * 1000);
         }
+    }
+
+    /** A small delay applied to the LLM fake and the plain 404 so their timing matches a served
+     *  template fake (which already delays inside the engine), leaving at most one timing bucket.
+     *  Delegates to serveDelayFor() (FP-0250 2.9) so this controller's three call sites below and the
+     *  dashboard's decoy-404 branches share one implementation and cannot drift apart. */
+    private function serveDelay(): void
+    {
+        self::serveDelayFor($this->config);
     }
 
     /** True if the client IP is a known attacker (present in the intel blocklist). */

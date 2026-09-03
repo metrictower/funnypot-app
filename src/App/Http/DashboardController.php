@@ -74,6 +74,9 @@ final class DashboardController
                 // — not an empty body (§1.6's bare-GET oracle: an empty 404 was the ONE zero-byte 404 on
                 // the box, precisely spotting the hidden dashboard path on a plain GET sweep, no
                 // ?admin=login knock needed). Runs before any header (header discipline, same as 2.6).
+                // FP-0250 2.9: pay the same latencyMs/jitterMs delay a genuine miss pays (timing parity
+                // — see HoneypotController::serveDelayFor()) before the 404 itself.
+                HoneypotController::serveDelayFor($this->config);
                 HoneypotController::serveBelievable404();
 
                 return;
@@ -398,7 +401,9 @@ final class DashboardController
     {
         // Knock-token check FIRST, before any header (FP-0250 2.6 header discipline — see admin()'s
         // dispatch comment above). A wrong/missing ?k= gets the SAME believable 404 the GET form gives.
+        // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
         if (!$this->knockOk()) {
+            HoneypotController::serveDelayFor($this->config);
             HoneypotController::serveBelievable404();
 
             return;
@@ -539,13 +544,17 @@ final class DashboardController
         // branches below emit ONLY the honeypot 404's own headers — no Content-Type: text/html, no
         // Cache-Control: no-store, no securityHeaders() — so a 404 never uniquely carries a header-shaped
         // tell distinguishing the hidden dashboard path from any other probed path.
+        // FP-0250 2.9: timing parity with a genuine miss on both decoy branches below (see
+        // HoneypotController::serveDelayFor()).
         if (!$this->knockOk()) {
+            HoneypotController::serveDelayFor($this->config);
             HoneypotController::serveBelievable404();
 
             return;
         }
         $ip = HoneypotController::clientIp($this->config->trustedProxies);
         if ($this->auth !== null && $this->auth->isFormRateLimited($ip)) {
+            HoneypotController::serveDelayFor($this->config);
             HoneypotController::serveBelievable404();
 
             return;
@@ -632,6 +641,8 @@ final class DashboardController
             if ($view === 'none') {
                 // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment) — header
                 // discipline: runs before any header this method would otherwise emit.
+                // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
+                HoneypotController::serveDelayFor($this->config);
                 HoneypotController::serveBelievable404();
 
                 return;
@@ -814,6 +825,8 @@ final class DashboardController
             // FP-0250 2.8: the believable honeypot 404 (see feed()'s identical comment). Covers BOTH
             // 'none' and 'minimal' here — captured call audio stays fully gated even under the reduced
             // public chrome, unlike shell()/feed()'s own 'minimal' branches.
+            // FP-0250 2.9: timing parity with a genuine miss (see HoneypotController::serveDelayFor()).
+            HoneypotController::serveDelayFor($this->config);
             HoneypotController::serveBelievable404();
 
             return;
