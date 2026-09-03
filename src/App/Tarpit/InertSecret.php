@@ -27,7 +27,7 @@ use Funnypot\Core\Support\Fake\FakeSecrets;
  */
 final class InertSecret
 {
-    /** @var array{literals:list<string>,patterns:list<string>}|null */
+    /** @var array{literals:list<string>,patterns:list<string>,ownVocabularyPattern:string}|null */
     private static ?array $denylist = null;
 
     public static function apiKey(int $seed, string $key): string
@@ -84,10 +84,17 @@ final class InertSecret
     }
 
     /**
-     * True if $text carries NO app-denylist signature (the same gate {@see derive()} enforces). Callers
-     * that already have a fixed, deterministic value (e.g. a remapped token) use this to reject-and-retry
-     * in their own derivation loop. Wrap a bare identifier in a boundary char (e.g. a space or quote)
-     * before calling if the served context places one there.
+     * True if $text carries NO app-denylist signature (the same gate {@see derive()} enforces) — leak-IN
+     * (literals/patterns) AND leak-OUT (own_vocabulary). Callers that already have a fixed, deterministic
+     * value (e.g. a remapped token) use this to reject-and-retry in their own derivation loop. Wrap a bare
+     * identifier in a boundary char (e.g. a space or quote) before calling if the served context places
+     * one there.
+     *
+     * FP-0112 review #3: this used to check ONLY literals/patterns (leak-IN). A random base36 slug/region
+     * id CAN, by pure chance, spell an own_vocabulary word — verified for real: ConfigDump's per-region
+     * slug landed on the literal string `bait` at persona seed 4 (`region-bait-67vz4i`), because nothing
+     * here rejected it. Every caller of {@see derive()} (ConfigDump's slug(), LogRabbitHole's hexToken(),
+     * …) gets this systemically, no caller change needed.
      */
     public static function isClean(string $text): bool
     {
@@ -103,20 +110,26 @@ final class InertSecret
             }
         }
 
-        return true;
+        return $d['ownVocabularyPattern'] === '' || preg_match($d['ownVocabularyPattern'], $text) !== 1;
     }
 
-    /** @return array{literals:list<string>,patterns:list<string>} */
+    /** @return array{literals:list<string>,patterns:list<string>,ownVocabularyPattern:string} */
     private static function denylist(): array
     {
         if (self::$denylist !== null) {
             return self::$denylist;
         }
         $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
+        $ownVocabulary = array_values((array) ($d['own_vocabulary'] ?? []));
 
         return self::$denylist = [
             'literals' => array_values((array) ($d['literals'] ?? [])),
             'patterns' => array_values((array) ($d['patterns'] ?? [])),
+            // Same delimiter-safe, whole-token construction as FingerprintSafetyTest::ownVocabularyPattern()
+            // (digits stay word characters — see that method's doc comment for why).
+            'ownVocabularyPattern' => $ownVocabulary === []
+                ? ''
+                : '/(?<![a-zA-Z0-9])(' . implode('|', $ownVocabulary) . ')(?![a-zA-Z0-9])/i',
         ];
     }
 }
