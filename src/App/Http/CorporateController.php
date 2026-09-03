@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Http;
 
+use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -40,6 +41,12 @@ final class CorporateController
          *  and NOT in robots/sitemap, so a crawler cannot discover the maze; a GET-only crawler never
          *  POSTs, so it never even sees this response; an LLM that submitted the login decodes it. */
         private ?string $labyrinthEntryHint = null,
+        /** FP-0295: the REAL operator login overlaid on the stealth /login, mirroring HomeController's
+         *  public-mode overlay. When present, a POST whose username exactly matches
+         *  {@see AppConfig::$adminUser} is verified (Argon2id) and, on success, redirects to the stealth
+         *  dashboard path; every other credential is the "invalid" re-render decoy. Null (or an empty
+         *  adminUser) disables it. */
+        private ?AdminAuth $adminAuth = null,
     ) {
     }
 
@@ -64,6 +71,24 @@ final class CorporateController
         if ($method === 'POST') {
             $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
             $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
+
+            // FP-0295: the REAL operator login hides in this decoy (stealth analogue of HomeController).
+            // Run the slow Argon2id verify ONLY on an exact operator-username match (the cost gate; the
+            // non-obvious username makes it effectively unguessable), so a hammered /login is never a
+            // CPU-DoS. On success AdminAuth mints the session + sets its own dashboard-scoped cookie, so we
+            // redirect to the stealth dashboard path. The operator password is NEVER logged. Every other
+            // case falls through to the byte-identical "invalid" re-render below — undetectable by probing.
+            $op = $this->config->adminUser;
+            if ($this->adminAuth !== null && $op !== '' && hash_equals($op, $user)
+                && $this->adminAuth->login($user, $pass, $clientIp)['ok'] === true) {
+                $dash = rtrim($this->config->dashboardPath, '/');
+                header('Location: ' . ($dash !== '' ? $dash : '/'), true, 302);
+                echo '<!doctype html><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($dash) . '">'
+                    . '<title>Redirecting&hellip;</title>';
+
+                return;
+            }
+
             $this->log($clientIp, 'POST', '/login', 'login', 'high', 'globex-login', 'user=' . $user . ' pass=' . $pass);
             $error = '<p class=err>Invalid username or password.</p>';
             // FP-0245e: the LLM-only labyrinth entry hint rides the credential-submission (POST) response

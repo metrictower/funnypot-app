@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Http;
 
+use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -21,6 +22,12 @@ use Geo;
  *   3. a hidden auto-submittable form    -> /admin/root/post
  * A credential POST on the visible form is captured (record-only), then the caller is funnelled into
  * the no-auth admin-panel decoy — the login "succeeds" and drops them somewhere to keep engaging.
+ *
+ * FP-0295: the REAL operator login is overlaid on this same form. A POST whose username exactly matches
+ * the configured operator name is verified with AdminAuth (Argon2id, cost-gated on that match) and, on
+ * success, mints a real session + redirects to the dashboard. Every other credential is the decoy above,
+ * byte-for-byte — so the operator signs in through the form attackers see, with no separate, greppable
+ * login route to find.
  */
 final class HomeController
 {
@@ -39,6 +46,11 @@ final class HomeController
          *  a plain href and NOT in robots, so a crawler cannot discover the maze; an LLM that submitted
          *  the login decodes it. A crawler never POSTs, so it never even sees this response. */
         private ?string $labyrinthEntryHint = null,
+        /** FP-0295: the REAL operator login is overlaid on this decoy. When present, a POST whose
+         *  username exactly matches {@see AppConfig::$adminUser} is verified against it (Argon2id);
+         *  a match mints a real session and redirects to the dashboard. Null (or an empty adminUser)
+         *  disables the overlay — the form is then a pure decoy. */
+        private ?AdminAuth $adminAuth = null,
     ) {
     }
 
@@ -56,6 +68,28 @@ final class HomeController
     {
         $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
         $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
+
+        // FP-0295: the REAL operator login hides in this decoy. Run the deliberately-slow Argon2id verify
+        // ONLY when the submitted username exactly matches the configured operator name — a spray of
+        // random usernames never reaches the hash, so a hammered "/" cannot be turned into a CPU-DoS
+        // (the cost gate; the non-obvious username is what makes the match effectively unguessable). On a
+        // real match+verify AdminAuth mints the session and sets its own dashboard-scoped cookie, so we
+        // just redirect. The operator password is NEVER written to the hit store — only AdminAuth's own
+        // login_attempts audit records the success. EVERY other case (unknown user, wrong password,
+        // lockout, overlay disabled) falls through to the byte-identical decoy below, so the real login is
+        // undetectable by probing.
+        $op = $this->config->adminUser;
+        if ($this->adminAuth !== null && $op !== '' && hash_equals($op, $user)
+            && $this->adminAuth->login($user, $pass, $clientIp)['ok'] === true) {
+            $dash = $this->config->funnypotPath;
+            header('Content-Type: text/html; charset=utf-8');
+            header('Location: ' . $dash, true, 302);
+            echo '<!doctype html><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($dash) . '">'
+                . '<title>Redirecting&hellip;</title>';
+
+            return;
+        }
+
         $this->log($clientIp, 'POST', '/', 'login', 'high', 'home-login', 'user=' . $user . ' pass=' . $pass);
 
         header('Content-Type: text/html; charset=utf-8');

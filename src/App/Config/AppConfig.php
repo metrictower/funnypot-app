@@ -32,6 +32,12 @@ final class AppConfig
         public bool $attackEmulation,
         public bool $decoyArchive,
         public string $adminPassword,
+        /** FP-0295: the operator username the REAL login (overlaid on the public "/" decoy) matches
+         *  before it will run Argon2id. Kept OUT of ConfigRegistry (like the password) so it is never
+         *  shown in the admin config panel — a non-obvious value is itself an opsec control, and it
+         *  gates the deliberately-slow hash so a username-spray never reaches it. Default 'admin'
+         *  (matches the bootstrap seed); set empty to disable the overlay entirely. */
+        public string $adminUser,
         public bool $protocolsEnabled,
         public int $retainDays,
         public float $retainGb,
@@ -272,6 +278,7 @@ final class AppConfig
             attackEmulation: $onUnless0('FUNNYPOT_ATTACK'),
             decoyArchive: $onUnless0('FUNNYPOT_DECOY_ARCHIVE'),
             adminPassword: $str('FUNNYPOT_ADMIN_PASSWORD', ''),
+            adminUser: $str('FUNNYPOT_ADMIN_USER', 'admin'),
             protocolsEnabled: $onUnless0('FUNNYPOT_PROTOCOLS'),
             retainDays: (int) ($str('FUNNYPOT_RETAIN_DAYS', '0')),
             retainGb: (float) ($str('FUNNYPOT_RETAIN_GB', '0')),

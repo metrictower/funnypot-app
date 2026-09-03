@@ -62,21 +62,25 @@ final class AdminAuth
 
     /**
      * One-time bootstrap seed (Open Q3). If NO operator exists yet AND $envPassword is non-empty,
-     * create the first user ('admin') from it — so an existing deploy that set FUNNYPOT_ADMIN_PASSWORD
-     * is not locked out on first boot. Once any user exists this is inert: the env password becomes a
-     * dead value and there is no standing shared-secret backdoor. Best-effort (never throws on the
-     * boot path): a failure here just leaves the panel unreachable until the recovery CLI runs.
+     * create the first user from it — so an existing deploy that set FUNNYPOT_ADMIN_PASSWORD is not
+     * locked out on first boot. The username is the configured operator name (FP-0295: FUNNYPOT_ADMIN_USER,
+     * default 'admin'), so a fresh install with a non-obvious username seeds THAT user. Once any user
+     * exists this is inert: the env password becomes a dead value and there is no standing shared-secret
+     * backdoor — changing the username on an existing install needs the recovery CLI (demo/admin-user.php),
+     * not this seed. Best-effort (never throws on the boot path): a failure here just leaves the panel
+     * unreachable until that CLI runs.
      */
-    public function bootstrap(string $envPassword): void
+    public function bootstrap(string $envPassword, string $username = 'admin'): void
     {
         if ($envPassword === '') {
             return;
         }
+        $username = trim($username) !== '' ? trim($username) : 'admin';
         try {
             if ($this->hasUsers()) {
                 return;
             }
-            $this->createOrResetUser('admin', $envPassword);
+            $this->createOrResetUser($username, $envPassword);
         } catch (Throwable $e) {
             error_log('AdminAuth bootstrap: ' . $e->getMessage());
         }
