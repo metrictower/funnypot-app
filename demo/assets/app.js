@@ -12,10 +12,14 @@ const BASE=(typeof window!=='undefined'&&window.FP_BASE)||'/';  // feed/admin li
 const seen=new Set();
 const key=r=>[r.ts,r.ip,r.method,r.path,r.severity||''].join('|');
 let map=null, markers=null;
+// FP-0250 (2.1): no CDN tile layer (was CARTO dark_all raster tiles — a second external load + Referer
+// leak of the hidden dashboard path on every authed page view). The vendored, same-origin world-outline
+// GeoJSON (window.FP_WORLD_OUTLINE, inlined into the shell response) draws a tile-free basemap instead;
+// L.circleMarker (below) needs no image assets either, so this map makes zero network requests.
 function initMap(){
   if(!window.L||map)return;
-  map=L.map('map',{worldCopyJump:true}).setView([25,10],2);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:6,subdomains:'abcd',attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
+  map=L.map('map',{worldCopyJump:true,attributionControl:false}).setView([25,10],2);
+  if(window.FP_WORLD_OUTLINE){L.geoJSON(window.FP_WORLD_OUTLINE,{style:{color:'#3a3226',weight:1,fillColor:'#241f18',fillOpacity:1}}).addTo(map);}
   markers=L.layerGroup().addTo(map);
 }
 function plot(r){

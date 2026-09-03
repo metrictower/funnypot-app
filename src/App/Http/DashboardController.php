@@ -530,11 +530,19 @@ final class DashboardController
         $uplotCss = (string) @file_get_contents($this->assetsDir . '/uplot.min.css');
         $uplotJs = (string) @file_get_contents($this->assetsDir . '/uplot.min.js');
         $analyticsJs = (string) @file_get_contents($this->assetsDir . '/analytics.js');
+        // FP-0250 (2.1): Leaflet 1.9.4 is vendored + inlined the SAME way uPlot is above — no unpkg.com
+        // load in the authed shell (third-party JS in a session holding the CSRF token, plus a Referer
+        // leak of the hidden dashboard path on the default referrer policy). The world outline (below,
+        // near the map init script) replaces the CARTO raster tile layer, so there is no second
+        // external load either; L.circleMarker (app.js) needs no image assets, so Leaflet's own
+        // default-icon URLs (referenced only in leaflet.min.css, never applied) are never fetched.
+        $leafletCss = (string) @file_get_contents($this->assetsDir . '/leaflet.min.css');
+        $leafletJs = (string) @file_get_contents($this->assetsDir . '/leaflet.min.js');
+        $worldOutline = (string) @file_get_contents($this->assetsDir . '/world-outline.json');
 
         echo "<!doctype html><html lang=en><head><meta charset=utf-8>";
         echo "<meta name=viewport content='width=device-width,initial-scale=1'>";
-        echo "<link rel=stylesheet href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' crossorigin>";
-        echo "<title>funnypot</title><style>{$css}{$uplotCss}</style></head><body><div class=wrap>";
+        echo "<title>funnypot</title><style>{$css}{$uplotCss}{$leafletCss}</style></head><body><div class=wrap>";
         echo "<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>";
         echo "<span id=live class=live><span class=dot></span> live</span></div>";
         echo "<p class=lead>This host is a honeypot. Each row is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted. Updates live.</p>";
@@ -603,7 +611,7 @@ final class DashboardController
             ? "<button id=alogout class=btn title='sign out of the operator session'>logout</button>"
             : "<button id=alogin class=btn title='operator sign in'>login</button>";
         echo "</span></div>";
-        echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map &copy; OpenStreetMap, CARTO</footer>";
+        echo "<footer>funnypot &mdash; a honeypot that turns scanner probes into wasted time. &middot; map outline &copy; Natural Earth (public domain)</footer>";
         echo "<div id=vmodal class=modal hidden><div class=modal-box>";
         echo "<div class=modal-head><b>Emulations</b><input id=vsearch class=filter placeholder='search&hellip;'><span class=grow></span><button id=vclose class=x title=close>&times;</button></div>";
         echo "<div id=vlist class=vlist></div>";
@@ -651,7 +659,11 @@ final class DashboardController
         echo "<button id=caudit class=btn title='show the change audit log'>audit</button><button id=crefresh class=btn>refresh</button><button id=cclose class=x title=close>&times;</button></div>";
         echo "<div class=abody><div id=cstat class=note style='margin:0 0 8px'></div><div id=clist></div><div id=cauditbox class=vlist hidden></div></div>";
         echo "</div></div>";
-        echo "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' crossorigin></script>";
+        echo "<script>{$leafletJs}</script>";
+        // The tile-free basemap (FP-0250 2.1): a simplified world-outline GeoJSON, inlined same-origin
+        // like every other asset on this page, rendered via L.geoJSON on the dark background instead of
+        // fetching raster tiles from a CDN. app.js reads window.FP_WORLD_OUTLINE from initMap().
+        echo '<script>window.FP_WORLD_OUTLINE=' . ($worldOutline !== '' ? $worldOutline : 'null') . ';</script>';
         echo '<script>window.FP_BASE=' . json_encode($base, JSON_UNESCAPED_SLASHES) . ';</script>';
         // Session state for the JS: whether this viewer is authenticated, and (only then) the
         // per-session CSRF token to attach to mutating POSTs. FP_CSRF is empty for an unauthenticated

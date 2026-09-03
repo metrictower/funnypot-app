@@ -88,7 +88,8 @@ The dashboard polls a delta feed (`/?feed=1&after=<cursor>`) that returns only r
 the last poll, not the whole tail, and appends them in place; load older pages back through history.
 When `pdo_sqlite` is present (it is in the docker image) a SQLite mirror gives real all-time stats
 plus top-talkers / source-countries / templates-fired / hourly-activity widgets and an attacker map
-(Leaflet + OSM/CARTO dark tiles). For the map + country stats, fetch the free GeoIP data once and
+(Leaflet, vendored + inlined same-origin, over a simplified world-outline basemap — no raster tile CDN;
+FP-0250). For the map + country stats, fetch the free GeoIP data once and
 build the table:
 
 ```bash
