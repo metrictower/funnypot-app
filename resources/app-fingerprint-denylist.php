@@ -86,14 +86,20 @@ return [
     // data") and legitimately carry this vocabulary; they are never bytes returned to a client.
     'own_vocabulary' => [
         'funnypot',
-        'honeypot(?:s)?',
+        // FP-0112 finding #4: suffix-aware so a conjugated/inflected form (honeypotted, baited,
+        // tarpitting, deceptive, …) can't slip past a bare-stem match the way `honeypot`/`bait`/
+        // `tarpit`/`deception` alone did. See FingerprintSafetyTest/ServedSurfacesFingerprintTest's
+        // ownVocabularyPattern() for the delimiter-safe lookaround this compiles into (letters are
+        // delimiters on both sides; a glued digit, e.g. `decoy2`, is deliberately NOT — the fp-9a2c
+        // seeded-class-prefix carve-out above is about the separate bare `fp` token, not this).
+        'honeypot(?:s|ted)?',
         'decoy(?:s)?',
-        'bait',
+        'bait(?:ed|ing)?',
         'lure(?:s)?',
-        'tarpit(?:s)?',
+        'tarpit(?:s|ting)?',
         'metrictower',
         'troll(?:s|ing)?',
         'sabotage',
-        'deception',
+        'decept(?:ion|ive)',
     ],
 ];
