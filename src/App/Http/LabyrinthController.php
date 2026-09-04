@@ -5,6 +5,11 @@ declare(strict_types=1);
 namespace Funnypot\App\Http;
 
 use Closure;
+use Funnypot\App\Engagement\EngagementEvent;
+use Funnypot\App\Engagement\EngagementRecorder;
+use Funnypot\App\Engagement\EventKind;
+use Funnypot\App\Engagement\LureId;
+use Funnypot\App\Engagement\Stage;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\TarpitBudget;
 use Funnypot\App\Tarpit\InertSecret;
@@ -77,6 +82,7 @@ final class LabyrinthController
      * @param int                  $personaSeed  per-deploy identity seed (same one the panel/skin use)
      * @param int                  $bytesPerRespMb defensive per-response byte cap (post-hoc backstop)
      * @param Closure(int,array<string,string>,string):void|null $emitter injectable for tests
+     * @param EngagementRecorder|null $engagement typed episode metrics observer; null = not recording
      */
     public function __construct(
         private HitStore $hits,
@@ -89,6 +95,7 @@ final class LabyrinthController
         private ?SeededStream $stream = null,
         private int $latencyMs = 0,
         private string $pacingScript = '',
+        private ?EngagementRecorder $engagement = null,
     ) {
         $this->stream = $stream ?? new SeededStream();
         $this->emitter = $emitter ?? static function (int $status, array $headers, string $body): void {
@@ -186,6 +193,38 @@ final class LabyrinthController
             $this->budget->charge($clientIp, $bytes, $wallMs, 1);
             $this->budget->release($slot);
             $this->logPage($clientIp, $ctx->method, $route, $bytes, $wallMs);
+            $this->recordEngagement($ctx, $clientIp, $route, $bytes, $wallMs);
+        }
+    }
+
+    /**
+     * The typed engagement event for this page — an observer run after the response is out, so it
+     * can never change status, headers or body. The recorder is already fail-closed; the try/catch
+     * here is the second belt so even a recorder fault cannot escape a `finally` as a 500. Depth
+     * maps to the closed stage set: the bare entry (page 1, no shard) is DISCOVER, anything deeper
+     * is ENUMERATE. This surface makes no LLM call, so its LLM usage is an observed zero, not unknown.
+     *
+     * @param array{kind:string,page:int,shard:string,record:string,label:string,depth:int} $route
+     */
+    private function recordEngagement(RequestContext $ctx, string $clientIp, array $route, int $bytes, int $wallMs): void
+    {
+        if ($this->engagement === null) {
+            return;
+        }
+        try {
+            $this->engagement->record($clientIp, EngagementRecorder::userAgentOf($ctx), new EngagementEvent(
+                $route['depth'] <= 1 ? Stage::DISCOVER : Stage::ENUMERATE,
+                EventKind::LURE_FOLLOWED,
+                $bytes,
+                $wallMs,
+                LureId::LABYRINTH,
+                null,
+                true,
+                0,
+                0,
+            ));
+        } catch (Throwable $e) {
+            // observer-only: a metrics fault is never a response fault
         }
     }
 

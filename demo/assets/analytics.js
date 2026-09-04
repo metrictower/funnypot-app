@@ -119,8 +119,63 @@
     uplot = new uPlot(opts, data, el);
   }
 
+  // Engagement-episode formatting is nullable-aware: a ratio with a zero denominator arrives as null
+  // (the store's rule) and must read as a dash — the `||0` idiom in tiles() would print 0 and claim a
+  // measurement that was never made. Anything derived rather than measured is labelled "(est.)".
+  const nv = v => (v === null || v === undefined) ? '—' : String(v);
+  const pct = v => (v === null || v === undefined) ? '—' : Math.round(v * 100) + '%';
+  const span = s => (s === null || s === undefined) ? '—' : (s >= 3600 ? (s / 3600).toFixed(1) + 'h' : s >= 60 ? Math.round(s / 60) + 'm' : s + 's');
+  const bytes = b => { b = b || 0; return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MiB' : b >= 1024 ? Math.round(b / 1024) + ' KiB' : b + ' B'; };
+  const clear = ids => ids.forEach(id => { const el = $(id); if (el) el.innerHTML = ''; });
+
+  function engagement(e, recent) {
+    if (!$('aeng')) return;
+    e = e || {};
+    if (!e.enabled) {
+      $('e_status').textContent = e.reason === 'key-unavailable'
+        ? 'engagement metrics are enabled but have no install-local key (FUNNYPOT_ANALYTICS_KEY is a placeholder, or the host secret could not be persisted) — nothing is recorded'
+        : 'engagement metrics are off (FUNNYPOT_ENGAGEMENT=1 enables them)';
+      clear(['e_tiles', 'e_stage', 'e_identity', 'e_lures', 'e_health', 'e_recent']);
+      return;
+    }
+    $('e_status').textContent = '';
+    const llm = e.llm || {};
+    const est = e.estimated || {};
+    const items = [
+      ['episodes', nv(e.episodes)],
+      ['events', nv(e.events)],
+      ['events / episode', nv(e.events_per_episode)],
+      ['evidence keys', nv(e.evidence_keys)],
+      ['continuation (keys seen again)', pct(e.continuation_ratio)],
+      ['avg active span', span(e.avg_active_span_s)],
+      ['longest active span', span(e.max_active_span_s)],
+      ['polls', nv(e.polls)],
+      ['tool turns', nv(e.tool_turns)],
+      ['artifact reuse', nv(e.artifact_reuse)],
+      ['bytes out', bytes(e.bytes_out)],
+      ['server wall', nv(e.server_wall_ms) + ' ms'],
+      ['server LLM calls (' + nv(llm.episodes_unknown) + ' ep. unknown)', nv(llm.calls)],
+      ['server LLM tokens', nv(llm.tokens)],
+      ['context tokens (est.)', nv(est.context_tokens)],
+      ['est. tokens / server ms (est.)', nv(est.context_tokens_per_server_ms)],
+    ];
+    $('e_tiles').innerHTML = items.map(([l, v]) => `<div class=atile><b>${esc(String(v))}</b><span>${esc(l)}</span></div>`).join('');
+    bars($('e_stage'), Object.entries(e.deepest_stage || {}).map(([val, n]) => ({ val, n })), null);
+    bars($('e_identity'), (e.identity || []).map(m => ({ val: m.basis + ' · ' + m.confidence, n: m.episodes })), null);
+    bars($('e_lures'), Object.entries(e.lures || {}).map(([val, n]) => ({ val, n })), null);
+    const h = e.health || {};
+    topTable($('e_health'), ['event_rows', 'bytes_total', 'shed_episode_cap', 'shed_global_rows', 'shed_global_bytes', 'clock_rollback', 'fault', 'db_bytes']
+      .map(k => ({ val: k, n: h[k] === undefined ? 0 : h[k] })), null);
+    recent = recent || [];
+    $('e_recent').innerHTML = recent.length
+      ? recent.map(r => `<div class=arow><span class=av>${esc(r.id_short)} · ${esc(r.basis)} / ${esc(r.confidence)} · ${esc(r.deepest_stage)} · span ${esc(span(r.active_span_s))} · ${esc(String(r.lures))} lure(s)</span>`
+        + `<span class=n>${esc(String(r.events))} ev · ${esc(bytes(r.bytes_out))} · ${esc(String(r.server_wall_ms))} ms · LLM ${esc(nv(r.llm_calls))} · ${esc(nv(r.estimated_context_tokens))} tok (est.)</span></div>`).join('')
+      : '<div class=aempty>&mdash;</div>';
+  }
+
   function render(j) {
     tiles(j.ataglance || {});
+    engagement(j.engagement, j.engagement_recent);
     const b = j.breakdown || {};
     bars($('a_protocol'), b.protocol, 'method');
     bars($('a_status'), b.status, null);

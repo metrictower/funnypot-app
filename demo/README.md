@@ -83,6 +83,16 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_TARPIT_DECOMP_CAP_MB` | `16` | decompression cap if gzip is ever used (decompressed ≤ this, ratio ≤ 100:1 — a nuisance, never a bomb; clamped 1–64) |
 | `FUNNYPOT_SLEEP_DECOY` | off | master switch for the FP-0228 time-based blind-injection SLEEP decoy (opt-in). Honours a recognised SQLi/RCE `SLEEP(n)`/`WAITFOR`/`$(sleep n)` probe with a metered delay so a scanner's calibrated-SLEEP confirmation lands, but bounded: the sleep runs **only while holding a `TarpitBudget` slot** (≤ `MAX_CONCURRENT` workers ever sleep) and the honoured time is charged to the SAME per-IP hourly wall ledger — no second budget |
 | `FUNNYPOT_SLEEP_PER_REQ_CAP_MS` | `2000` | per-request honoured-sleep cap in ms; the delay is `min(requested_seconds·1000, cap)`, hard-clamped ≤ 2000 (well under nginx's 15 s read-timeout — a second wall behind `TarpitBudget::LATENCY_HARD_CAP_MS`). The **per-IP cumulative** allowance is `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S` (the shared wall ledger), not a separate knob; once spent, probes are served immediately with zero delay until the hour bucket rolls over |
+| `FUNNYPOT_ENGAGEMENT` | off | master switch for engagement episode metrics (opt-in): typed per-hit engagement events from the tarpit producers, grouped into pseudonymous episodes in their own `engagement.sqlite`, surfaced in the analytics panel. Observer-only — never changes a response. See `docs/ENGAGEMENT-METRICS.md` |
+| `FUNNYPOT_ANALYTICS_KEY` | unset | install-local key every stored engagement id is HMAC'd under (≥ 16 bytes; shorter = placeholder = metrics stay OFF with a dashboard warning). Unset = a sub-key derived from the persisted host secret (`storage/fs_secret`), so each install has its own id space by default. Env-only, never shown in the config panel |
+| `FUNNYPOT_ENGAGEMENT_IDLE_GAP_S` | `600` | idle gap that closes an episode (clamped 60–1800) |
+| `FUNNYPOT_ENGAGEMENT_LIFETIME_S` | `7200` | absolute episode lifetime; an episode splits at this age regardless of activity (clamped 600–21600) |
+| `FUNNYPOT_ENGAGEMENT_MAX_EVENTS` | `2000` | events one episode may hold; further events are dropped and counted (clamped 1–100000) |
+| `FUNNYPOT_ENGAGEMENT_MAX_ARTIFACTS` | `256` | artifact-bearing events one episode may hold (clamped 1–10000) |
+| `FUNNYPOT_ENGAGEMENT_BYTES_PER_EP_MB` | `2` | retained engagement bytes one episode may hold (clamped 1–64) |
+| `FUNNYPOT_ENGAGEMENT_GLOBAL_ROWS` | `250000` | global event-row ceiling, enforced inline on every write (clamped 1000–5000000) |
+| `FUNNYPOT_ENGAGEMENT_GLOBAL_BYTES_MB` | `256` | global retained-byte ceiling — inline on writes, and the size cap of the retention pass (clamped 1–4096) |
+| `FUNNYPOT_ENGAGEMENT_RETAIN_DAYS` | `30` | age ceiling for engagement rows (clamped 1–30, and never longer than `FUNNYPOT_RETAIN_DAYS` when that is set) |
 
 The dashboard polls a delta feed (`/?feed=1&after=<cursor>`) that returns only rows appended since
 the last poll, not the whole tail, and appends them in place; load older pages back through history.

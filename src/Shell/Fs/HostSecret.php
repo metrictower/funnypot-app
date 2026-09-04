@@ -14,6 +14,24 @@ final class HostSecret
 {
     private const FILENAME = 'fs_secret';
 
+    /**
+     * True when {@see resolve()} yields a secret that survives the process — from the env or the
+     * persisted file. False means resolve() degraded to a per-process value (unwritable volume),
+     * so anything keyed on it would differ per worker; callers that need a stable install-local
+     * key must treat that as "no key" rather than key on it.
+     */
+    public static function isPersisted(string $storageDir): bool
+    {
+        $env = getenv('FUNNYPOT_FS_SECRET');
+        if (is_string($env) && $env !== '') {
+            return true;
+        }
+        $path = rtrim($storageDir, '/') . '/' . self::FILENAME;
+        clearstatcache(true, $path);
+
+        return is_file($path) && (int) @filesize($path) > 0;
+    }
+
     public static function resolve(string $storageDir): string
     {
         $env = getenv('FUNNYPOT_FS_SECRET');

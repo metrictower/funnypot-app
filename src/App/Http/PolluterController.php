@@ -6,6 +6,11 @@ namespace Funnypot\App\Http;
 
 use Closure;
 use Funnypot\App\AiApi\StreamEmitter;
+use Funnypot\App\Engagement\EngagementEvent;
+use Funnypot\App\Engagement\EngagementRecorder;
+use Funnypot\App\Engagement\EventKind;
+use Funnypot\App\Engagement\LureId;
+use Funnypot\App\Engagement\Stage;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\TarpitBudget;
 use Funnypot\App\Tarpit\ConfigDump;
@@ -63,6 +68,7 @@ final class PolluterController
      * @param Closure():StreamEmitter|null  $emitterFactory  injectable for tests (defaults to delay-0)
      * @param Closure(string,int):string|null $bufferedBuilder builds a buffered body ('hostile'|'shadow',
      *        cap) BEFORE begin() — a test seam to exercise the "builder throws ⇒ bounded 404" fault path
+     * @param EngagementRecorder|null $engagement typed episode metrics observer; null = not recording
      */
     public function __construct(
         private HitStore $hits,
@@ -72,7 +78,8 @@ final class PolluterController
         private int $bytesPerRespMb = 8,
         private ?Blocklist $blocklist = null,
         ?Closure $emitterFactory = null,
-        ?Closure $bufferedBuilder = null
+        ?Closure $bufferedBuilder = null,
+        private ?EngagementRecorder $engagement = null
     ) {
         $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
         $this->config = new ConfigDump($personaSeed);
@@ -157,6 +164,36 @@ final class PolluterController
             $this->budget->charge($clientIp, $bytes, $wallMs, 1);
             $this->budget->release($slot);
             $this->logHit($clientIp, $ctx->method, $path, $technique, $bytes, $wallMs);
+            $this->recordEngagement($ctx, $clientIp, $path, $bytes, $wallMs);
+        }
+    }
+
+    /**
+     * The typed engagement event for this export — an observer run after the response is out, so it
+     * can never change status, headers or body; the try/catch is the second belt behind the
+     * recorder's own fail-closed contract, so a fault here cannot escape the `finally` as a 500. A
+     * polluter is always the COLLECT stage; the lure id comes from the closed set keyed by the fixed
+     * path, never from request text. No LLM call is made here, so its usage is an observed zero.
+     */
+    private function recordEngagement(RequestContext $ctx, string $clientIp, string $path, int $bytes, int $wallMs): void
+    {
+        if ($this->engagement === null) {
+            return;
+        }
+        try {
+            $this->engagement->record($clientIp, EngagementRecorder::userAgentOf($ctx), new EngagementEvent(
+                Stage::COLLECT,
+                EventKind::LURE_FOLLOWED,
+                $bytes,
+                $wallMs,
+                LureId::forPolluterPath($path),
+                null,
+                true,
+                0,
+                0,
+            ));
+        } catch (Throwable $e) {
+            // observer-only: a metrics fault is never a response fault
         }
     }
 

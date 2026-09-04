@@ -8,6 +8,7 @@ use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Admin\ConfigAdmin;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
+use Funnypot\App\Engagement\EngagementAnalytics;
 use Funnypot\App\Storage\AnalyticsStore;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\LlmFakeCache;
@@ -43,6 +44,9 @@ final class DashboardController
         private ?AdminAuth $auth = null,
         // The runtime config store, for the config-admin panel. Nullable for the same reason.
         private ?ConfigStore $configStore = null,
+        // Engagement episode aggregates (the read side of the engagement store). Nullable like
+        // $analytics: null ⇒ the analytics payload reports the section as off, never a 500.
+        private ?EngagementAnalytics $engagement = null,
     ) {
     }
 
@@ -242,9 +246,25 @@ final class DashboardController
                 'window_s' => $agWin, 'events' => 0, 'rate' => 0.0, 'unique_ips' => 0, 'new' => 0, 'returning' => 0,
             ]);
 
+            // Engagement episodes ride the same window and the same fault rule: a null wiring reports
+            // the section off, a read fault degrades to the off shape — never a 500.
+            $engagementOff = ['enabled' => false, 'reason' => 'off'];
+            $safeEng = function (callable $fn, $default) {
+                try {
+                    return $this->engagement !== null ? $fn() : $default;
+                } catch (\Throwable $e) {
+                    error_log('funnypot engagement analytics: ' . $e->getMessage());
+
+                    return $default;
+                }
+            };
+            $engagement = $safeEng(fn () => $this->engagement->summary($since), $engagementOff);
+            $engagementRecent = $safeEng(fn () => $this->engagement->recent($since, 20), []);
+
             echo json_encode([
                 'ok' => true, 'win' => $win, 'gran' => $gran,
                 'breakdown' => $breakdown, 'series' => $series, 'topN' => $topN, 'ataglance' => $ataglance,
+                'engagement' => $engagement, 'engagement_recent' => $engagementRecent,
             ], $flags);
 
             return;
@@ -785,7 +805,26 @@ final class DashboardController
         echo "<div class=acard><h4>top countries</h4><div id=t_cc class=atop></div></div>";
         echo "<div class=acard><h4>top tools</h4><div id=t_tool class=atop></div></div>";
         echo "<div class=acard><h4>top paths</h4><div id=t_path class=atop></div></div>";
-        echo "</div></div></div></div>";
+        echo "</div>";
+        // Engagement episodes (the engagement store's read side, same auth gate, same window). An
+        // episode is a pseudonymous observational grouping, so the panel shows identity basis ×
+        // confidence and states the NAT / rotation / copied-artifact limits in place — never an actor.
+        // Estimates carry an explicit "(est.)" label; a zero-denominator ratio renders as a dash.
+        echo "<div class=asec id=aeng><h4>engagement episodes</h4><div id=e_status class=note style='margin:0 0 6px'></div>";
+        echo "<div id=e_tiles class=atiles></div>";
+        echo "<div class=agrid>";
+        echo "<div class=acard><h4>deepest stage reached (episodes)</h4><div id=e_stage class=abars></div></div>";
+        echo "<div class=acard><h4>identity basis &middot; confidence (episodes)</h4><div id=e_identity class=abars></div></div>";
+        echo "<div class=acard><h4>lures followed (events)</h4><div id=e_lures class=abars></div></div>";
+        echo "<div class=acard><h4>store health</h4><div id=e_health class=atop></div></div>";
+        echo "</div>";
+        echo "<div class=acard><h4>recent episodes</h4><div id=e_recent class=atop></div></div>";
+        echo "<p class=note style='margin:6px 0 0'>Episodes are local pseudonymous groupings of requests &mdash; not people, accounts or campaigns. "
+            . "A network-basis episode (low confidence) can merge unrelated clients behind NAT or a shared proxy, and one client that rotates address or user agent splits across several; "
+            . "a reused artifact links events but never says who holds it. Values marked (est.) are derived from served bytes (&divide;4), not measured attacker token use; "
+            . "server LLM usage shows a dash when it was not observed.</p>";
+        echo "</div>";
+        echo "</div></div></div>";
         // Config-admin panel (FP-0242b). Opened behind the session via app.js; lists ConfigRegistry
         // grouped with resolved value + source, edits via ConfigStore::set/reset (registry-validated),
         // and shows the config_audit log. Secret values are never rendered (set/unset only).

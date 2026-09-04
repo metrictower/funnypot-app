@@ -25,7 +25,7 @@ final class ConfigRegistryTest extends TestCase
      */
     private const ENV_ONLY = [
         'dbPath', 'logPath', 'geoDbPath', 'vulnsPath', 'intelDbPath', 'llmCacheDb', 'tarpitDbPath', // paths
-        'honeytokenKey', 'adminPassword', 'abuseIpdbKey', 'threatIntelKey',         // secrets
+        'honeytokenKey', 'adminPassword', 'abuseIpdbKey', 'threatIntelKey', 'analyticsKey', // secrets
         'personaSeed', 'personaMaterial', 'adminUser', 'adminKnock',                // identity
         'selfIps', 'trustedProxies',                                                // network topology
     ];

@@ -15,8 +15,10 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
+use Funnypot\App\Engagement\EngagementCaps;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\RawCapture;
+use Funnypot\App\Storage\SqliteEngagementStore;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
 
@@ -81,6 +83,27 @@ if (is_file($rawPath)) {
         }
     } catch (Throwable $e) {
         fwrite(STDERR, 'retention (raw-capture): ' . $e->getMessage() . "\n");
+    }
+}
+
+// Engagement-metrics upkeep: guarded on the FILE existing (like raw capture) so a store left behind
+// after the feature is switched off is still pruned, and retention never creates an empty db. Age is
+// capped by the hit retention and 30 days (EngagementCaps::retainCeiling), size by the global byte
+// ceiling. The request path already enforces the row/byte ceilings inline from O(1) gauges; this pass
+// is the bulk reclaim (checkpoint + incremental_vacuum) and recounts those gauges after deleting.
+$engPath = SqliteEngagementStore::defaultPath($config->dbPath);
+if (is_file($engPath)) {
+    try {
+        $engCaps = EngagementCaps::fromConfig($config);
+        $eng = new SqliteEngagementStore($engPath, $engCaps); // maintenance instance: prunes, never records
+        $eng->checkpointWal();
+        $engByAge = $eng->retainDays($engCaps->retainDays);
+        $engBySize = $eng->retainBytes($engCaps->globalMaxBytes);
+        if ($engByAge > 0 || $engBySize > 0) {
+            fwrite(STDERR, sprintf("retention: engagement pruned %d by age + %d by size\n", $engByAge, $engBySize));
+        }
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'retention (engagement): ' . $e->getMessage() . "\n");
     }
 }
 

@@ -182,6 +182,17 @@ final class ConfigRegistry
             // --- Time-based blind-injection SLEEP decoy (FP-0228). Opt-in; rides the tarpit slot/ledger. The per-IP cumulative sleep budget is tarpit.wall_per_ip_hr_s (no separate knob — one ledger). ---
             'sleep_decoy.enabled' => ['field' => 'sleepDecoy', 'env' => 'FUNNYPOT_SLEEP_DECOY', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
             'sleep_decoy.per_req_cap_ms' => ['field' => 'sleepPerReqCapMs', 'env' => 'FUNNYPOT_SLEEP_PER_REQ_CAP_MS', 'type' => 'int', 'min' => 0, 'max' => 2000, 'default' => '2000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(0,min(2000,...)))
+
+            // --- Engagement episode metrics (opt-in; restart-required: the store + caps are built at bootstrap). analyticsKey is env-only (a secret). ---
+            'engagement.enabled' => ['field' => 'engagementEnabled', 'env' => 'FUNNYPOT_ENGAGEMENT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Engagement', 'live' => false, 'secret' => false],
+            'engagement.idle_gap_s' => ['field' => 'engagementIdleGapS', 'env' => 'FUNNYPOT_ENGAGEMENT_IDLE_GAP_S', 'type' => 'int', 'min' => 60, 'max' => 1800, 'default' => '600', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(60,min(1800,...)))
+            'engagement.lifetime_s' => ['field' => 'engagementLifetimeS', 'env' => 'FUNNYPOT_ENGAGEMENT_LIFETIME_S', 'type' => 'int', 'min' => 600, 'max' => 21600, 'default' => '7200', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(600,min(21600,...)))
+            'engagement.max_events' => ['field' => 'engagementMaxEvents', 'env' => 'FUNNYPOT_ENGAGEMENT_MAX_EVENTS', 'type' => 'int', 'min' => 1, 'max' => 100000, 'default' => '2000', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1,min(100000,...)))
+            'engagement.max_artifacts' => ['field' => 'engagementMaxArtifacts', 'env' => 'FUNNYPOT_ENGAGEMENT_MAX_ARTIFACTS', 'type' => 'int', 'min' => 1, 'max' => 10000, 'default' => '256', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1,min(10000,...)))
+            'engagement.bytes_per_ep_mb' => ['field' => 'engagementBytesPerEpMb', 'env' => 'FUNNYPOT_ENGAGEMENT_BYTES_PER_EP_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '2', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1,min(64,...)))
+            'engagement.global_rows' => ['field' => 'engagementGlobalRows', 'env' => 'FUNNYPOT_ENGAGEMENT_GLOBAL_ROWS', 'type' => 'int', 'min' => 1000, 'max' => 5000000, 'default' => '250000', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1000,min(5000000,...)))
+            'engagement.global_bytes_mb' => ['field' => 'engagementGlobalBytesMb', 'env' => 'FUNNYPOT_ENGAGEMENT_GLOBAL_BYTES_MB', 'type' => 'int', 'min' => 1, 'max' => 4096, 'default' => '256', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1,min(4096,...)))
+            'engagement.retain_days' => ['field' => 'engagementRetainDays', 'env' => 'FUNNYPOT_ENGAGEMENT_RETAIN_DAYS', 'type' => 'int', 'min' => 1, 'max' => 30, 'default' => '30', 'group' => 'Engagement', 'live' => false, 'secret' => false], // (max(1,min(30,...))); further capped by retain_days at runtime
         ];
     }
 

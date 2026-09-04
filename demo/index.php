@@ -27,6 +27,12 @@ use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Docker\DockerApiResponder;
 use Funnypot\App\Docker\DockerApiRouter;
 use Funnypot\App\Docker\PhantomStore;
+use Funnypot\App\Engagement\AnalyticsKey;
+use Funnypot\App\Engagement\EngagementCaps;
+use Funnypot\App\Engagement\EngagementRecorder;
+use Funnypot\App\Engagement\EpisodeResolver;
+use Funnypot\App\Engagement\NoopEngagementStore;
+use Funnypot\App\Engagement\SignedHandle;
 use Funnypot\App\Http\ConsoleRouter;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
@@ -55,6 +61,7 @@ use Funnypot\App\Render\SkinSet;
 use Funnypot\App\Storage\FakePersistenceStore;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\RawCapture;
+use Funnypot\App\Storage\SqliteEngagementStore;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
@@ -282,10 +289,39 @@ $adminSecure = (($_SERVER['HTTPS'] ?? '') !== '' && ($_SERVER['HTTPS'] ?? '') !=
     || (HoneypotController::isTrustedPeer($config->trustedProxies) && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
 $adminAuth = new AdminAuth(dirname($config->dbPath) . '/admin.sqlite', $adminBase, $adminSecure);
 $adminAuth->bootstrap($config->adminPassword, $config->adminUser);
+// Engagement episode metrics (opt-in, FUNNYPOT_ENGAGEMENT). Observer-only: the recorder is handed to
+// the tarpit producers below and runs AFTER their response is out; the read side goes to the
+// dashboard. Every stored id is an install-local HMAC under the analytics key. No usable key material
+// (a placeholder FUNNYPOT_ANALYTICS_KEY, or a host secret that could not be persisted) keeps the
+// recorder OFF and tells the dashboard why — never a fall-back to an identity shared across installs.
+// One clock closure is shared by the recorder and the store so handle expiry and episode boundaries
+// are judged against the same integer epoch every worker sees.
+$engagementAnalytics = null;
+$engagementRecorder = null;
+if ($config->engagementEnabled) {
+    $analyticsKey = AnalyticsKey::resolve($config->analyticsKey, __DIR__ . '/storage');
+    if ($analyticsKey === null) {
+        $engagementAnalytics = new NoopEngagementStore(NoopEngagementStore::REASON_NO_KEY);
+    } else {
+        $engagementClock = static fn (): int => time();
+        $engagementStore = new SqliteEngagementStore(
+            SqliteEngagementStore::defaultPath($config->dbPath),
+            EngagementCaps::fromConfig($config),
+            [$analyticsKey, 'id'],
+            $engagementClock,
+        );
+        $engagementAnalytics = $engagementStore;
+        $engagementRecorder = new EngagementRecorder(
+            $engagementStore,
+            new EpisodeResolver($analyticsKey, new SignedHandle($analyticsKey)),
+            $engagementClock,
+        );
+    }
+}
 // $store is a SqliteHitStore, which implements both HitStore and AnalyticsStore — the analytics
 // view (FP-0243b) reads the rollup tables through the SAME instance. $adminAuth + $configStore power
-// the FP-0242b session gate and the config-admin panel.
-$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore);
+// the FP-0242b session gate and the config-admin panel; $engagementAnalytics the episode section.
+$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore, $engagementAnalytics);
 // LLM-only labyrinth (FP-0245b) — the deep-engagement decoy. Master switch OFF by default (opt-in via
 // FUNNYPOT_TARPIT); when off, $labyrinth is null so the Router never mounts the seam (the paths fall
 // through to the honeypot) and no entry hint is planted. Its own TarpitBudget over tarpit.sqlite is the
@@ -315,10 +351,10 @@ if ($config->tarpitEnabled) {
     $tarpitPacingSw = $config->tarpitLatencyMs > 0
         ? (string) @file_get_contents(dirname(__DIR__) . '/src/App/Tarpit/tarpit-sw.js')
         : '';
-    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw);
+    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder);
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
     // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
-    $polluter = new PolluterController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist);
+    $polluter = new PolluterController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
 }
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When

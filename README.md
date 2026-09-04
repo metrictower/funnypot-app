@@ -138,6 +138,30 @@ No second budget, structure-only parsing (the payload is never echoed, the body 
 store fault degrades to no delay — never a 500. The decoy classifies the sleep structure independently, so
 it fires on every serve path (the served attack fake included), not just the 404 fall-through.
 
+**Engagement episode metrics (opt-in, `FUNNYPOT_ENGAGEMENT=1`)** answer the question hit counts can't:
+did a lure keep a scanner or agent engaged? The tarpit producers (labyrinth, polluters) emit a **typed
+engagement event** per hit — closed vocabularies for `stage` / `event_kind` / `lure_id`, measured
+`bytes_out` and `server_wall_ms`, observed request/tool-turn counters, and **nullable** server-LLM usage
+(`0` means observed zero, `null` means unknown; recording unknown as zero is rejected). Events group into
+**episodes**: local, pseudonymous groupings keyed on the strongest *verified* evidence — a Funnypot-issued
+MAC'd expiring handle (high confidence), an integrity-protected first-party cookie (medium; defined, not
+yet produced), or a keyed digest of peer address + coarse user-agent class (always low: NAT merges
+clients, rotation splits them). Every stored id is a versioned, domain-separated **install-local HMAC**
+(≥128 bits) under `FUNNYPOT_ANALYTICS_KEY` (or a sub-key of the persisted host secret) — no raw IP, UA,
+cookie, token, path, body or prompt ever enters `engagement.sqlite`, no id correlates two deployments,
+and a missing key switches metrics **off** with a dashboard warning rather than falling back to a shared
+constant. Episode resolution is one `BEGIN IMMEDIATE` transaction (idle-gap, absolute-lifetime and
+clock-rollback splits stay correct under concurrent workers), the store is **bounded** by clamped
+per-episode and global row/byte caps enforced inline plus an age ceiling never longer than the hit
+retention or 30 days, and it is **observer-only**: a 5 ms busy-timeout clamp sheds on lock contention,
+any fault is a no-op with a fixed-name saturating health counter, and a producer's response is
+byte-identical with metrics off, on, or faulting. The analytics panel gains an **engagement episodes**
+section — depth, active span, continuation, artifact reuse, polls/tool turns, bytes, measured server
+cost, and identity **basis × confidence** — with a dash for any zero-denominator ratio and an explicit
+`(est.)` on the bytes-derived context estimate; it never labels an episode an "actor". Measured overhead
+on the warm-local benchmark (`scripts/engagement-bench.php`): **p95 ≈ 0.13 ms** per event. Full schema,
+identity rules, limits and knobs: [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md).
+
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.
 
@@ -530,6 +554,7 @@ bin/funnypot vulns:sync            # refresh the on/off toggle list
 
 - [`demo/README.md`](demo/README.md): running the standalone honeypot.
 - [`docs/EMULATION-CATALOG.md`](docs/EMULATION-CATALOG.md): the configurable capability surface.
+- [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md): engagement episodes — schema, identity/privacy rules, caps, benchmark.
 - [`docs/PROTOCOL-HONEYPOT-PLAN.md`](docs/PROTOCOL-HONEYPOT-PLAN.md): the TCP service emulators and SSH server.
 - [funnypot-core](https://github.com/metrictower/funnypot-core): the HTTP inversion engine, its spec and its integration guide.
 

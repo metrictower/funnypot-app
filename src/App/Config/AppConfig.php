@@ -194,6 +194,24 @@ final class AppConfig
          *  and this bounds any backlog a sustained 429 accumulates. Safe defaults preserve behaviour. */
         public int $abuseIpdbMaxQueueAgeHours = 24,
         public int $threatIntelMaxQueueAgeHours = 24,
+        // Engagement episode metrics (opt-in). Every stored id is an install-local HMAC under
+        // $analyticsKey (FUNNYPOT_ANALYTICS_KEY; env-only like every secret — never registry-listed);
+        // empty ⇒ a sub-key is derived from the persisted per-install host secret, and if THAT is not
+        // persisted metrics stay off with a health warning rather than fall back to a shared constant.
+        // Caps are clamped both ways so no value can unbound the store; the retain-days ceiling is
+        // further capped by the hit retention (EngagementCaps::retainCeiling) and never exceeds 30.
+        public string $analyticsKey = '',
+        public bool $engagementEnabled = false,
+        /** Idle gap that closes an episode (s), clamped 60–1800. */
+        public int $engagementIdleGapS = 600,
+        /** Absolute episode lifetime (s), clamped 600–21600 — an episode splits at this age regardless. */
+        public int $engagementLifetimeS = 7200,
+        public int $engagementMaxEvents = 2000,
+        public int $engagementMaxArtifacts = 256,
+        public int $engagementBytesPerEpMb = 2,
+        public int $engagementGlobalRows = 250000,
+        public int $engagementGlobalBytesMb = 256,
+        public int $engagementRetainDays = 30,
     ) {
     }
 
@@ -394,6 +412,17 @@ final class AppConfig
             // knob — it rides FUNNYPOT_TARPIT_WALL_PER_IP_HR_S (the same wall ledger), no competing budget.
             sleepDecoy: in_array(strtolower((string) $env('FUNNYPOT_SLEEP_DECOY')), ['1', 'on', 'true', 'yes'], true),
             sleepPerReqCapMs: max(0, min(2000, (int) $str('FUNNYPOT_SLEEP_PER_REQ_CAP_MS', '2000'))),
+            // Engagement metrics: opt-in; caps clamped floor+ceiling (EngagementCaps re-clamps behind this).
+            analyticsKey: $str('FUNNYPOT_ANALYTICS_KEY', ''),
+            engagementEnabled: in_array(strtolower((string) $env('FUNNYPOT_ENGAGEMENT')), ['1', 'on', 'true', 'yes'], true),
+            engagementIdleGapS: max(60, min(1800, (int) $str('FUNNYPOT_ENGAGEMENT_IDLE_GAP_S', '600'))),
+            engagementLifetimeS: max(600, min(21600, (int) $str('FUNNYPOT_ENGAGEMENT_LIFETIME_S', '7200'))),
+            engagementMaxEvents: max(1, min(100000, (int) $str('FUNNYPOT_ENGAGEMENT_MAX_EVENTS', '2000'))),
+            engagementMaxArtifacts: max(1, min(10000, (int) $str('FUNNYPOT_ENGAGEMENT_MAX_ARTIFACTS', '256'))),
+            engagementBytesPerEpMb: max(1, min(64, (int) $str('FUNNYPOT_ENGAGEMENT_BYTES_PER_EP_MB', '2'))),
+            engagementGlobalRows: max(1000, min(5000000, (int) $str('FUNNYPOT_ENGAGEMENT_GLOBAL_ROWS', '250000'))),
+            engagementGlobalBytesMb: max(1, min(4096, (int) $str('FUNNYPOT_ENGAGEMENT_GLOBAL_BYTES_MB', '256'))),
+            engagementRetainDays: max(1, min(30, (int) $str('FUNNYPOT_ENGAGEMENT_RETAIN_DAYS', '30'))),
         );
     }
 }
