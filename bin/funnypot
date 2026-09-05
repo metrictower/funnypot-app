@@ -56,7 +56,18 @@ if ($command === 'identity:prepare' || $command === 'identity:status') {
         fwrite(STDERR, "usage: funnypot {$command}   (takes no options; the install master is never accepted on the command line)\n");
         exit(2);
     }
-    $preparer = IdentityPreparer::fromEnvironment($root . '/demo');
+    try {
+        // Construction validates the path inputs (FUNNYPOT_DB, FUNNYPOT_IDENTITY_RUNTIME_DIR). A bad
+        // value is an invocation error like a stray option: code + remedy only, never an uncaught
+        // trace, which would print the offending value and a source location.
+        $preparer = IdentityPreparer::fromEnvironment($root . '/demo');
+    } catch (IdentityBootstrapException $e) {
+        fwrite(STDERR, "{$command} failed: {$e->errorCode()} (remedy: {$e->remedy()})\n");
+        exit(2);
+    } catch (\Throwable $e) {
+        fwrite(STDERR, "{$command} failed: unexpected (" . (new \ReflectionClass($e))->getShortName() . ")\n");
+        exit(2);
+    }
     if ($command === 'identity:status') {
         $s = $preparer->status();
         fwrite(STDOUT, 'identity: ' . ($s['ready'] ? 'ready' : 'NOT ready') . "\n");

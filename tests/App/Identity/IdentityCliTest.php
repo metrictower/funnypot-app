@@ -39,11 +39,11 @@ final class IdentityCliTest extends TestCase
      */
     private function runCli(array $args, array $extraEnv = []): array
     {
-        $env = [
+        $env = $extraEnv + [
             'PATH' => (string) (getenv('PATH') ?: '/usr/bin:/bin'),
             'FUNNYPOT_DB' => $this->data . '/funnypot.sqlite',
             'FUNNYPOT_IDENTITY_RUNTIME_DIR' => $this->data . '/runtime',
-        ] + $extraEnv;
+        ];
         foreach (['PHPRC', 'PHP_INI_SCAN_DIR'] as $k) {
             $v = getenv($k);
             if ($v !== false && $v !== '') {
@@ -141,5 +141,29 @@ final class IdentityCliTest extends TestCase
         self::assertSame(1, $rc);
         self::assertStringContainsString('private-dir-unsafe (remedy: storage)', $err);
         self::assertStringNotContainsString($this->data, $err);
+    }
+
+    public function test_a_bad_path_input_fails_with_a_code_never_an_uncaught_trace(): void
+    {
+        // Path inputs are validated while the preparer is constructed, before either command runs;
+        // that failure must be reported exactly like any other — a code, never a PHP trace (which
+        // would print the offending value and a source location).
+        foreach ([
+            ['identity:status', ['FUNNYPOT_IDENTITY_RUNTIME_DIR' => 'relative/run-dir'], 'runtime-root-invalid'],
+            ['identity:prepare', ['FUNNYPOT_IDENTITY_RUNTIME_DIR' => '/run/../escaped-dir'], 'runtime-root-invalid'],
+            ['identity:prepare', ['FUNNYPOT_DB' => 'relative-hits.sqlite'], 'storage-root-invalid'],
+        ] as [$cmd, $env, $code]) {
+            [$rc, $out, $err] = $this->runCli([$cmd], $env);
+            self::assertSame(2, $rc, "{$cmd} {$code}");
+            self::assertSame('', $out, "{$cmd} {$code}");
+            self::assertStringContainsString("{$cmd} failed: {$code} (remedy: config)", $err);
+            self::assertStringNotContainsString('Stack trace', $err);
+            self::assertStringNotContainsString('.php', $err, 'no source location');
+            foreach ($env as $value) {
+                self::assertStringNotContainsString($value, $err, 'the offending value is never echoed');
+            }
+        }
+        self::assertFileDoesNotExist($this->data . '/.funnypot', 'a rejected invocation prepares nothing');
+        self::assertFileDoesNotExist($this->data . '/runtime');
     }
 }

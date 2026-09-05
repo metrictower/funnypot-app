@@ -30,7 +30,9 @@ docker run --rm -p 8080:8080 funnypot
 ```bash
 # Prepare the install identity once (creates demo/storage/.funnypot/identity + the runtime bundles);
 # the front controller reads its bundle from the same runtime dir, so export it for both commands.
-export FUNNYPOT_IDENTITY_RUNTIME_DIR=/tmp/funnypot-run
+# Use a canonical path: the bundle reader lstat()s the parent and refuses a symlink, so /tmp
+# (a symlink on macOS) is rejected.
+export FUNNYPOT_IDENTITY_RUNTIME_DIR="$PWD/demo/storage/run"
 php bin/funnypot identity:prepare
 php -S 0.0.0.0:8080 -t demo demo/index.php
 ```
