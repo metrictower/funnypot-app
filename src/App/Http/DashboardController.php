@@ -6,6 +6,8 @@ namespace Funnypot\App\Http;
 
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Admin\ConfigAdmin;
+use Funnypot\App\Admin\ServiceProfileAdmin;
+use Funnypot\App\Service\ServiceProfileConflictException;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Engagement\EngagementAnalytics;
@@ -47,8 +49,15 @@ final class DashboardController
         // Engagement episode aggregates (the read side of the engagement store). Nullable like
         // $analytics: null ⇒ the analytics payload reports the section as off, never a 500.
         private ?EngagementAnalytics $engagement = null,
+        // The service-persona admin (FP-0310). A LAZY factory so the catalog/store are built only on an
+        // authenticated services-* request, never on the honeypot hot path. Null ⇒ the section reports
+        // unavailable, never a 500.
+        private ?\Closure $serviceProfileFactory = null,
     ) {
     }
+
+    private ?ServiceProfileAdmin $serviceProfileAdmin = null;
+    private bool $serviceProfileResolved = false;
 
     /**
      * Mutating admin actions — these require a valid session AND a valid per-session CSRF token. Reads
@@ -57,6 +66,7 @@ final class DashboardController
     private const MUTATING = [
         'prune', 'clear', 'import', 'geoip', 'vulns-save', 'block-ip', 'unblock-ip',
         'llm-cache-delete', 'llm-cache-clear', 'config-set', 'config-reset',
+        'services-preview', 'services-apply',
     ];
 
     /**
@@ -199,6 +209,14 @@ final class DashboardController
         // Config-admin panel actions (FP-0242b) — delegate to ConfigAdmin over the ConfigStore.
         if (in_array($action, ['config-list', 'config-set', 'config-reset', 'config-audit'], true)) {
             $this->handleConfig($action);
+
+            return;
+        }
+
+        // Service-persona actions (FP-0310) — delegate to ServiceProfileAdmin. Fail-safe: a null wiring
+        // reports the section unavailable rather than a 500.
+        if (in_array($action, ['services-catalog', 'services-status', 'services-audit', 'services-preview', 'services-apply'], true)) {
+            $this->handleServiceProfile($action);
 
             return;
         }
@@ -488,6 +506,77 @@ final class DashboardController
         }
         // config-reset
         echo json_encode($admin->reset($key, $actor, $ip), JSON_UNESCAPED_SLASHES);
+    }
+
+    private function serviceProfileAdmin(): ?ServiceProfileAdmin
+    {
+        if (!$this->serviceProfileResolved) {
+            $this->serviceProfileResolved = true;
+            if ($this->serviceProfileFactory !== null) {
+                try {
+                    $admin = ($this->serviceProfileFactory)();
+                    $this->serviceProfileAdmin = $admin instanceof ServiceProfileAdmin ? $admin : null;
+                } catch (\Throwable $e) {
+                    error_log('funnypot service-profile admin unavailable: ' . $e->getMessage());
+                }
+            }
+        }
+
+        return $this->serviceProfileAdmin;
+    }
+
+    private function handleServiceProfile(string $action): void
+    {
+        $admin = $this->serviceProfileAdmin();
+        if ($admin === null) {
+            echo json_encode(['ok' => false, 'error' => 'service profile unavailable']);
+
+            return;
+        }
+        try {
+            if ($action === 'services-catalog') {
+                echo json_encode($admin->catalogPayload(), JSON_UNESCAPED_SLASHES);
+
+                return;
+            }
+            if ($action === 'services-status') {
+                echo json_encode($admin->statusPayload(), JSON_UNESCAPED_SLASHES);
+
+                return;
+            }
+            if ($action === 'services-audit') {
+                echo json_encode(['ok' => true, 'audit' => $admin->auditPayload(100)], JSON_UNESCAPED_SLASHES);
+
+                return;
+            }
+            $input = json_decode((string) ($_POST['input'] ?? '[]'), true);
+            if (!is_array($input)) {
+                http_response_code(400);
+                echo json_encode(['ok' => false, 'error' => 'input-malformed']);
+
+                return;
+            }
+            if ($action === 'services-preview') {
+                echo json_encode($admin->preview($input), JSON_UNESCAPED_SLASHES);
+
+                return;
+            }
+            // services-apply
+            $actor = (string) ($this->auth?->currentUser() ?? 'operator');
+            $ip = HoneypotController::clientIp($this->config->trustedProxies);
+            $expectedRevision = (int) ($_POST['expected_revision'] ?? -1);
+            $previewHash = (string) ($_POST['preview_hash'] ?? '');
+            echo json_encode($admin->apply($input, $expectedRevision, $previewHash, $actor, $ip), JSON_UNESCAPED_SLASHES);
+        } catch (ServiceProfileConflictException $e) {
+            http_response_code($e->httpStatus);
+            echo json_encode(['ok' => false, 'error' => 'conflict', 'reason' => $e->reason]);
+        } catch (\InvalidArgumentException $e) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            error_log('funnypot service-profile admin: ' . $e->getMessage());
+            echo json_encode(['ok' => false, 'error' => 'service-profile-error']);
+        }
     }
 
     /** Is this request bound to a valid operator session? (Null auth ⇒ treated as unauthenticated.) */

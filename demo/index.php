@@ -385,7 +385,23 @@ if ($config->engagementEnabled) {
 // $store is a SqliteHitStore, which implements both HitStore and AnalyticsStore — the analytics
 // view (FP-0243b) reads the rollup tables through the SAME instance. $adminAuth + $configStore power
 // the FP-0242b session gate and the config-admin panel; $engagementAnalytics the episode section.
-$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore, $engagementAnalytics);
+// FP-0310: the service-persona admin is built lazily — only on an authenticated services-* request, so
+// the honeypot hot path never pays for the catalog/store load. It writes only the closed desired
+// profile; the runtime effective/LKG store stays root-only and is never opened here.
+$serviceProfileFactory = static function () use ($config): ?\Funnypot\App\Admin\ServiceProfileAdmin {
+    $idPaths = \Funnypot\App\Identity\IdentityPaths::fromEnvironment(__DIR__);
+    $identity = \Funnypot\App\Identity\ServiceProfileIdentity::load($idPaths);
+    $paths = \Funnypot\App\Service\ServicePaths::fromEnvironment(__DIR__);
+    $catalog = \Funnypot\App\Service\ServiceCatalog::fromPackage();
+    $store = new \Funnypot\App\Service\ServiceProfileStore($paths->desiredDbPath());
+    $reader = new \Funnypot\App\Service\ServiceStatusReader($paths->statusFile());
+    $policy = \Funnypot\App\Service\ServiceCapabilityPolicy::fromEnvironment('deploy', $config->dockerApiEnabled, static fn (string $k) => getenv($k));
+    $resolver = new \Funnypot\App\Service\ServiceProfileResolver();
+    $preparer = new \Funnypot\App\Service\ServiceProfilePreparer($paths, $catalog, $identity, $policy, 'deploy', 'flex', $identity->publicPersonaHash());
+
+    return new \Funnypot\App\Admin\ServiceProfileAdmin($catalog, $store, $reader, $preparer, $resolver, $policy, $identity);
+};
+$dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets', $llmCache, $operatorBlock, $store, $adminAuth, $configStore, $engagementAnalytics, $serviceProfileFactory);
 // LLM-only labyrinth (FP-0245b) — the deep-engagement decoy. Master switch OFF by default (opt-in via
 // FUNNYPOT_TARPIT); when off, $labyrinth is null so the Router never mounts the seam (the paths fall
 // through to the honeypot) and no entry hint is planted. Its own TarpitBudget over tarpit.sqlite is the
@@ -489,5 +505,11 @@ if ($config->dockerApiEnabled) {
         $serverPort,
     );
 }
+
+// FP-0310: the deployment-global service persona seam. Read once per request and forward ONLY the
+// profile (base family + variant token) — never the heartbeat freshness/state — so no attacker-facing
+// byte can vary with heartbeat availability (the B2 invariant). No renderer consumes this yet; it is
+// the typed seam a future core fake-data API (FP-0129) binds to. It never throws into the request path.
+$effectiveServiceProfile = \Funnypot\App\Service\EffectiveServiceProfileReader::fromEnvironment(__DIR__)->profile();
 
 (new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter))->dispatch($context, $clientIp, $tokenVerdict);
