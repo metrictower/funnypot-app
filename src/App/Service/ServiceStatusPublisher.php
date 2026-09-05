@@ -20,7 +20,7 @@ use RuntimeException;
  * from day one so the reader has one owner constant before and after the FP-0107 role split. Every
  * write is exclusive temp + write/flush/fsync + chmod + atomic rename + directory fsync.
  */
-final class ServiceStatusPublisher
+final class ServiceStatusPublisher implements ServiceHeartbeatWriter
 {
     public const SCHEMA = 'funnypot-effective-service-status/v1';
     public const HASH_DOMAIN = 'funnypot/effective-service-status/v1';

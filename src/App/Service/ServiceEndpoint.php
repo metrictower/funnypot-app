@@ -26,6 +26,8 @@ final class ServiceEndpoint
         public readonly ?string $deployOptIn,
         public readonly bool $scannerExposed,
         public readonly bool $runtimeToggleable,
+        public readonly ?string $spawnProto,
+        public readonly ?string $spawnBind,
     ) {
     }
 
@@ -53,6 +55,8 @@ final class ServiceEndpoint
             ($e['deploy_opt_in'] ?? null) === null ? null : (string) $e['deploy_opt_in'],
             (bool) $e['scanner_exposed'],
             (bool) $e['runtime_toggleable'],
+            is_array($e['spawn'] ?? null) && isset($e['spawn']['proto']) ? (string) $e['spawn']['proto'] : null,
+            is_array($e['spawn'] ?? null) && isset($e['spawn']['bind']) ? (string) $e['spawn']['bind'] : null,
         );
     }
 
