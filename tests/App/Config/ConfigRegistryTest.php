@@ -26,9 +26,43 @@ final class ConfigRegistryTest extends TestCase
     private const ENV_ONLY = [
         'dbPath', 'logPath', 'geoDbPath', 'vulnsPath', 'intelDbPath', 'llmCacheDb', 'tarpitDbPath', // paths
         'honeytokenKey', 'adminPassword', 'abuseIpdbKey', 'threatIntelKey', 'analyticsKey', // secrets
-        'personaSeed', 'personaMaterial', 'adminUser', 'adminKnock',                // identity
+        'adminUser', 'adminKnock',                                                  // operator identity
         'selfIps', 'trustedProxies',                                                // network topology
     ];
+
+    /**
+     * The install-identity inputs. These are not AppConfig fields at all (the identity lives in the
+     * scoped runtime bundles, never in config), so the registry must not know them: a stored override
+     * that could name the master file, inject a persona, or point TLS at an attacker path is exactly
+     * the write a hijacked admin session would attempt. Pinned as a negative keyForEnv() list.
+     *
+     * @var string[]
+     */
+    private const NEVER_REGISTERED = [
+        'FUNNYPOT_INSTALL_SECRET', 'FUNNYPOT_INSTALL_SECRET_FILE',
+        'FUNNYPOT_PERSONA_SEED', 'FUNNYPOT_PERSONA_SECRET', 'FUNNYPOT_FS_SECRET',
+        'FUNNYPOT_TLS_CERT_FILE', 'FUNNYPOT_TLS_KEY_FILE', 'FUNNYPOT_CN', 'FUNNYPOT_PUBLIC_DNS', 'FUNNYPOT_LE_DOMAIN',
+        'FUNNYPOT_IDENTITY_RUNTIME_DIR',
+    ];
+
+    /** The install identity is ENV-ONLY forever: no registry key, no stored override, no admin echo. */
+    public function test_identity_inputs_are_never_registered(): void
+    {
+        $reg = new ConfigRegistry();
+        foreach (self::NEVER_REGISTERED as $env) {
+            self::assertNull($reg->keyForEnv($env), "{$env} must never be a ConfigRegistry knob");
+        }
+        foreach (ConfigRegistry::schema() as $key => $e) {
+            self::assertNotContains($e['env'], self::NEVER_REGISTERED, "registry key '{$key}' registers an identity input");
+            self::assertStringNotContainsStringIgnoringCase('secret', (string) $e['env'], "registry key '{$key}' names a secret-shaped env var");
+            self::assertStringNotContainsStringIgnoringCase('persona', (string) $e['field'], "registry key '{$key}' exposes a persona field");
+        }
+        // And AppConfig itself carries no identity: the value object workers build has no such field.
+        $ctorNames = array_map(static fn ($p) => $p->getName(), (new ReflectionClass(AppConfig::class))->getConstructor()->getParameters());
+        foreach ($ctorNames as $name) {
+            self::assertDoesNotMatchRegularExpression('/persona|master|installSecret|tls/i', $name, "AppConfig must not carry identity field '{$name}'");
+        }
+    }
 
     /** T4: every AppConfig constructor param is either a registry field or in the env-only allow-list. */
     public function test_every_appconfig_field_is_covered(): void

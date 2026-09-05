@@ -1,12 +1,29 @@
 # funnypot standalone honeypot — nginx + php-fpm, HTTP + HTTPS across the common web
 # ports. Baked, portable image (no source mount) — drop on a server and go:
 #   cd demo && docker compose up -d --build
-# then hit it on http://HOST (:80/:8080/…) or https://HOST (:443/:8443, self-signed).
+# then hit it on http://HOST (:80/:8080/…) or https://HOST (:443/:8443, per-install decoy cert).
 services:
+  # One-shot identity preflight on the REAL data volume with no network and no published port:
+  # resolves/creates the persisted install master and verifies TLS exactly as the public container's
+  # entrypoint will. If it fails, the public service below never starts (nothing binds a socket).
+  funnypot-prepare:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    image: funnypot
+    network_mode: none
+    entrypoint: ["php", "/app/bin/funnypot", "identity:prepare"]
+    volumes:
+      - funnypot-storage:/app/demo/storage
+
   funnypot:
     build:
-      context: ..                 # repo root — the Dockerfile copies src/ resources/ from there
+      context: ..                 # repo root — the Dockerfile copies src/ resources/ bin/ from there
       dockerfile: demo/Dockerfile
+    image: funnypot
+    depends_on:
+      funnypot-prepare:
+        condition: service_completed_successfully
     ports:
       # TCP protocol honeypots (redis/ftp/smtp/telnet/memcached/ssh).
       - "21:21"
@@ -40,9 +57,11 @@ services:
       # FUNNYPOT_ADMIN_PASSWORD: change-me   # enables the dashboard prune/clear/geoip actions
       # FUNNYPOT_HONEYTOKEN_KEY: change-me    # enables the tamper-evident bait cookie
       # FUNNYPOT_DB: "off"                     # disable the SQLite store (file-only stats)
+      # FUNNYPOT_PERSONA_SEED: my-visible-persona   # optional cosmetic persona override (see docs/IDENTITY.md)
     restart: unless-stopped
     volumes:
-      # Persist the hit log + SQLite store + geoip data across container recreation.
+      # Persist the hit log + SQLite store + geoip data + the private install identity (.funnypot/)
+      # across container recreation. The SAME volume the preflight above prepared.
       - funnypot-storage:/app/demo/storage
     # For local dev with instant code edits, also bind-mount the source:
     #   - ../src:/app/src:ro

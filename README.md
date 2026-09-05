@@ -1,7 +1,7 @@
 # funnypot-app 🍯
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![PHP](https://img.shields.io/badge/php-%3E%3D8.0-777bb3.svg)](composer.json)
+[![PHP](https://img.shields.io/badge/php-%3E%3D8.2-777bb3.svg)](composer.json)
 [![Engine](https://img.shields.io/badge/engine-funnypot--core-blue.svg)](https://github.com/metrictower/funnypot-core)
 [![Docs](https://img.shields.io/badge/docs-funnypot.org-f46800.svg)](https://funnypot.org/app/)
 
@@ -185,7 +185,9 @@ docker build -f demo/Dockerfile -t funnypot . && docker run --rm \
 ```
 
 Open <http://localhost:8080> for the dashboard, then act like an attacker: point a scanner, curl, or an
-`ssh` or `telnet` client at it and watch the hits land. Deployment helpers live in
+`ssh` or `telnet` client at it and watch the hits land. Mount `/app/demo/storage` on a volume (compose
+does) so the install identity — and with it the persona, the fake filesystem and the decoy TLS cert —
+survives container recreation; without one a fresh identity is created per container. Deployment helpers live in
 [`scripts/deploy.sh`](scripts/deploy.sh); more detail in [`demo/README.md`](demo/README.md). After a
 deploy, `deploy.sh` runs [`scripts/canary.sh`](scripts/canary.sh) — it curls a representative slice of
 the decoy/panel/attack surface on the live box and fails if any path 404s, so a config/wiring
@@ -484,6 +486,40 @@ the enforcement maps any unknown value to `none` too.
 > (`FUNNYPOT_PUBLIC_VIEW=full`) would resolve to the looser env value on a store fault — MORE exposure
 > than you configured. With the env unset, a store fault can only ever fall to the safe baseline.
 
+## Install identity
+
+Every install has ONE private, persisted root of identity: a 32-byte **install master**, created once
+by CSPRNG (or supplied through a protected file) and stored 0600 in a root-only directory beneath the
+data volume (`demo/storage/.funnypot/identity/`). Nothing derives from a fleet literal, a hostname, a
+certificate or the clock any more. From the master a closed HKDF-SHA256 surface derives:
+
+- the **visible persona material** (`fpi1_…`) that seeds the company/domain/PHP-version persona the
+  HTML pages, the LLM fakes, the shell fleet, SIP directory, MSSQL/SMB/IPMI banners and the core
+  template tier all share; and
+- **separate private keys** per consumer — core render salt, fake-filesystem key, web-console
+  session MAC, Docker registry-token fingerprint, engagement analytics, Redis telemetry, post-exploit
+  state — no two domains share an output and there is no derive-by-label API.
+
+`php bin/funnypot identity:prepare` runs as **root, first, before php-fpm or any listener** (the
+entrypoint, the deploy preflight and the compose one-shot all call it): it resolves the master,
+selects + verifies the TLS pair, writes a secret-free manifest and then the **scoped runtime bundles**
+under `/run/funnypot` — root-only `shell.json`/`sip.json`/`redis.json`/`post-exploit-state.json` and a
+0640 root:www-data `http.json` holding only what the web tier needs. Each process reads just its own
+bundle; none can reach the master, the manifest or another tier's key. Failure is fail-closed: no
+socket binds, the web tier serves its plain 404, and the log carries only a stable code. The
+entrypoint then unsets every identity input (`FUNNYPOT_INSTALL_SECRET[_FILE]`, both persona
+variables, the TLS paths, `FUNNYPOT_FS_SECRET`) so no child inherits them.
+
+`FUNNYPOT_PERSONA_SEED` (legacy: `FUNNYPOT_PERSONA_SECRET`) remains an optional **cosmetic**
+override: it replaces the visible persona verbatim (an existing explicit persona keeps its identity)
+but never feeds a key. Weak values (short, or `funnypot`/`changeme`/…) only warn. The generated TLS
+decoy cert is now persisted with a provenance sidecar (subject/SAN from the persona hostname or
+`FUNNYPOT_CN`/`FUNNYPOT_PUBLIC_DNS`), while an explicit `FUNNYPOT_TLS_CERT_FILE`+`_KEY_FILE` pair or
+a legacy `/etc/nginx/funnypot.{crt,key}` pair keeps being served byte-identical. `identity:status`
+prints readiness, source class and the public identity hash — never a secret. Migration (one-time
+persona / fake-filesystem reroll for installs on the old literal default), backup, restore and the
+offline rotation procedure are in [`docs/IDENTITY.md`](docs/IDENTITY.md).
+
 ## Safety and invariants
 
 funnypot is built so it can only ever mislead an attacker, never help one.
@@ -504,6 +540,10 @@ funnypot is built so it can only ever mislead an attacker, never help one.
   never chooses the HTTP status or content-type.
 - **Inert fakes only.** `example.com` hosts, RFC-5737 IPs, obviously-fake keys and hashes. Never a real
   or working secret.
+- **One private install identity, scoped per tier.** Persona and keys derive from a persisted CSPRNG
+  master through named HKDF domains; each process reads only its own root-written bundle, the master
+  never enters argv/env/logs/config export, and a bootstrap fault is a dark box — never a fleet-shared
+  fallback persona.
 
 ## Use the engine in your own app
 
@@ -526,7 +566,8 @@ composer test:fast     # parallel, minus the seeded-panel render tests (quickest
 composer test:serial   # single process (deterministic ordering / debugging, ~2min)
 ```
 
-Tests are pure PHPUnit (no DB or container). The parallel runner is
+Requires **PHP 8.2+** (the install-identity store uses native `fsync()`; 8.0/8.1 are end-of-life) with
+`ext-posix`, `ext-sodium` and `ext-openssl`. Tests are pure PHPUnit (no DB or container). The parallel runner is
 [paratest](https://github.com/paratestphp/paratest); the seeded fake-data generators memoize per
 `(seed, domain)` so the panel render tests don't rebuild the same roster on every assertion —
 together these take the suite from minutes to under a minute. `vendor/bin/phpunit` still works for
@@ -555,6 +596,7 @@ bin/funnypot vulns:sync            # refresh the on/off toggle list
 - [`demo/README.md`](demo/README.md): running the standalone honeypot.
 - [`docs/EMULATION-CATALOG.md`](docs/EMULATION-CATALOG.md): the configurable capability surface.
 - [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md): engagement episodes — schema, identity/privacy rules, caps, benchmark.
+- [`docs/IDENTITY.md`](docs/IDENTITY.md): the persisted install identity — master, derived keys, runtime bundles, TLS selection, migration, backup and rotation.
 - [`docs/PROTOCOL-HONEYPOT-PLAN.md`](docs/PROTOCOL-HONEYPOT-PLAN.md): the TCP service emulators and SSH server.
 - [funnypot-core](https://github.com/metrictower/funnypot-core): the HTTP inversion engine, its spec and its integration guide.
 

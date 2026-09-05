@@ -47,9 +47,17 @@ final class IpmiConfig
         }
     }
 
-    public static function fromEnv(): self
+    /**
+     * @param string $installPersonaMaterial the install's visible persona material. An explicit
+     *        FUNNYPOT_IPMI_GUID wins; otherwise the 16 GUID bytes derive from a fixed IPMI domain over
+     *        this material, so the BMC identity is stable per install and never the fleet-wide default.
+     */
+    public static function fromEnv(string $installPersonaMaterial): self
     {
-        $guidHex = getenv('FUNNYPOT_IPMI_GUID') ?: self::DEFAULT_GUID_HEX;
+        $explicit = getenv('FUNNYPOT_IPMI_GUID');
+        $guid = is_string($explicit) && $explicit !== ''
+            ? self::guidFromHex($explicit)
+            : substr(hash('sha256', 'funnypot-ipmi-guid:' . $installPersonaMaterial, true), 0, 16);
 
         return new self(
             channel: self::envInt('FUNNYPOT_IPMI_CHANNEL', 1),
@@ -59,7 +67,7 @@ final class IpmiConfig
             oemId: self::envInt('FUNNYPOT_IPMI_OEM_ID', 0),
             oemAux: self::envInt('FUNNYPOT_IPMI_OEM_AUX', 0),
             maxPrivilege: self::envInt('FUNNYPOT_IPMI_MAX_PRIV', 4),
-            guid: self::guidFromHex($guidHex)
+            guid: $guid
         );
     }
 

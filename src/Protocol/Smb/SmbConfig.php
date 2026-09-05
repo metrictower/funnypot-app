@@ -36,7 +36,12 @@ final class SmbConfig
     ) {
     }
 
-    public static function fromEnv(): self
+    /**
+     * @param string $installPersonaMaterial the install's visible persona material: the server-GUID
+     *        seed unless FUNNYPOT_SMB_GUID_SEED overrides it, so the GUID is stable per install and
+     *        differs across installs instead of following the fleet-default domain\computer pair.
+     */
+    public static function fromEnv(string $installPersonaMaterial): self
     {
         $domain = getenv('FUNNYPOT_SMB_DOMAIN') ?: 'CORP';
         $computer = getenv('FUNNYPOT_SMB_COMPUTER') ?: 'FILE01';
@@ -44,7 +49,7 @@ final class SmbConfig
         $dnsDomain = getenv('FUNNYPOT_SMB_DNS_DOMAIN') ?: strtolower($domain) . '.local';
         $dnsComputer = getenv('FUNNYPOT_SMB_DNS_COMPUTER') ?: strtolower($computer) . '.' . $dnsDomain;
 
-        $seed = getenv('FUNNYPOT_SMB_GUID_SEED') ?: '';
+        $seed = getenv('FUNNYPOT_SMB_GUID_SEED') ?: $installPersonaMaterial;
 
         $signingRaw = getenv('FUNNYPOT_SMB_SIGNING_REQUIRED');
         $signingRequired = ($signingRaw !== false) ? filter_var($signingRaw, FILTER_VALIDATE_BOOLEAN) : false;

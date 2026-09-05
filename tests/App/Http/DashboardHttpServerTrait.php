@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Http;
 
+use Funnypot\Tests\App\Identity\PreparedIdentityFixture;
+
 /**
  * Shared PHP-built-in-server lifecycle for tests that need to observe REAL HTTP response headers off
  * demo/index.php (FP-0250 §4.1/§4.4). Under the phpunit CLI SAPI, header()/http_response_code() are
@@ -221,14 +223,18 @@ trait DashboardHttpServerTrait
 
     /**
      * The env demo/index.php needs to boot in full isolation (mirrors FrontControllerBootSmokeTest):
-     * every persisted path under a fresh temp dir, the LLM sidecar off, a fixed persona so nothing
-     * makes a network call. $extra overrides/adds vars (e.g. FUNNYPOT_MODE, FUNNYPOT_ADMIN_PASSWORD).
+     * every persisted path under a fresh temp dir, the LLM sidecar off, and a REAL prepared install
+     * identity (fixed master, persona override `httptest`) whose runtime root is the only identity
+     * fact the child receives — no persona/master variable, exactly like php-fpm behind the entrypoint.
+     * $extra overrides/adds vars (e.g. FUNNYPOT_MODE, FUNNYPOT_ADMIN_PASSWORD).
      *
      * @param array<string,string> $extra
      * @return array<string,string>
      */
     private function dashboardBootEnv(string $data, array $extra = []): array
     {
+        $prepared = PreparedIdentityFixture::prepare($data);
+        $prepared['result']->close();
         $env = [
             'PATH' => getenv('PATH') !== false ? (string) getenv('PATH') : '/usr/bin:/bin',
             'FUNNYPOT_DB' => $data . '/funnypot.sqlite',
@@ -236,8 +242,7 @@ trait DashboardHttpServerTrait
             'FUNNYPOT_GEO_DB' => $data . '/geo.csv',
             'FUNNYPOT_VULNS' => $data . '/vulns.json',
             'FUNNYPOT_LLM' => '0',
-            'FUNNYPOT_PERSONA_SEED' => 'httptest',
-        ];
+        ] + PreparedIdentityFixture::childEnv($prepared['runtimeDir']);
         foreach (['PHPRC', 'PHP_INI_SCAN_DIR'] as $iniVar) {
             $v = getenv($iniVar);
             if ($v !== false && $v !== '') {

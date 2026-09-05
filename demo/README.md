@@ -25,9 +25,13 @@ docker build -f demo/Dockerfile -t funnypot .
 docker run --rm -p 8080:8080 funnypot
 ```
 
-**No Docker (local PHP, dev/poke only):**
+**No Docker (local PHP 8.2+, dev/poke only):**
 
 ```bash
+# Prepare the install identity once (creates demo/storage/.funnypot/identity + the runtime bundles);
+# the front controller reads its bundle from the same runtime dir, so export it for both commands.
+export FUNNYPOT_IDENTITY_RUNTIME_DIR=/tmp/funnypot-run
+php bin/funnypot identity:prepare
 php -S 0.0.0.0:8080 -t demo demo/index.php
 ```
 
@@ -68,7 +72,13 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_ADMIN_PASSWORD` | unset | first-boot seed for the operator login (Argon2id user + server-side session, FP-0242b). Seeds the first user only while none exists, then goes inert; unset = no operator, dashboard stays gated by `dashboard.public_view` |
 | `FUNNYPOT_ADMIN_USER` | `admin` | the operator username. The REAL login is overlaid on the public `/` sign-in decoy (FP-0295): a POST with this exact username is verified (Argon2id) and, on success, redirects to the dashboard — every other credential is the decoy. Set a **non-obvious** value: it gates the slow hash so a username-spray never triggers it, and there is no separate login route to find. Empty disables the overlay |
 | `FUNNYPOT_HONEYTOKEN_KEY` | unset | enables the tamper-evident bait cookie (returned-altered = high-signal probe) |
-| `FUNNYPOT_DB` | `demo/storage/funnypot.sqlite` | SQLite store path for real all-time stats; `off` = file-only (recent-window stats) |
+| `FUNNYPOT_DB` | `demo/storage/funnypot.sqlite` | SQLite store path for real all-time stats; `off` = file-only (recent-window stats). The private install identity lives beside it (`<dir>/.funnypot/identity/`) |
+| `FUNNYPOT_INSTALL_SECRET_FILE` | unset | protected file (root-owned, 0600/0400, canonical path) holding the one-line install master `funnypot-install-secret-v1:<43 base64url chars>`. Unset = the app creates + persists its own master on first boot. Never accepted on the command line; the entrypoint unsets it before any child starts. See `docs/IDENTITY.md` |
+| `FUNNYPOT_INSTALL_SECRET` | unset | the same canonical master as a raw env value, for direct process startup; scrubbed from children. Prefer the file |
+| `FUNNYPOT_PERSONA_SEED` | unset | optional **cosmetic** override of the visible persona (company/domain/versions), used verbatim so an existing explicit persona keeps its identity; never feeds a key. Legacy alias `FUNNYPOT_PERSONA_SECRET`. Short/placeholder values only warn (`identity:status`) |
+| `FUNNYPOT_IDENTITY_RUNTIME_DIR` | `/run/funnypot` | where `identity:prepare` publishes the scoped runtime bundles (`identity-http/` 0750 root:www-data, `identity-private/` 0700 root) and the TLS links; a path, kept in child env so workers find their bundle |
+| `FUNNYPOT_TLS_CERT_FILE` / `FUNNYPOT_TLS_KEY_FILE` | unset | explicit operator TLS pair (both or neither; canonical paths, no symlinks). Served byte-identical, never copied or regenerated. Else a complete legacy `/etc/nginx/funnypot.{crt,key}` pair is served; else a persisted generated decoy cert |
+| `FUNNYPOT_CN` / `FUNNYPOT_PUBLIC_DNS` | persona hostname | subject CN / extra DNS SAN of the generated decoy cert (strict lowercase DNS names) |
 | `FUNNYPOT_GEO_DB` | `demo/storage/dbip-country.csv.gz` | DB-IP Lite CSV for the GeoIP map/country stats |
 | `FUNNYPOT_TARPIT` | off | master switch for the cost-amplification tarpit foundation (opt-in; ship off, flip on after the load test) |
 | `FUNNYPOT_TARPIT_DB` | `demo/storage/tarpit.sqlite` | the tarpit's own SQLite file (concurrency slots + hourly per-IP budget ledger) |
@@ -84,7 +94,7 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_SLEEP_DECOY` | off | master switch for the FP-0228 time-based blind-injection SLEEP decoy (opt-in). Honours a recognised SQLi/RCE `SLEEP(n)`/`WAITFOR`/`$(sleep n)` probe with a metered delay so a scanner's calibrated-SLEEP confirmation lands, but bounded: the sleep runs **only while holding a `TarpitBudget` slot** (≤ `MAX_CONCURRENT` workers ever sleep) and the honoured time is charged to the SAME per-IP hourly wall ledger — no second budget |
 | `FUNNYPOT_SLEEP_PER_REQ_CAP_MS` | `2000` | per-request honoured-sleep cap in ms; the delay is `min(requested_seconds·1000, cap)`, hard-clamped ≤ 2000 (well under nginx's 15 s read-timeout — a second wall behind `TarpitBudget::LATENCY_HARD_CAP_MS`). The **per-IP cumulative** allowance is `FUNNYPOT_TARPIT_WALL_PER_IP_HR_S` (the shared wall ledger), not a separate knob; once spent, probes are served immediately with zero delay until the hour bucket rolls over |
 | `FUNNYPOT_ENGAGEMENT` | off | master switch for engagement episode metrics (opt-in): typed per-hit engagement events from the tarpit producers, grouped into pseudonymous episodes in their own `engagement.sqlite`, surfaced in the analytics panel. Observer-only — never changes a response. See `docs/ENGAGEMENT-METRICS.md` |
-| `FUNNYPOT_ANALYTICS_KEY` | unset | install-local key every stored engagement id is HMAC'd under (≥ 16 bytes; shorter = placeholder = metrics stay OFF with a dashboard warning). Unset = a sub-key derived from the persisted host secret (`storage/fs_secret`), so each install has its own id space by default. Env-only, never shown in the config panel |
+| `FUNNYPOT_ANALYTICS_KEY` | unset | install-local key every stored engagement id is HMAC'd under (≥ 16 bytes; shorter = placeholder = metrics stay OFF with a dashboard warning). Unset = a sub-key of the install identity's private `engagement-analytics/v1` key, so each install has its own id space by default. Env-only, never shown in the config panel |
 | `FUNNYPOT_ENGAGEMENT_IDLE_GAP_S` | `600` | idle gap that closes an episode (clamped 60–1800) |
 | `FUNNYPOT_ENGAGEMENT_LIFETIME_S` | `7200` | absolute episode lifetime; an episode splits at this age regardless of activity (clamped 600–21600) |
 | `FUNNYPOT_ENGAGEMENT_MAX_EVENTS` | `2000` | events one episode may hold; further events are dropped and counted (clamped 1–100000) |

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "14681bb397212b39bc3990d2afb9bc49",
+    "content-hash": "5c5dbfc9f01c9a11efd570555035d1f9",
     "packages": [
         {
             "name": "metrictower/funnypot-core",
@@ -2935,9 +2935,10 @@
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.0",
-        "ext-sodium": "*",
-        "ext-openssl": "*"
+        "php": ">=8.2",
+        "ext-openssl": "*",
+        "ext-posix": "*",
+        "ext-sodium": "*"
     },
     "platform-dev": {},
     "plugin-api-version": "2.6.0"

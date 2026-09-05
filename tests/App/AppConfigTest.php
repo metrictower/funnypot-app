@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Config\AppConfig;
-use Funnypot\Core\Support\PersonaIdentity;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,7 +21,7 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
         'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN', 'FUNNYPOT_CAPTURE_RAW',
-        'FUNNYPOT_PERSONA_SEED', 'FUNNYPOT_PERSONA_SECRET', 'FUNNYPOT_POWERED_BY',
+        'FUNNYPOT_POWERED_BY',
     ];
 
     protected function setUp(): void
@@ -57,28 +56,20 @@ final class AppConfigTest extends TestCase
         self::assertTrue($c->hideMainPage);
     }
 
-    public function test_powered_by_defaults_to_the_persona_php_version(): void
+    public function test_powered_by_is_only_the_explicit_override(): void
     {
-        // The X-Powered-By header and /phpinfo.php must advertise the same PHP version. Both derive from
-        // the ONE per-deploy source, PersonaIdentity::productVersion('php'), so with no override they agree.
-        foreach (['funnypot', 'acme-secret-42', 'seed-xyz'] as $material) {
-            putenv('FUNNYPOT_PERSONA_SEED=' . $material);
-            $c = AppConfig::fromEnv('/app/demo');
+        // The persona-derived default (the PHP version /phpinfo.php shows) needs the install identity,
+        // which AppConfig deliberately does not carry: the composition root resolves it from
+        // HttpIdentity::defaultPoweredBy(). Here the value is the raw override or empty — never a
+        // literal fallback and never derived from a persona variable.
+        self::assertSame('', AppConfig::fromEnv('/app/demo')->poweredBy);
 
-            $seed = PersonaIdentity::seedFromMaterial($material);
-            $expected = 'PHP/' . PersonaIdentity::fromSeed($seed)->productVersion('php');
-            self::assertSame($expected, $c->poweredBy, "X-Powered-By must match the persona PHP version for '{$material}'");
-            self::assertMatchesRegularExpression('#^PHP/\d+\.\d+\.\d+$#', $c->poweredBy);
-        }
-    }
+        putenv('FUNNYPOT_PERSONA_SEED=would-be-ignored');
+        self::assertSame('', AppConfig::fromEnv('/app/demo')->poweredBy, 'a persona variable must not reach AppConfig');
+        putenv('FUNNYPOT_PERSONA_SEED');
 
-    public function test_powered_by_env_still_overrides_the_persona_default(): void
-    {
-        putenv('FUNNYPOT_PERSONA_SEED=funnypot');
         putenv('FUNNYPOT_POWERED_BY=Apache/2.4.58');
-        $c = AppConfig::fromEnv('/app/demo');
-
-        self::assertSame('Apache/2.4.58', $c->poweredBy);
+        self::assertSame('Apache/2.4.58', AppConfig::fromEnv('/app/demo')->poweredBy);
     }
 
     public function test_raw_capture_is_off_by_default_and_opt_in(): void
@@ -228,39 +219,14 @@ final class AppConfigTest extends TestCase
         }
     }
 
-    public function test_persona_seed_is_stable_and_derived(): void
+    /** AppConfig carries no identity: no persona seed/material, no master, no derived key. */
+    public function test_config_carries_no_identity_field(): void
     {
-        putenv('FUNNYPOT_PERSONA_SEED=my-host');
         $c = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame($this->expectedPersonaSeed('my-host'), $c->personaSeed);
-        putenv('FUNNYPOT_PERSONA_SEED');
-    }
-
-    public function test_persona_seed_default_ignores_public_le_domain(): void
-    {
-        putenv('FUNNYPOT_LE_DOMAIN=example-honeypot.com');
-        $c = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame($this->expectedPersonaSeed('funnypot'), $c->personaSeed); // public cert CN must never seed identity
-        putenv('FUNNYPOT_LE_DOMAIN');
-    }
-
-    public function test_persona_seed_uses_private_secret_and_seed_takes_precedence(): void
-    {
-        putenv('FUNNYPOT_PERSONA_SECRET=super-private-value');
-        $c = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame($this->expectedPersonaSeed('super-private-value'), $c->personaSeed);
-        self::assertNotSame($this->expectedPersonaSeed('funnypot'), $c->personaSeed);
-
-        putenv('FUNNYPOT_PERSONA_SEED=explicit-override');
-        $c2 = AppConfig::fromEnv(sys_get_temp_dir());
-        self::assertSame($this->expectedPersonaSeed('explicit-override'), $c2->personaSeed);
-
-        putenv('FUNNYPOT_PERSONA_SECRET');
-        putenv('FUNNYPOT_PERSONA_SEED');
-    }
-
-    private function expectedPersonaSeed(string $src): int
-    {
-        return (int) hexdec(substr(hash('sha256', 'funnypot-persona|' . $src), 0, 15));
+        foreach (get_object_vars($c) as $name => $_) {
+            self::assertDoesNotMatchRegularExpression('/persona|master|secret$/i', $name, "AppConfig must not own identity field '{$name}'");
+        }
+        self::assertFalse(property_exists($c, 'personaSeed'));
+        self::assertFalse(property_exists($c, 'personaMaterial'));
     }
 }

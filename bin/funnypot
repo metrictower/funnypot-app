@@ -10,6 +10,13 @@ declare(strict_types=1);
  *   funnypot compile-catalog [--out=PATH]             derive the emulation catalog (app + engine templates)
  *   funnypot vulns:sync [--out=funnypot-vulns.json]   materialise the on/off toggle list
  *   funnypot vulns:list [--file=funnypot-vulns.json]
+ *   funnypot identity:prepare                         resolve/create the install identity + TLS, publish
+ *                                                     the scoped runtime bundles (root, before any listener)
+ *   funnypot identity:status                          secret-free readiness report
+ *
+ * The identity commands take NO options: the install master is only ever read from a protected file
+ * (FUNNYPOT_INSTALL_SECRET_FILE) or the environment (FUNNYPOT_INSTALL_SECRET), never argv, and neither
+ * command prints a secret, a derived key, the keyset commitment or a private path.
  *
  * The HTTP engine (nuclei inversion, attack/route emulators) lives in metrictower/funnypot-core and
  * has its own `compile` commands; this CLI only owns the app-side artifacts. Needs `composer install`.
@@ -19,6 +26,8 @@ use Funnypot\App\Build\CatalogCompiler;
 use Funnypot\App\Build\ProtocolCompiler;
 use Funnypot\App\Emulation\EmulationCatalog;
 use Funnypot\App\Emulation\EmulationPolicy;
+use Funnypot\App\Identity\IdentityBootstrapException;
+use Funnypot\App\Identity\IdentityPreparer;
 
 $root = dirname(__DIR__);
 $autoload = $root . '/vendor/autoload.php';
@@ -40,6 +49,52 @@ $optOut = static function (array $argvv, string $default): string {
 
     return $default;
 };
+
+if ($command === 'identity:prepare' || $command === 'identity:status') {
+    if ($argvv !== []) {
+        // No option of any kind: an option carrying the master would land in `ps`, shell history and the deploy log.
+        fwrite(STDERR, "usage: funnypot {$command}   (takes no options; the install master is never accepted on the command line)\n");
+        exit(2);
+    }
+    $preparer = IdentityPreparer::fromEnvironment($root . '/demo');
+    if ($command === 'identity:status') {
+        $s = $preparer->status();
+        fwrite(STDOUT, 'identity: ' . ($s['ready'] ? 'ready' : 'NOT ready') . "\n");
+        foreach (['schema', 'source', 'persona_source', 'public_identity'] as $k) {
+            fwrite(STDOUT, "  {$k}: " . (string) ($s[$k] ?? '-') . "\n");
+        }
+        fwrite(STDOUT, '  tls: ' . (string) ($s['tls']['selection'] ?? '-') . ' ' . (string) ($s['tls']['fingerprint_sha256'] ?? '') . "\n");
+        foreach ($s['checks'] as $name => $verdict) {
+            fwrite(STDOUT, "  check {$name}: {$verdict}\n");
+        }
+        foreach ($s['warnings'] as $w) {
+            fwrite(STDOUT, "  warning: {$w}\n");
+        }
+        exit($s['ready'] ? 0 : 1);
+    }
+    try {
+        $result = $preparer->prepare();
+    } catch (IdentityBootstrapException $e) {
+        fwrite(STDERR, "identity:prepare failed: {$e->errorCode()} (remedy: {$e->remedy()})\n");
+        exit(1);
+    } catch (\Throwable $e) {
+        // Never the message: an unexpected fault's text could carry a path or a value.
+        fwrite(STDERR, 'identity:prepare failed: unexpected (' . (new \ReflectionClass($e))->getShortName() . ")\n");
+        exit(1);
+    }
+    fwrite(STDOUT, sprintf(
+        "identity: prepared (source=%s, persona=%s, tls=%s, identity=%s)\n",
+        $result->sourceClass,
+        $result->personaSource,
+        $result->tls->selection,
+        $result->publicPersonaHash,
+    ));
+    foreach ($result->warnings as $w) {
+        fwrite(STDOUT, "identity: warning {$w}\n");
+    }
+    $result->close();
+    exit(0);
+}
 
 if ($command === 'compile-protocols') {
     $dir = $root . '/templates/protocol';
@@ -117,5 +172,5 @@ if ($command === 'vulns:sync' || $command === 'vulns:list') {
     exit(0);
 }
 
-fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list\n");
+fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list | identity:prepare | identity:status\n");
 exit($command === '' || $command === 'help' || $command === '--help' ? 0 : 2);

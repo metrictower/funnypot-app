@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Engagement;
 
-use Funnypot\Shell\Fs\HostSecret;
-
 /**
  * The install-local key every stored engagement identifier is derived under. Nothing in the
  * engagement database is a raw value: episode ids, evidence digests and artifact ids are all
@@ -14,11 +12,10 @@ use Funnypot\Shell\Fs\HostSecret;
  * cookie.
  *
  * Resolution: an explicit FUNNYPOT_ANALYTICS_KEY wins; otherwise a sub-key is derived from the
- * persisted per-install host secret ({@see HostSecret}), which exists on every install by default.
- * There is deliberately NO fleet-constant fallback: a short/placeholder explicit key, or a host secret
- * that could not be persisted (a per-process value would give every php-fpm worker its own id space),
- * resolves to null and the caller keeps engagement metrics OFF with a health warning. The public
- * persona seed is never used — it defaults to a constant shared by every install.
+ * install identity's private `engagement-analytics/v1` key (HttpIdentity::engagementAnalyticsKey()),
+ * which every prepared install has. There is deliberately NO fleet-constant fallback: a short/
+ * placeholder explicit key, or no install key at all, resolves to null and the caller keeps
+ * engagement metrics OFF with a health warning. The public persona seed is never used.
  */
 final class AnalyticsKey
 {
@@ -36,18 +33,21 @@ final class AnalyticsKey
     {
     }
 
-    /** Null when no usable install-local key material exists — metrics must then stay off. */
-    public static function resolve(string $explicit, string $storageDir): ?self
+    /**
+     * Null when no usable install-local key material exists — metrics must then stay off.
+     *
+     * @param string|null $installKey the 32-byte private analytics key from the install identity
+     */
+    public static function resolve(string $explicit, ?string $installKey): ?self
     {
         if ($explicit !== '') {
             return strlen($explicit) >= self::MIN_KEY_BYTES ? new self($explicit) : null;
         }
-        $host = HostSecret::resolve($storageDir);
-        if (!HostSecret::isPersisted($storageDir)) {
+        if ($installKey === null || strlen($installKey) < 32) {
             return null;
         }
 
-        return new self(hash_hmac('sha256', self::DERIVE_LABEL . '|' . self::VERSION, $host, true));
+        return new self(hash_hmac('sha256', self::DERIVE_LABEL . '|' . self::VERSION, $installKey, true));
     }
 
     /** A key from raw material (tests and the test-support namespace); same placeholder floor. */

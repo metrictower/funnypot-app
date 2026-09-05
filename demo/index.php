@@ -34,9 +34,13 @@ use Funnypot\App\Engagement\EpisodeResolver;
 use Funnypot\App\Engagement\NoopEngagementStore;
 use Funnypot\App\Engagement\SignedHandle;
 use Funnypot\App\Http\ConsoleRouter;
+use Funnypot\App\Http\CoreConfigFactory;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\DownloadRouter;
+use Funnypot\App\Identity\HttpIdentity;
+use Funnypot\App\Identity\IdentityBootstrapException;
+use Funnypot\App\Identity\IdentityPaths;
 use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
@@ -83,15 +87,27 @@ use Funnypot\Core\Support\VisualPersona;
 // like a missing page instead of exposing internals. Generalises the engine's "only ever upgrade a
 // 404, never escape as a 500" invariant to the whole front controller.
 @ini_set('display_errors', '0');
-$funnypotFault = static function (string $where, string $msg, string $file, int $line): void {
-    error_log("funnypot {$where}: {$msg} @ {$file}:{$line}");
+$funnypot404 = static function (): void {
     if (!headers_sent()) {
         http_response_code(404);
         header('Content-Type: text/html; charset=UTF-8');
         echo '<!doctype html><title>404 Not Found</title>404 Not Found';
     }
 };
-set_exception_handler(static function (\Throwable $e) use ($funnypotFault): void {
+$funnypotFault = static function (string $where, string $msg, string $file, int $line) use ($funnypot404): void {
+    error_log("funnypot {$where}: {$msg} @ {$file}:{$line}");
+    $funnypot404();
+};
+set_exception_handler(static function (\Throwable $e) use ($funnypotFault, $funnypot404): void {
+    // An identity bootstrap fault logs ONLY its stable public code — never the message, file or line
+    // the generic path records — so a missing/tampered bundle can never name a private path or the
+    // bootstrap source in a log that may be shipped or scraped. Same believable 404 either way.
+    if ($e instanceof IdentityBootstrapException) {
+        error_log('funnypot identity: ' . $e->errorCode());
+        $funnypot404();
+
+        return;
+    }
     $funnypotFault('uncaught', $e->getMessage(), $e->getFile(), $e->getLine());
 });
 register_shutdown_function(static function () use ($funnypotFault): void {
@@ -108,6 +124,17 @@ register_shutdown_function(static function () use ($funnypotFault): void {
 $configStore = new ConfigStore(ConfigStore::defaultDbPath(__DIR__));
 $config = AppConfig::fromStore($configStore, __DIR__);
 @mkdir(dirname($config->logPath), 0777, true);
+
+// Install identity: the web tier's scoped bundle, root-written by `identity:prepare` before php-fpm
+// started (0640 root:www-data — the only identity file this process may read). It carries the visible
+// persona material plus just the keys the web tier consumes; never the install master or another
+// tier's key. Missing/tampered ⇒ IdentityBootstrapException ⇒ the global handler's plain 404 with only
+// the public code logged. There is deliberately no fallback persona: a fleet-shared identity is a tell.
+$identity = HttpIdentity::load(IdentityPaths::forStorage(dirname($config->dbPath), getenv(IdentityPaths::RUNTIME_ENV) ?: null));
+$personaSeed = $identity->personaSeed();
+// One effective X-Powered-By for the live header, the LLM profiles and the engine chrome: the explicit
+// override, else the persona's PHP version (the same one /phpinfo.php shows — a mismatch is a tell).
+$poweredBy = $config->poweredBy !== '' ? $config->poweredBy : $identity->defaultPoweredBy();
 
 $store = new SqliteHitStore($config->dbPath, $config->logPath);
 $geo = new Geo($config->geoDbPath);
@@ -130,7 +157,7 @@ if ($config->captureRaw) {
 $serverPort = (int) ($_SERVER['SERVER_PORT'] ?? 0);
 $dockerSurface = $config->dockerApiEnabled && DockerApiRouter::isDockerSurface($context->path, $serverPort);
 if (!AiApiRouter::isAiSurface($context->path) && !$dockerSurface) {
-    header('X-Powered-By: ' . $config->poweredBy);
+    header('X-Powered-By: ' . $poweredBy);
 }
 
 // Anti-fingerprint tripwire: plant a signed bait cookie and classify what comes back — a client
@@ -175,10 +202,10 @@ if ($config->llmEnabled) {
         new GenericSkin()
     );
     $renderer = new PageShellRenderer($skins);
-    $company = PersonaIdentity::fromSeed($config->personaSeed)->field('company.name') ?? 'Internal';
+    $company = PersonaIdentity::fromSeed($personaSeed)->field('company.name') ?? 'Internal';
     // Same persona seed as the html tier's $company, so a /.env or /config.json reflects the same
     // coherent identity as the html pages (cross-kind coherence, not just per-kind determinism).
-    $visualPersona = VisualPersona::fromSeed($config->personaSeed);
+    $visualPersona = VisualPersona::fromSeed($personaSeed);
     $pageSlotsGrammar = (string) @file_get_contents(dirname(__DIR__) . '/resources/llm/page-slots.gbnf');
     // Fold the deploy epoch into the cache key: FrozenClock::epoch() advances only across redeploys
     // (FUNNYPOT_EPOCH is stamped once at container start), so a new deploy busts every cached panel
@@ -201,7 +228,7 @@ if ($config->llmEnabled) {
         new LlmOutputSanitizer(),
         $store,
         new LlmResponseProfiles(
-            $config->poweredBy,
+            $poweredBy,
             (string) @file_get_contents(dirname(__DIR__) . '/resources/llm/html.gbnf'),
             (string) @file_get_contents(dirname(__DIR__) . '/resources/llm/json.gbnf'),
             $renderer,
@@ -211,7 +238,7 @@ if ($config->llmEnabled) {
         ),
         $config->llmPromptVersion,
         $config->llmMaxConcurrent,
-        $config->personaSeed,
+        $personaSeed,
         $artifactVersion,
         $fakePersistence,
     );
@@ -274,7 +301,9 @@ if ($config->sleepDecoy) {
     );
     $sleepDecoy = new SleepDecoy($sleepBudget, $config, new AttackClassifier());
 }
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
+// The engine Config factory carries the identity's private render salt + visible persona material, so
+// the template tier resolves the SAME PersonaIdentity the app pages show (and the same X-Powered-By).
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
@@ -291,15 +320,15 @@ $adminAuth = new AdminAuth(dirname($config->dbPath) . '/admin.sqlite', $adminBas
 $adminAuth->bootstrap($config->adminPassword, $config->adminUser);
 // Engagement episode metrics (opt-in, FUNNYPOT_ENGAGEMENT). Observer-only: the recorder is handed to
 // the tarpit producers below and runs AFTER their response is out; the read side goes to the
-// dashboard. Every stored id is an install-local HMAC under the analytics key. No usable key material
-// (a placeholder FUNNYPOT_ANALYTICS_KEY, or a host secret that could not be persisted) keeps the
-// recorder OFF and tells the dashboard why — never a fall-back to an identity shared across installs.
-// One clock closure is shared by the recorder and the store so handle expiry and episode boundaries
-// are judged against the same integer epoch every worker sees.
+// dashboard. Every stored id is an install-local HMAC under the analytics key: an explicit
+// FUNNYPOT_ANALYTICS_KEY, else a sub-key of the install identity's private analytics key. A placeholder
+// explicit key keeps the recorder OFF and tells the dashboard why — never a fall-back to an identity
+// shared across installs. One clock closure is shared by the recorder and the store so handle expiry
+// and episode boundaries are judged against the same integer epoch every worker sees.
 $engagementAnalytics = null;
 $engagementRecorder = null;
 if ($config->engagementEnabled) {
-    $analyticsKey = AnalyticsKey::resolve($config->analyticsKey, __DIR__ . '/storage');
+    $analyticsKey = AnalyticsKey::resolve($config->analyticsKey, $identity->engagementAnalyticsKey());
     if ($analyticsKey === null) {
         $engagementAnalytics = new NoopEngagementStore(NoopEngagementStore::REASON_NO_KEY);
     } else {
@@ -351,10 +380,10 @@ if ($config->tarpitEnabled) {
     $tarpitPacingSw = $config->tarpitLatencyMs > 0
         ? (string) @file_get_contents(dirname(__DIR__) . '/src/App/Tarpit/tarpit-sw.js')
         : '';
-    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder);
+    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder);
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
     // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
-    $polluter = new PolluterController($store, $geo, $tarpitBudget, $config->personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
+    $polluter = new PolluterController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
 }
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
@@ -369,12 +398,15 @@ $home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklis
 // robots. Off (null) otherwise, exactly like HomeController, so nothing plants the hint when the tarpit is off.
 $corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
-// Same persona seed + persisted FS secret as the SSH/telnet shell, so a host's web console == its shell.
+// Same persona seed + the same install filesystem key as the SSH/telnet shell (so a host's web console ==
+// its shell), and a SEPARATE session-MAC key for its cookie — both from the web bundle, never from the
+// root-only shell bundle.
 $console = new ConsoleRouter(
     new ConsoleSessionStore(dirname($config->dbPath) . '/console.sqlite'),
     $store,
-    $config->personaSeed,
-    \Funnypot\Shell\Fs\HostSecret::resolve(__DIR__ . '/storage'),
+    $personaSeed,
+    $identity->filesystemKey(),
+    $identity->sessionMacKey(),
 );
 
 // Endless throttled backup-download bait — on by default; the feature is gated here (null = off) so
@@ -384,7 +416,7 @@ $download = null;
 if ($config->endlessDownload) {
     $download = new DownloadRouter(
         $store,
-        $config->personaSeed,
+        $personaSeed,
         (string) @file_get_contents(dirname(__DIR__) . '/src/App/Download/sw.js'),
         $config->dlChunkMinKb,
         $config->dlChunkMaxKb,
@@ -404,11 +436,12 @@ if ($config->dockerApiEnabled) {
     // OWN docker.sqlite (bounded, TTL'd, fail-open) so it never shares the panel's stored-bait store
     // or its global row cap. The threat-intel reporter gets the full structured escape record; the port
     // scopes bare /version + /info to the Docker ports (see DockerApiRouter). Nothing here executes.
-    $dockerPhantoms = new PhantomStore(dirname($config->dbPath) . '/docker.sqlite', $config->personaSeed);
+    $dockerPhantoms = new PhantomStore(dirname($config->dbPath) . '/docker.sqlite', $personaSeed);
     $docker = new DockerApiRouter(
         new DockerApiResponder(
             $store,
-            $config->personaSeed,
+            $personaSeed,
+            $identity->dockerRegistryTokenKey(), // private: the captured-password correlation token key
             $abuse,
             null,
             null,

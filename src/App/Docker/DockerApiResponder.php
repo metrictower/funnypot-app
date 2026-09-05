@@ -68,6 +68,7 @@ class DockerApiResponder
     public function __construct(
         private HitStore $store,
         int $personaSeed,
+        string $registryTokenKey,
         private ?AbuseIpdb $abuse = null,
         ?callable $clock = null,
         ?callable $emit = null,
@@ -77,7 +78,7 @@ class DockerApiResponder
         private int $port = 0,
     ) {
         $this->daemon = DockerDaemon::fromSeed($personaSeed);
-        $this->intent = new EscapeIntent($personaSeed);
+        $this->intent = new EscapeIntent($personaSeed, $registryTokenKey);
         $this->clock = $clock ?? static fn (): int => time();
         $this->emit = $emit;
         $this->emitterFactory = $emitterFactory;

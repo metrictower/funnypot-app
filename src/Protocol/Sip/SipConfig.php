@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\Protocol\Sip;
 
+use Funnypot\App\Identity\SipIdentity;
 use Funnypot\App\Render\Fake\Org;
-use Funnypot\Core\Support\PersonaIdentity;
-use Funnypot\Core\Support\VisualPersona;
 
 /**
  * Configuration for the SIP and RTP VoIP honeypot service.
@@ -307,7 +306,11 @@ final class SipConfig
         return false;
     }
 
-    public static function fromEnv(): self
+    /**
+     * @param SipIdentity $identity the listener's persona-only install identity view, resolved by the
+     *        composition root BEFORE the socket binds — the seed/domain are never re-read from env here
+     */
+    public static function fromEnv(SipIdentity $identity): self
     {
         $style = getenv('FUNNYPOT_SIP_STYLE') ?: (getenv('FUNNYPOT_STYLE') ?: 'realistic');
         $bind = getenv('FUNNYPOT_SIP_BIND') ?: '0.0.0.0:5060';
@@ -371,22 +374,12 @@ final class SipConfig
             $extensionMode = 'pattern';
         }
 
-        // Resolve the persona seed (and, for 'org' mode, its email domain) exactly as the office
-        // panels do — from the private per-deploy material — so the SIP extension directory and the
-        // HR/directory panels present one coherent company. Fault-isolated: if the identity can't be
-        // derived, seed/domain stay at their defaults and 'org' mode degrades to the pattern policy.
-        $personaMaterial = getenv('FUNNYPOT_PERSONA_SEED') ?: (getenv('FUNNYPOT_PERSONA_SECRET') ?: 'funnypot');
-        $personaSeed = 0;
-        $personaDomain = '';
-        try {
-            $personaSeed = PersonaIdentity::seedFromMaterial($personaMaterial);
-            if ($extensionMode === 'org') {
-                $personaDomain = VisualPersona::fromSeed($personaSeed)->domain();
-            }
-        } catch (\Throwable $e) {
-            $personaSeed = 0;
-            $personaDomain = '';
-        }
+        // The persona seed (and, for 'org' mode, its email domain) come from the injected install
+        // identity — the same material the office panels seed from — so the SIP extension directory
+        // and the HR/directory panels present one coherent company. There is no environment re-read
+        // and no catch-to-zero: a listener without an identity never reaches this call.
+        $personaSeed = $identity->personaSeed();
+        $personaDomain = $extensionMode === 'org' ? $identity->personaDomain() : '';
 
         return new self(
             style: $style,

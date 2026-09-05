@@ -71,6 +71,10 @@ the panel (no framework, no external script). Streaming via `AiApi\StreamEmitter
   from env `FUNNYPOT_FS_SECRET`; if unset, auto-generate 32 random bytes and persist to
   `<dataDir>/fs_secret` (the mounted `funnypot-data` volume that survives container recreate — same
   persistence story as the LE certs / rules key), then reuse it. Never go dark for a missing secret.
+  > **Superseded.** The filesystem key is now the `shell-filesystem/v1` derivation of the persisted
+  > install master (`docs/IDENTITY.md`), delivered to the shell/web console through their scoped
+  > runtime bundles. `FUNNYPOT_FS_SECRET` and `<dataDir>/fs_secret` are ignored (one documented
+  > filesystem reroll), and a missing identity now fails closed instead of degrading.
 - **Fingerprint-safe:** generated shell/FS/fleet strings are factual/plausible, never scanner signatures.
   NOTE the CI gate (`check-fingerprint-safety.php`) scans only compiled template artifacts and does NOT see
   runtime panel/shell/FS output — so safety here is enforced by (a) escape-by-construction helpers, (b)

@@ -15,10 +15,30 @@ use PHPUnit\Framework\TestCase;
 final class EscapeIntentTest extends TestCase
 {
     private const SEED = 7;
+    private const KEY = 'escape-intent-test-registry-token-key-a';
 
-    private function intent(): EscapeIntent
+    private function intent(string $key = self::KEY): EscapeIntent
     {
-        return new EscapeIntent(self::SEED);
+        return new EscapeIntent(self::SEED, $key);
+    }
+
+    /**
+     * The captured-password correlation token is keyed on the PRIVATE registry-token key, not the
+     * public persona seed: the same seed with two different keys yields two unrelated tokens, the
+     * same key yields the same token, and 128 bits are retained.
+     */
+    public function test_pw_token_is_keyed_on_the_private_key_and_keeps_128_bits(): void
+    {
+        $body = ['Image' => 'alpine', 'Cmd' => ['sh']];
+        $auth = base64_encode((string) json_encode(['username' => 'u', 'password' => 'hunter2', 'serveraddress' => 'r.example']));
+        $a = $this->intent(self::KEY)->fromCreate($body, '', ['X-Registry-Auth' => $auth]);
+        $b = $this->intent(self::KEY)->fromCreate($body, '', ['X-Registry-Auth' => $auth]);
+        $c = $this->intent('escape-intent-test-registry-token-key-b')->fromCreate($body, '', ['X-Registry-Auth' => $auth]);
+
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $a['registry_auth']['pw_token']);
+        self::assertSame($a['registry_auth']['pw_token'], $b['registry_auth']['pw_token'], 'same key ⇒ same correlation token');
+        self::assertNotSame($a['registry_auth']['pw_token'], $c['registry_auth']['pw_token'], 'same persona seed, other key ⇒ unrelated token');
+        self::assertNotSame(substr(hash_hmac('sha256', 'hunter2', 'fp-docker|' . self::SEED), 0, 32), $a['registry_auth']['pw_token'], 'never the public-seed keyed form');
     }
 
     public function test_teamtnt_style_create_yields_escape_class_and_every_field(): void
@@ -50,7 +70,7 @@ final class EscapeIntentTest extends TestCase
         self::assertSame('sysupdate', $rec['name']);
         self::assertSame('u', $rec['registry_auth']['username']);
         self::assertStringNotContainsString($secret, (string) json_encode($rec), 'the password must never appear');
-        self::assertMatchesRegularExpression('/^[0-9a-f]{1,12}$/', $rec['registry_auth']['pw_token']);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $rec['registry_auth']['pw_token']);
     }
 
     public function test_docker_socket_mount_is_flagged(): void

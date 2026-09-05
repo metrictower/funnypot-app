@@ -6,6 +6,7 @@ namespace Funnypot\Tests\App\Http;
 
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Http\SleepDecoy;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
@@ -103,6 +104,7 @@ final class SleepDecoyControllerTest extends TestCase
             $geo,
             $config,
             $decoys,
+            IdentityTestSupport::coreConfigFactory(),
             null,
             null,
             null,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App;
 
+use Funnypot\Tests\App\Identity\PreparedIdentityFixture;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -45,8 +46,11 @@ final class FrontControllerBootSmokeTest extends TestCase
         // the router (the real front controller) exactly as nginx + php-fpm route it in prod.
         $docroot = $this->tempDir('fpboot_doc');
 
-        // fromEnv() honours these, so all persistence lands in the temp dir; disable the sidecar and
-        // give a fixed persona so the boot makes no network calls and is deterministic.
+        // fromEnv() honours these, so all persistence lands in the temp dir; disable the sidecar so the
+        // boot makes no network calls. The identity is a REAL prepared install (fixed master, persona
+        // override) whose runtime root is the only identity fact the child gets — no persona/master var.
+        $prepared = PreparedIdentityFixture::prepare($data, 'bootsmoke');
+        $prepared['result']->close();
         $env = [
             'PATH' => getenv('PATH') !== false ? (string) getenv('PATH') : '/usr/bin:/bin',
             'FUNNYPOT_DB' => $data . '/funnypot.sqlite',
@@ -54,8 +58,7 @@ final class FrontControllerBootSmokeTest extends TestCase
             'FUNNYPOT_GEO_DB' => $data . '/geo.csv',
             'FUNNYPOT_VULNS' => $data . '/vulns.json',
             'FUNNYPOT_LLM' => '0',
-            'FUNNYPOT_PERSONA_SEED' => 'bootsmoke',
-        ];
+        ] + PreparedIdentityFixture::childEnv($prepared['runtimeDir']);
         // proc_open replaces the whole environment, so carry through the ini-locating vars if the parent
         // uses them — else the child PHP could load a different extension set and false-fail the boot.
         foreach (['PHPRC', 'PHP_INI_SCAN_DIR'] as $iniVar) {

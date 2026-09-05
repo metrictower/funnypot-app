@@ -2,6 +2,7 @@
 # ports (handles a scanner's concurrent request flood; php -S could not), plus the TCP emulators.
 #   docker build -f demo/Dockerfile -t funnypot .
 #   docker run --rm -p 80:80 -p 443:443 -p 8080:8080 -p 2222:2222 funnypot
+# Runtime floor is PHP 8.2 (native fsync for the crash-safe install-identity store); the image is 8.3.
 
 # --- deps: resolve the HTTP engine (metrictower/funnypot-core) + its deps into vendor/ ---
 # funnypot-core is pulled from its GitHub repo (a vcs repository in composer.json) until it is on
@@ -37,13 +38,18 @@ COPY demo/funnypot-location.conf /etc/nginx/funnypot-location.conf
 COPY demo/entrypoint.sh          /entrypoint.sh
 
 WORKDIR /app
-# The engine (+ deps) from the composer stage, then the app's own code and compiled artifacts.
+# The engine (+ deps) from the composer stage, then the app's own code, compiled artifacts and the
+# CLI: the entrypoint (and the deploy preflight, which runs this same image with --network none) runs
+# `php /app/bin/funnypot identity:prepare` before anything binds, so bin/ must be in the image.
 COPY --from=deps /app/vendor ./vendor
 COPY src ./src
 COPY resources ./resources
 COPY demo ./demo
+COPY bin ./bin
 
-RUN chmod +x /entrypoint.sh \
+# The storage mount stays 0777 (legacy data volume); the install identity lives beneath it in a private
+# 0700 root-owned directory that identity:prepare creates and validates on every boot.
+RUN chmod +x /entrypoint.sh /app/bin/funnypot \
     && mkdir -p /app/demo/storage \
     && chmod 0777 /app/demo/storage
 

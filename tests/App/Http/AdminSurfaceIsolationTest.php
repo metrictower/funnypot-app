@@ -11,6 +11,7 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\Core\RequestContext;
@@ -81,7 +82,7 @@ final class AdminSurfaceIsolationTest extends TestCase
         $auth = new AdminAuth($this->path('auth'));
         $auth->createOrResetUser('admin', 'operator-secret-pw');
 
-        $honeypot = new HoneypotController($store, $geo, $config, $decoys);
+        $honeypot = new HoneypotController($store, $geo, $config, $decoys, IdentityTestSupport::coreConfigFactory());
         $dashboard = new DashboardController($store, $geo, $config, $assets, null, null, $store, $auth, $cfg);
         $corporate = new CorporateController($store, $geo, $config, $assets);
         $home = new HomeController($store, $geo, $config, $assets);

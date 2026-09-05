@@ -11,8 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # 8.2 is the floor: the install-identity store needs native fsync() (8.1+) and 8.0/8.1 are EOL.
       matrix:
-        php: ['8.0', '8.1', '8.2', '8.3', '8.4']
+        php: ['8.2', '8.3', '8.4']
     steps:
       - uses: actions/checkout@v4
 

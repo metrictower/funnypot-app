@@ -40,7 +40,12 @@ final class MssqlConfig
     ) {
     }
 
-    public static function fromEnv(): self
+    /**
+     * @param string $installPersonaMaterial the install's visible persona material: the seed for the
+     *        persona DB/login names unless FUNNYPOT_MSSQL_SEED overrides it (stable per install,
+     *        different across installs — never a fleet-wide server:version literal).
+     */
+    public static function fromEnv(string $installPersonaMaterial): self
     {
         $server = getenv('FUNNYPOT_MSSQL_SERVER') ?: 'SQL01';
 
@@ -54,7 +59,7 @@ final class MssqlConfig
 
         $instance = getenv('FUNNYPOT_MSSQL_INSTANCE') ?: 'MSSQLSERVER';
         $os = getenv('FUNNYPOT_MSSQL_OS') ?: 'Windows Server 2019 Standard 10.0 <X64> (Build 17763: )';
-        $seed = getenv('FUNNYPOT_MSSQL_SEED') ?: ($server . ':' . $version);
+        $seed = getenv('FUNNYPOT_MSSQL_SEED') ?: $installPersonaMaterial;
 
         $dbEnv = getenv('FUNNYPOT_MSSQL_DATABASES');
         $databases = ['master', 'tempdb', 'model', 'msdb'];

@@ -5,42 +5,23 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Engagement;
 
 use Funnypot\App\Engagement\AnalyticsKey;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use PHPUnit\Framework\TestCase;
 
 /**
  * The install-local key: an explicit key is used as-is, a placeholder is refused, and without one
- * the key derives from the persisted host secret — so two installs never share an id space and an
- * install that cannot persist a secret gets NO key (metrics off) rather than a shared constant.
+ * the key derives from the install identity's private analytics key — so two installs never share
+ * an id space and an install with no identity key gets NO key (metrics off) rather than a shared
+ * constant.
  */
 final class AnalyticsKeyTest extends TestCase
 {
-    /** @var string[] */
-    private array $dirs = [];
-
-    protected function tearDown(): void
-    {
-        foreach ($this->dirs as $d) {
-            @unlink($d . '/fs_secret');
-            @rmdir($d);
-            @unlink($d);
-        }
-        $this->dirs = [];
-    }
-
-    private function dir(): string
-    {
-        $d = sys_get_temp_dir() . '/fp_akey_' . bin2hex(random_bytes(6));
-        mkdir($d, 0700);
-        $this->dirs[] = $d;
-
-        return $d;
-    }
-
     public function test_explicit_key_is_used_and_a_short_placeholder_is_refused(): void
     {
-        self::assertNotNull(AnalyticsKey::resolve(str_repeat('x', AnalyticsKey::MIN_KEY_BYTES), $this->dir()));
-        self::assertNull(AnalyticsKey::resolve('changeme', $this->dir()), 'a placeholder-length key means NO key, never a weak one');
-        self::assertNull(AnalyticsKey::resolve(str_repeat('x', AnalyticsKey::MIN_KEY_BYTES - 1), $this->dir()));
+        $install = IdentityTestSupport::deriver()->engagementAnalyticsKey();
+        self::assertNotNull(AnalyticsKey::resolve(str_repeat('x', AnalyticsKey::MIN_KEY_BYTES), $install));
+        self::assertNull(AnalyticsKey::resolve('changeme', $install), 'a placeholder-length key means NO key, never a weak one');
+        self::assertNull(AnalyticsKey::resolve(str_repeat('x', AnalyticsKey::MIN_KEY_BYTES - 1), $install));
     }
 
     public function test_from_raw_refuses_placeholder_material(): void
@@ -51,35 +32,25 @@ final class AnalyticsKeyTest extends TestCase
 
     public function test_derived_key_is_stable_per_install_and_differs_across_installs(): void
     {
-        if (getenv('FUNNYPOT_FS_SECRET') !== false && getenv('FUNNYPOT_FS_SECRET') !== '') {
-            self::markTestSkipped('FUNNYPOT_FS_SECRET is set in this environment; per-directory derivation is not observable');
-        }
-        $a = $this->dir();
-        $b = $this->dir();
+        $a = IdentityTestSupport::deriver('a')->engagementAnalyticsKey();
+        $b = IdentityTestSupport::deriver('b')->engagementAnalyticsKey();
 
         $k1 = AnalyticsKey::resolve('', $a);
         $k2 = AnalyticsKey::resolve('', $a);
         $k3 = AnalyticsKey::resolve('', $b);
         self::assertNotNull($k1);
         self::assertNotNull($k3);
-        self::assertFileExists($a . '/fs_secret', 'the host secret was persisted');
 
         self::assertSame($k1->id('d', 'v'), $k2->id('d', 'v'), 'same install ⇒ same ids across processes');
-        self::assertNotSame($k1->id('d', 'v'), $k3->id('d', 'v'), 'another install ⇒ different ids (cross-secret variance)');
+        self::assertNotSame($k1->id('d', 'v'), $k3->id('d', 'v'), 'another install ⇒ different ids (cross-master variance)');
+        // The stored id is a sub-key derivation, never the raw install key used directly.
+        self::assertNotSame(substr(hash_hmac('sha256', 'v1|d|v', $a), 0, 32), $k1->id('d', 'v'));
     }
 
-    public function test_unpersistable_host_secret_yields_no_key(): void
+    public function test_missing_or_short_install_key_yields_no_key(): void
     {
-        if (getenv('FUNNYPOT_FS_SECRET') !== false && getenv('FUNNYPOT_FS_SECRET') !== '') {
-            self::markTestSkipped('FUNNYPOT_FS_SECRET is set in this environment');
-        }
-        $blocker = sys_get_temp_dir() . '/fp_akey_block_' . bin2hex(random_bytes(6));
-        file_put_contents($blocker, 'x');
-        $this->dirs[] = $blocker;
-
-        // A storage dir that cannot exist (its parent is a file) — HostSecret degrades to a per-process
-        // value, which would give every worker its own id space; that must read as "no key".
-        self::assertNull(@AnalyticsKey::resolve('', $blocker . '/nope'));
+        self::assertNull(AnalyticsKey::resolve('', null), 'no install identity ⇒ metrics off, never a shared constant');
+        self::assertNull(AnalyticsKey::resolve('', 'too-short'));
     }
 
     public function test_ids_are_128_bit_versioned_and_domain_separated(): void

@@ -16,12 +16,16 @@ namespace Funnypot\App\Config;
  * object, which is the durable guard the stale line numbers pretended to be. The env-only fields —
  * filesystem paths, secrets/identity and
  * network topology — are deliberately NOT here (they stay env-sourced inside `fromStore`); the test
- * holds their allow-list.
+ * holds their allow-list. The install identity inputs (FUNNYPOT_INSTALL_SECRET[_FILE], the persona
+ * overrides, the operator TLS paths, the runtime-dir override) are never registered at all: they are
+ * not AppConfig fields, so a stored override could never inject or reveal them — ConfigRegistryTest
+ * pins `keyForEnv()` to null for each.
  *
  * The `default` string is the ENV-level default (the literal `fromEnv` passes to `$str`), i.e. the
  * value seen when neither a stored override nor the env var is set. `poweredBy` is the one knob whose
- * effective default is derived at runtime (from the persona) rather than a literal; its registry
- * default is '' and the real default is resolved in `AppConfig::build()`.
+ * effective default is derived at runtime (from the install persona) rather than a literal; its
+ * registry default is '' and the composition root resolves the real default from
+ * `HttpIdentity::defaultPoweredBy()`.
  *
  * Types:
  *   string  — free text
@@ -83,7 +87,7 @@ final class ConfigRegistry
             // env is the ceiling a stored override may never loosen (ConfigStore::set()/rawForEnv()).
             'mode' => ['field' => 'mode', 'env' => 'FUNNYPOT_MODE', 'type' => 'enum', 'enum' => ['public', 'stealth'], 'default' => 'public', 'group' => 'Deception', 'live' => true, 'secret' => false, 'protected' => true, 'safety_order' => ['public', 'stealth']],
             'style' => ['field' => 'style', 'env' => 'FUNNYPOT_STYLE', 'type' => 'enum', 'enum' => ['realistic', 'taunt', 'malformed'], 'default' => 'realistic', 'group' => 'Deception', 'live' => true, 'secret' => false],
-            'powered_by' => ['field' => 'poweredBy', 'env' => 'FUNNYPOT_POWERED_BY', 'type' => 'string', 'default' => '', 'group' => 'Deception', 'live' => true, 'secret' => false], // (effective default is persona-derived, resolved in build())
+            'powered_by' => ['field' => 'poweredBy', 'env' => 'FUNNYPOT_POWERED_BY', 'type' => 'string', 'default' => '', 'group' => 'Deception', 'live' => true, 'secret' => false], // (effective default is persona-derived, resolved by the composition root from HttpIdentity)
             'severity_ceiling' => ['field' => 'severityCeiling', 'env' => 'FUNNYPOT_CEILING', 'type' => 'string', 'default' => 'critical', 'group' => 'Deception', 'live' => true, 'secret' => false], // (free string in fromEnv; not clamped)
             'latency_ms' => ['field' => 'latencyMs', 'env' => 'FUNNYPOT_LATENCY_MS', 'type' => 'int', 'default' => '0', 'group' => 'Deception', 'live' => true, 'secret' => false], // (no clamp)
             'jitter_ms' => ['field' => 'jitterMs', 'env' => 'FUNNYPOT_JITTER_MS', 'type' => 'int', 'default' => '40', 'group' => 'Deception', 'live' => true, 'secret' => false], // (no clamp)

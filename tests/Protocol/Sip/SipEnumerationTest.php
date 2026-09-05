@@ -56,7 +56,7 @@ final class SipEnumerationTest extends TestCase
         // re:7\d{2} stays a literal backslash-d in this single-quoted string.
         putenv('FUNNYPOT_SIP_VALID_EXTENSIONS=1001,20*,re:7\d{2}');
         try {
-            $cfg = SipConfig::fromEnv();
+            $cfg = SipConfig::fromEnv(\Funnypot\App\Identity\SipIdentity::fromPersonaMaterial('sip-env-override-test'));
 
             // The override defines the valid set: explicit, glob, and regex forms all match.
             $this->assertTrue($cfg->isValidExtension('1001'));
@@ -377,11 +377,12 @@ final class SipEnumerationTest extends TestCase
     public function test_org_mode_valid_set_equals_org_roster_and_derives_seed_like_panels(): void
     {
         // Coherence via fromEnv: the SIP directory resolves the SAME seed+domain the office panels do
-        // (PersonaIdentity::seedFromMaterial + the persona domain), so the two describe one company.
-        putenv('FUNNYPOT_PERSONA_SEED=fp0180-coherence');
+        // (PersonaIdentity::seedFromMaterial + the persona domain) from the INJECTED install identity —
+        // a persona variable in the environment is ignored, so the two describe one company.
+        putenv('FUNNYPOT_PERSONA_SEED=must-be-ignored-by-sip');
         putenv('FUNNYPOT_SIP_EXTENSION_MODE=org');
         try {
-            $cfg = SipConfig::fromEnv();
+            $cfg = SipConfig::fromEnv(\Funnypot\App\Identity\SipIdentity::fromPersonaMaterial('fp0180-coherence'));
 
             $seed = PersonaIdentity::seedFromMaterial('fp0180-coherence');
             $domain = VisualPersona::fromSeed($seed)->domain();

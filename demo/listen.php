@@ -16,6 +16,10 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
+use Funnypot\App\Identity\IdentityBootstrapException;
+use Funnypot\App\Identity\IdentityPaths;
+use Funnypot\App\Identity\ShellIdentity;
+use Funnypot\App\Identity\SipIdentity;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
@@ -121,16 +125,29 @@ if (!$policy->isEnabled('service-' . $protocol)) {
     exit(0);
 }
 
-// The fake shell's host identity: the deploy persona seed (so it's stable per deploy) + a private,
-// persisted per-install secret (keys the procedural filesystem against oracle-replay; never committed).
-$fsSecret = \Funnypot\Shell\Fs\HostSecret::resolve(__DIR__ . '/storage');
-$fsSeed = $config->personaSeed;
+// Install identity: each listener loads ONLY the named root-only bundle it consumes (written by
+// `identity:prepare` before this process was spawned) — the shell view carries the persona seed plus
+// the private filesystem key that defeats oracle-replay of the procedural filesystem; the persona-only
+// view carries no key at all. A missing/tampered bundle aborts here, BEFORE any socket binds: no
+// listener ever degrades to seed zero, a per-process secret or a fleet-shared persona.
+$identityPaths = IdentityPaths::forStorage(dirname($config->dbPath), getenv(IdentityPaths::RUNTIME_ENV) ?: null);
+$loadIdentity = static function (callable $loader) use ($identityPaths, $protocol) {
+    try {
+        return $loader($identityPaths);
+    } catch (IdentityBootstrapException $e) {
+        fwrite(STDERR, "funnypot-listen {$protocol}: identity bootstrap failed: {$e->errorCode()} ({$e->remedy()}) — not binding\n");
+        exit(1);
+    }
+};
+$shellIdentity = static fn (): ShellIdentity => $loadIdentity([ShellIdentity::class, 'load']);
+$personaMaterial = static fn (): string => $loadIdentity([SipIdentity::class, 'load'])->personaMaterial();
 
 // SSH is a full crypto server (pure PHP), not a data-driven emulator: it terminates the
 // SSH-2.0 handshake and drops the attacker into the same fake shell telnet uses.
 if ($protocol === 'ssh') {
     $keyPath = getenv('FUNNYPOT_SSH_HOSTKEY') ?: __DIR__ . '/storage/ssh_host_ed25519';
-    (new SshServer(HostKeySet::load($keyPath), $log, identitySeed: $fsSeed, secret: $fsSecret))->run($bind);
+    $shell = $shellIdentity();
+    (new SshServer(HostKeySet::load($keyPath), $log, identitySeed: $shell->personaSeed(), secret: $shell->filesystemKey()))->run($bind);
     exit(0);
 }
 
@@ -145,7 +162,7 @@ if ($protocol === 'vnc') {
 // SIP is an Asterisk PBX VoIP honeypot: answers OPTIONS/REGISTER, captures credentials and toll-fraud
 // dialed numbers, and streams multi-persona audio tarpits (Lenny, Daisy, Dave, IVR, Fax).
 if ($protocol === 'sip') {
-    $sipConfig = SipConfig::fromEnv();
+    $sipConfig = SipConfig::fromEnv($loadIdentity([SipIdentity::class, 'load']));
     (new SipServer($sipConfig, $log, null, null, null, $operatorBlock))->listen($bind);
     exit(0);
 }
@@ -160,7 +177,7 @@ if ($protocol === 'rdp') {
 // SMB2: NTLMSSP negotiate/session-setup honeypot — logs the negotiated dialect and captured NTLM
 // credentials, answers plausibly, shares nothing.
 if ($protocol === 'smb') {
-    (new SmbServer(SmbConfig::fromEnv(), $log))->run($bind);
+    (new SmbServer(SmbConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 
@@ -169,7 +186,7 @@ if ($protocol === 'smb') {
 // queries with fabricated persona result-sets, and traps the xp_cmdshell / RCE chain — capturing the
 // full attacker command while staying 100% inert. FUNNYPOT_MSSQL_MODE=low restores the deny path.
 if ($protocol === 'mssql') {
-    (new MssqlServer(MssqlConfig::fromEnv(), $log))->run($bind);
+    (new MssqlServer(MssqlConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 
@@ -239,7 +256,7 @@ if ($protocol === 'dnp3') {
 // IPMI (UDP): BMC honeypot (623) — captures RAKP usernames (CVE-2013-4786 hash-disclosure vector) +
 // auth attempts; never authenticates; anti-amplification.
 if ($protocol === 'ipmi') {
-    (new IpmiServer(IpmiConfig::fromEnv(), $log))->run($bind);
+    (new IpmiServer(IpmiConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 
@@ -294,7 +311,8 @@ if ($protocol === 'cwmp' || $protocol === 'tr069') {
     exit(0);
 }
 
-$set = ProtocolTemplateSet::fromPackage($fsSeed, $fsSecret);
+$shell = $shellIdentity();
+$set = ProtocolTemplateSet::fromPackage($shell->personaSeed(), $shell->filesystemKey());
 $emulator = $set->emulator($protocol);
 if ($emulator === null) {
     fwrite(STDERR, "unknown protocol '{$protocol}' (have: " . implode(', ', $set->ids()) . ")\n");

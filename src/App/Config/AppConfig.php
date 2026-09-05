@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Config;
 
-use Funnypot\Core\Support\PersonaIdentity;
-
 /**
  * One source of truth for the app's runtime configuration. Every FUNNYPOT_* environment variable
  * the app reads is resolved here once, instead of scattered getenv() calls re-deriving the same
  * defaults in the front controller, the listeners and the retention runner.
  *
  * Paths default under <baseDir>/storage. The deploy-only vars (host/user/key/cert domains) are not
- * app config and stay out of this object.
+ * app config and stay out of this object. Neither is the install identity: the persona seed, the
+ * install master and every derived key live in the scoped runtime bundles (Funnypot\App\Identity),
+ * so the retention/rollup/drain workers that build this object never own identity material.
  */
 final class AppConfig
 {
@@ -24,6 +24,9 @@ final class AppConfig
         public string $logPath,
         public string $geoDbPath,
         public string $vulnsPath,
+        /** The explicit FUNNYPOT_POWERED_BY override only ('' when unset). The effective default — the
+         *  persona's PHP version, so the header matches /phpinfo.php — is resolved by the composition
+         *  root from HttpIdentity::defaultPoweredBy(), because it needs the install identity. */
         public string $poweredBy,
         public string $honeytokenKey,
         public string $severityCeiling,
@@ -118,11 +121,6 @@ final class AppConfig
         public int $llmVelocityPer10m,
         /** IPs/CIDRs exempt from the LLM velocity gate — operator test IPs generate unlimited fakes. */
         public array $llmGateAllowIps,
-        /** Seeds persona/skin selection; per-deployment and stable — never clientIp or time. */
-        public int $personaSeed,
-        /** Raw persona material (pre-hash). Passed to core Config so the template tier derives the
-         *  SAME per-deploy PersonaIdentity via seedFromMaterial. Private per-deploy value — never emit. */
-        public string $personaMaterial,
         /** Endless throttled backup-download bait (fleet console). On by default; the client SW reads
          *  the throttle knobs below from the manifest, so speed/variability are centrally configured. */
         public bool $endlessDownload,
@@ -281,18 +279,6 @@ final class AppConfig
             $db = $store . '/funnypot.sqlite'; // SQLite is canonical now; 'off' no longer disables it
         }
 
-        // Private per-deploy persona material (never a public value like the cert CN). Both the app
-        // persona seed and the core template tier (via Config->deploySeed) derive from this SAME string,
-        // so the two tiers present one coherent identity.
-        $personaMaterial = $str('FUNNYPOT_PERSONA_SEED', $str('FUNNYPOT_PERSONA_SECRET', 'funnypot'));
-
-        // Derive the persona once so the seed and the PHP version below share it. X-Powered-By defaults to
-        // the SAME PHP version /phpinfo.php shows (PersonaIdentity::productVersion('php')), so the live
-        // header and the phpinfo page never advertise two different PHP versions — a coherence tell.
-        // FUNNYPOT_POWERED_BY still overrides.
-        $personaSeed = PersonaIdentity::seedFromMaterial($personaMaterial);
-        $defaultPoweredBy = 'PHP/' . PersonaIdentity::fromSeed($personaSeed)->productVersion('php');
-
         return new self(
             mode: $env('FUNNYPOT_MODE') === 'stealth' ? 'stealth' : 'public',
             style: $str('FUNNYPOT_STYLE', 'realistic'),
@@ -300,7 +286,9 @@ final class AppConfig
             logPath: $str('FUNNYPOT_LOG', $store . '/hits.log'),
             geoDbPath: $str('FUNNYPOT_GEO_DB', $store . '/dbip-country.csv.gz'),
             vulnsPath: $str('FUNNYPOT_VULNS', $store . '/funnypot-vulns.json'),
-            poweredBy: $str('FUNNYPOT_POWERED_BY', $defaultPoweredBy),
+            // Explicit override only; the persona-derived default needs the install identity and is
+            // resolved by the composition root (HttpIdentity::defaultPoweredBy()).
+            poweredBy: $str('FUNNYPOT_POWERED_BY', ''),
             honeytokenKey: $str('FUNNYPOT_HONEYTOKEN_KEY', ''),
             severityCeiling: $str('FUNNYPOT_CEILING', 'critical'),
             latencyMs: (int) ($str('FUNNYPOT_LATENCY_MS', '0')),
@@ -367,14 +355,6 @@ final class AppConfig
             llmVelocityPer60s: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_60S', '5')),
             llmVelocityPer10m: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_10M', '15')),
             llmGateAllowIps: array_values(array_filter(array_map('trim', explode(',', $str('FUNNYPOT_LLM_GATE_ALLOW', ''))))),
-            // Seed source must be private: the cert CN (FUNNYPOT_LE_DOMAIN) is public, so deriving
-            // from it lets a scanner read the domain and precompute the whole persona identity
-            // offline. FUNNYPOT_PERSONA_SECRET is the private per-deployment value; unset falls back
-            // to a fixed default (set it for a unique per-host identity). seedFromMaterial is the
-            // canonical derivation shared with the core template tier, so both resolve the SAME
-            // PersonaIdentity for one deployment.
-            personaSeed: $personaSeed,
-            personaMaterial: $personaMaterial,
             // Endless-download bait: on unless explicitly "0". Throttle knobs clamped to sane bounds so
             // a bad env value can't produce a firehose (instant tell + fills disk) or a dead stall.
             endlessDownload: $onUnless0('FUNNYPOT_ENDLESS_DOWNLOAD'),

@@ -224,11 +224,19 @@ final class IpmiReconLoggingTest extends TestCase
         putenv('FUNNYPOT_IPMI_AUTH_SUPPORT=0x15');
         putenv('FUNNYPOT_IPMI_EXT_CAPS=0x03');
 
-        $config = IpmiConfig::fromEnv();
+        $config = IpmiConfig::fromEnv('install-persona-a');
         self::assertSame(2, $config->channel);
         self::assertSame(0x15, $config->authTypeSupport);
         self::assertSame(0x03, $config->extCapabilities);
         self::assertSame(16, strlen($config->guid), 'the GUID is always 16 bytes');
+        // The BMC GUID follows the install identity: stable per install, different across installs,
+        // never the retired fleet-wide constant; an explicit FUNNYPOT_IPMI_GUID still wins.
+        self::assertSame($config->guid, IpmiConfig::fromEnv('install-persona-a')->guid);
+        self::assertNotSame($config->guid, IpmiConfig::fromEnv('install-persona-b')->guid);
+        self::assertNotSame(hex2bin('2d1a5c9f8b7e4a3d0c6f1e8b2a4d7c90'), $config->guid);
+        putenv('FUNNYPOT_IPMI_GUID=00112233445566778899aabbccddeeff');
+        self::assertSame(hex2bin('00112233445566778899aabbccddeeff'), IpmiConfig::fromEnv('install-persona-a')->guid);
+        putenv('FUNNYPOT_IPMI_GUID');
 
         putenv('FUNNYPOT_IPMI_CHANNEL');
         putenv('FUNNYPOT_IPMI_AUTH_SUPPORT');

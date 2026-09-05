@@ -25,6 +25,7 @@ final class DockerApiResponderTest extends TestCase
     private const IP = '9.9.9.9';        // public/routable, so AbuseIPDB queues it
     private const IP2 = '8.8.4.4';
     private const SEED = 7;
+    private const REGISTRY_TOKEN_KEY = 'docker-responder-test-registry-token-key';
     private const NOW = 1_700_000_000;
 
     /** @var string[] */
@@ -95,6 +96,7 @@ final class DockerApiResponderTest extends TestCase
         return new DockerApiResponder(
             $this->store,
             self::SEED,
+            self::REGISTRY_TOKEN_KEY,
             $this->abuse,
             static fn (): int => self::NOW,
             static function (int $s, array $h, string $b) use ($cap): void {
@@ -377,6 +379,7 @@ final class DockerApiResponderTest extends TestCase
         $r = new DockerApiResponder(
             $this->store,
             self::SEED,
+            self::REGISTRY_TOKEN_KEY,
             $this->abuse,
             $clock,
             static function (int $s, array $h, string $b) use ($cap): void {
@@ -449,7 +452,7 @@ final class DockerApiResponderTest extends TestCase
 
         $export = $this->lastExport()['docker'];
         self::assertSame('attacker', $export['registry_auth']['username']);
-        self::assertMatchesRegularExpression('/^[0-9a-f]{1,12}$/', $export['registry_auth']['pw_token']);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $export['registry_auth']['pw_token']); // 128 bits retained
         self::assertStringNotContainsString($secret, (string) json_encode($this->lastExport()), 'the cleartext password must never be stored');
     }
 

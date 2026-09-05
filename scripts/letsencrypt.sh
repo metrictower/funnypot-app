@@ -48,6 +48,12 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
+# The domain is interpolated into the remote command below: validate it locally first so an
+# injection-shaped value never reaches ssh (the same grammar the app applies before nginx/paths).
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/dns-name.sh"
+funnypot_require_dns_name_or_empty LE_DOMAIN "$LE_DOMAIN"
+
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20)
 
 if [ "$STAGING" = "1" ]; then

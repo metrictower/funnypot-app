@@ -140,18 +140,26 @@ final class MssqlReconLoggingTest extends TestCase
     {
         putenv('FUNNYPOT_MSSQL_SERVER=DBPROD01');
         putenv('FUNNYPOT_MSSQL_VERSION=16.0.1000.6');
-        $config = MssqlConfig::fromEnv();
+        $config = MssqlConfig::fromEnv('install-persona-a');
         self::assertSame('DBPROD01', $config->serverName);
         self::assertSame(16, $config->versionMajor);
         self::assertSame(0, $config->versionMinor);
         self::assertSame(1000, $config->versionBuild);
         self::assertSame(6, $config->versionSubBuild);
+        // The persona DB/login seed is the INSTALL identity, not the fleet-wide server:version literal.
+        self::assertSame('install-persona-a', $config->personaSeed);
+        self::assertNotSame(MssqlConfig::fromEnv('install-persona-b')->databases, $config->databases, 'a fresh install seeds different persona databases');
 
         putenv('FUNNYPOT_MSSQL_SERVER');
         putenv('FUNNYPOT_MSSQL_VERSION');
-        $default = MssqlConfig::fromEnv();
+        $default = MssqlConfig::fromEnv('install-persona-a');
         self::assertSame('SQL01', $default->serverName);
         self::assertSame(15, $default->versionMajor);
         self::assertSame(2000, $default->versionBuild);
+        self::assertSame($config->databases, $default->databases, 'same install ⇒ same persona databases regardless of the server banner');
+
+        putenv('FUNNYPOT_MSSQL_SEED=operator-seed');
+        self::assertSame('operator-seed', MssqlConfig::fromEnv('install-persona-a')->personaSeed, 'an explicit service seed still wins');
+        putenv('FUNNYPOT_MSSQL_SEED');
     }
 }

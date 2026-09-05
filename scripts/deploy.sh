@@ -24,8 +24,30 @@ KEY="${FUNNYPOT_KEY:-}"
 PLATFORM="${FUNNYPOT_PLATFORM:-linux/amd64}"
 # Optional: hostname that gets a real Let's Encrypt cert (issued by scripts/letsencrypt.sh).
 # When set, the container mounts the host cert store + ACME webroot and serves real HTTPS
-# for this host once a cert exists. Empty = self-signed everywhere (unchanged behaviour).
+# for this host once a cert exists. Empty = the per-install decoy cert everywhere.
 LE_DOMAIN="${LE_DOMAIN:-}"
+# Every hostname that will be interpolated into the remote command is validated HERE, before any
+# ssh process exists: an injection-shaped value never reaches the server.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/dns-name.sh"
+funnypot_require_dns_name_or_empty LE_DOMAIN "$LE_DOMAIN"
+funnypot_require_dns_name_or_empty FUNNYPOT_CN "${FUNNYPOT_CN:-}"
+funnypot_require_dns_name_or_empty FUNNYPOT_PUBLIC_DNS "${FUNNYPOT_PUBLIC_DNS:-}"
+# Optional: a deploy-managed explicit install master. FUNNYPOT_INSTALL_SECRET_FILE is a path ON THE
+# SERVER to a root-owned 0600 file holding the canonical one-line master (docs/IDENTITY.md); it is
+# bind-mounted read-only into the preflight and the public container and named to the app by env.
+# The master itself is never placed in the local, SSH or docker argv. Empty = the app creates and
+# persists its own master on the data volume (the default).
+INSTALL_SECRET_FILE="${FUNNYPOT_INSTALL_SECRET_FILE:-}"
+if [ -n "$INSTALL_SECRET_FILE" ] && ! printf '%s' "$INSTALL_SECRET_FILE" | grep -Eq '^/[A-Za-z0-9._/-]+$'; then
+    echo "error: FUNNYPOT_INSTALL_SECRET_FILE must be an absolute path of [A-Za-z0-9._/-] characters (it is placed in a remote command)." >&2
+    exit 1
+fi
+IDENTITY_FLAGS=""
+if [ -n "$INSTALL_SECRET_FILE" ]; then
+    IDENTITY_FLAGS="-v $INSTALL_SECRET_FILE:/run/secrets/funnypot-install-secret:ro -e FUNNYPOT_INSTALL_SECRET_FILE=/run/secrets/funnypot-install-secret"
+fi
+IDENTITY_FLAGS="$IDENTITY_FLAGS -e FUNNYPOT_CN=${FUNNYPOT_CN:-} -e FUNNYPOT_PUBLIC_DNS=${FUNNYPOT_PUBLIC_DNS:-}"
 # Dashboard admin password (Emulations toggles / prune / clear / geoip). Default empty under
 # `set -u` so an unset value is not a fatal unbound-variable error; empty keeps admin disabled.
 ADMIN_PASSWORD="${FUNNYPOT_ADMIN_PASSWORD:-}"
@@ -199,16 +221,25 @@ fi
 # every request to maximise engagement).
 FUNNYPOT_AI_FLAGS="-e FUNNYPOT_AI_API=${FUNNYPOT_AI_API:-1} -e FUNNYPOT_AI_TEMP=${FUNNYPOT_AI_TEMP:-0.8} -e FUNNYPOT_AI_MIN_P=${FUNNYPOT_AI_MIN_P:-0.0} -e FUNNYPOT_AI_TOP_P=${FUNNYPOT_AI_TOP_P:-1.0} -e FUNNYPOT_AI_STRICT_AUTH=${FUNNYPOT_AI_STRICT_AUTH:-} -e FUNNYPOT_AI_STRICT_MODEL=${FUNNYPOT_AI_STRICT_MODEL:-}"
 # \$HOME etc. expand on the REMOTE; \$PFLAGS / \$LLM_SETUP / the LLM flags expand locally.
+# `set -e` on the remote: the identity preflight below is the gate — if it fails, the public
+# container is neither removed nor replaced, and no later line runs.
 # shellcheck disable=SC2029
 ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
+    set -e
     DATA_DIR=\"\$HOME/funnypot-data\"
     ACME_DIR=\"\$HOME/funnypot-acme\"
     mkdir -p \"\$DATA_DIR\" && chmod 0777 \"\$DATA_DIR\"
     mkdir -p \"\$ACME_DIR/.well-known/acme-challenge\"
     sudo mkdir -p /etc/letsencrypt
     $LLM_SETUP
+    echo '==> identity preflight (built image, real data volume, no network, no ports)'
+    sudo docker run --rm --network none $IDENTITY_FLAGS \
+        -e FUNNYPOT_LE_DOMAIN='$LE_DOMAIN' \
+        -v \"\$DATA_DIR\":/app/demo/storage \
+        -v /etc/letsencrypt:/etc/letsencrypt:ro \
+        --entrypoint php funnypot /app/bin/funnypot identity:prepare
     sudo docker rm -f funnypot 2>/dev/null || true
-    sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS \
+    sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS $IDENTITY_FLAGS \
         -e FUNNYPOT_EPOCH=$(date +%s) \
         -e FUNNYPOT_STYLE=${FUNNYPOT_STYLE:-realistic} \
         -e FUNNYPOT_VNC_STYLE='${FUNNYPOT_VNC_STYLE:-}' \

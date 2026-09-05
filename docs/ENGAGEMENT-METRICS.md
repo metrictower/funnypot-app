@@ -67,12 +67,13 @@ All stored ids (`episode_id`, `evidence_digest`, `artifact_id`) are `substr(HMAC
 — versioned, domain-separated, 128 bits. The key (`AnalyticsKey`) is:
 
 - `FUNNYPOT_ANALYTICS_KEY` when set and at least 16 bytes (shorter = placeholder = **no key**); else
-- a sub-key derived from the persisted per-install host secret (`storage/fs_secret`, the same secret
-  the fake filesystem uses), so every install has a distinct id space by default.
+- a sub-key derived from the install identity's private `engagement-analytics/v1` key
+  (`HttpIdentity::engagementAnalyticsKey()`, its own HKDF domain — not the fake-filesystem key), so
+  every install has a distinct id space by default. See `docs/IDENTITY.md`.
 
-If neither yields usable material (a placeholder key, or a host secret that could not be persisted and
-would therefore differ per worker), the app wires `NoopEngagementStore` and the dashboard reports
-`key-unavailable`. There is no fleet-constant fallback; the public persona seed is never used.
+If neither yields usable material (a placeholder explicit key), the app wires `NoopEngagementStore`
+and the dashboard reports `key-unavailable`. There is no fleet-constant fallback; the public persona
+seed is never used.
 
 ## Episodes and boundaries
 

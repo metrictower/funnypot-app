@@ -17,6 +17,7 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeClassifier;
@@ -402,7 +403,7 @@ final class ServedSurfacesFingerprintTest extends TestCase
 
         $emitter = new StreamEmitter(static fn (string $b): ?string => null, 0);
         $factory = static fn (): StreamEmitter => $emitter;
-        $router = new ConsoleRouter(new ConsoleSessionStore($dbPath), new NoopHitStore(), self::SEED, self::SECRET, $factory);
+        $router = new ConsoleRouter(new ConsoleSessionStore($dbPath), new NoopHitStore(), self::SEED, self::SECRET, self::SECRET . '-session-mac', $factory);
         $host = (string) Fleet::fromSeed(self::SEED)->servers()[0]['host'];
         self::assertNotSame('', $host, 'ConsoleRouter needs a real fleet host to exercise the shell — none constructible');
 
@@ -533,7 +534,7 @@ final class ServedSurfacesFingerprintTest extends TestCase
     public function test_robots_txt_carries_no_fingerprint_signature(): void
     {
         $geo = new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
-        $honeypot = new HoneypotController(new NoopHitStore(), $geo, AppConfig::fromEnv(sys_get_temp_dir()), sys_get_temp_dir());
+        $honeypot = new HoneypotController(new NoopHitStore(), $geo, AppConfig::fromEnv(sys_get_temp_dir()), sys_get_temp_dir(), IdentityTestSupport::coreConfigFactory());
         $body = $this->render(fn () => $honeypot->robots());
         self::assertStringContainsString('Disallow:', $body, 'sanity: still the real robots.txt, not vacuously empty');
         self::assertServedClean($body, 'HoneypotController::robots()');

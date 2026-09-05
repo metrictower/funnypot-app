@@ -20,7 +20,10 @@ use PHPUnit\Framework\TestCase;
 final class ConsoleRouterTest extends TestCase
 {
     private const SEED = 4242;
-    private const SECRET = 'test-secret-abcdef';
+    // Two DISTINCT keys, as the web bundle carries them: the filesystem key seeds the procedural
+    // filesystem (shared with the SSH/telnet shell), the MAC key only authenticates the cookie.
+    private const FS_KEY = 'test-filesystem-key-abcdef';
+    private const MAC_KEY = 'test-session-mac-key-012345';
 
     private string $dbPath = '';
     private string $host = '';
@@ -39,6 +42,37 @@ final class ConsoleRouterTest extends TestCase
         if ($this->dbPath !== '' && is_file($this->dbPath)) {
             @unlink($this->dbPath);
         }
+    }
+
+    /**
+     * A cookie MAC'd under the FILESYSTEM key must be rejected (re-minted): the two domains never
+     * cross, so learning one key can neither forge a session nor replay the filesystem oracle.
+     */
+    public function testCookieSignedUnderTheFilesystemKeyIsNotTrusted(): void
+    {
+        $sid = str_repeat('a', 32);
+        $forged = 'sid=' . $sid . '.' . hash_hmac('sha256', $sid, self::FS_KEY);
+        $captured = $this->execCapturing('pwd', $forged);
+        $this->assertNotNull($captured['setCookie'] ?? null, 'a cross-key cookie must be replaced by a freshly minted one');
+        $this->assertStringNotContainsString('sid=' . $sid . '.', (string) ($captured['setCookie'] ?? ''), 'the forged sid must not be adopted');
+
+        $genuine = $this->execCapturing('pwd', $this->validCookie($sid));
+        $this->assertNull($genuine['setCookie'] ?? null, 'a cookie under the MAC key is trusted as-is');
+    }
+
+    /** @return array{setCookie:?string} */
+    private function execCapturing(string $command, string $cookie): array
+    {
+        $emitter = null;
+        $factory = static function () use (&$emitter): StreamEmitter {
+            return $emitter = new StreamEmitter(static fn (string $b): string => $b, 0);
+        };
+        $router = new ConsoleRouter(new ConsoleSessionStore($this->dbPath), $this->hits, self::SEED, self::FS_KEY, self::MAC_KEY, $factory);
+        $body = (string) json_encode(['host' => $this->host, 'command' => $command]);
+        $router->handle(new RequestContext('POST', '/__console/exec', '', ['Cookie' => $cookie], $body), '203.0.113.7');
+        $headers = $emitter instanceof StreamEmitter ? $emitter->headers() : [];
+
+        return ['setCookie' => $headers['Set-Cookie'] ?? null];
     }
 
     public function testMatchesOnlyItsOwnPath(): void
@@ -158,7 +192,7 @@ final class ConsoleRouterTest extends TestCase
 
     private function router(): ConsoleRouter
     {
-        return new ConsoleRouter(new ConsoleSessionStore($this->dbPath), $this->hits, self::SEED, self::SECRET);
+        return new ConsoleRouter(new ConsoleSessionStore($this->dbPath), $this->hits, self::SEED, self::FS_KEY, self::MAC_KEY);
     }
 
     private function exec(string $command, ?string $cookie = null, ?string $host = null): string
@@ -177,7 +211,7 @@ final class ConsoleRouterTest extends TestCase
             return new StreamEmitter(static function (string $b) use (&$captured): void { $captured .= $b; }, 0);
         };
         // A fresh router each call; session state persists via the on-disk store shared by dbPath.
-        $router = new ConsoleRouter(new ConsoleSessionStore($this->dbPath), $this->hits, self::SEED, self::SECRET, $factory);
+        $router = new ConsoleRouter(new ConsoleSessionStore($this->dbPath), $this->hits, self::SEED, self::FS_KEY, self::MAC_KEY, $factory);
         $router->handle(new RequestContext('POST', '/__console/exec', '', $headers, $body), '203.0.113.7');
 
         return $captured;
@@ -185,7 +219,7 @@ final class ConsoleRouterTest extends TestCase
 
     private function validCookie(string $sid): string
     {
-        return 'sid=' . $sid . '.' . hash_hmac('sha256', $sid, self::SECRET);
+        return 'sid=' . $sid . '.' . hash_hmac('sha256', $sid, self::MAC_KEY);
     }
 
     private function hostWithStatus(string $status): ?string

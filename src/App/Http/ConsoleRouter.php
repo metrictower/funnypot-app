@@ -26,6 +26,10 @@ use Funnypot\Shell\ShellSession;
  * Safety: the full output is resolved (bounded, in try/catch) BEFORE the first byte is flushed, so a
  * fault can never become a half-stream or a 500. Session state (overlay/cwd/history) lives server-side
  * keyed by an HMAC'd session cookie — the browser holds no filesystem state. Nothing executes.
+ *
+ * Two distinct keys: the filesystem key is the SAME one the SSH/telnet shell uses (so a host's web
+ * console equals its shell); the session-MAC key only authenticates the cookie. A cookie forged under
+ * the filesystem key — or a filesystem oracle keyed on the cookie key — is therefore impossible.
  */
 final class ConsoleRouter
 {
@@ -40,7 +44,8 @@ final class ConsoleRouter
         private ConsoleSessionStore $store,
         private HitStore $hits,
         private int $personaSeed,
-        private string $secret,
+        private string $filesystemKey,
+        private string $sessionMacKey,
         ?Closure $emitterFactory = null
     ) {
         // No artificial per-chunk pacing: a local web terminal has no token-by-token delay, and a delay
@@ -124,7 +129,7 @@ final class ConsoleRouter
 
         $facts = new HostFacts($seed);
         $interp = new ShellInterpreter(
-            new FakeFilesystem(Draw::seed($this->secret . "\0" . $seed . "\0ops"), 'ops', $seed),
+            new FakeFilesystem(Draw::seed($this->filesystemKey . "\0" . $seed . "\0ops"), 'ops', $seed),
             $facts,
             self::MAX_OUTPUT
         );
@@ -200,6 +205,6 @@ final class ConsoleRouter
 
     private function hmac(string $sid): string
     {
-        return hash_hmac('sha256', $sid, $this->secret);
+        return hash_hmac('sha256', $sid, $this->sessionMacKey);
     }
 }

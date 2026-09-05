@@ -51,7 +51,11 @@ final class EscapeIntent
     /** Host paths whose bind-mount is a strong escape tell. */
     private const SENSITIVE_PREFIXES = ['/etc', '/root', '/home', '/proc', '/sys', '/dev', '/boot', '/var/lib/docker', '/mnt', '/var/run'];
 
-    public function __construct(private int $seed)
+    /**
+     * @param string $registryTokenKey private install key for the captured-password correlation token;
+     *        never the public persona seed, which an attacker could reproduce.
+     */
+    public function __construct(private int $seed, private string $registryTokenKey)
     {
     }
 
@@ -472,7 +476,9 @@ final class EscapeIntent
         ];
         $pw = $auth['password'] ?? '';
         if (is_string($pw) && $pw !== '') {
-            $out['pw_token'] = substr(hash_hmac('sha256', $pw, 'fp-docker|' . $this->seed), 0, 12);
+            // Keyed correlation token, 128 bits retained: same password ⇒ same token within one
+            // install, unrecoverable and uncorrelatable across installs.
+            $out['pw_token'] = substr(hash_hmac('sha256', 'fp-docker-registry-token|' . $pw, $this->registryTokenKey), 0, 32);
         }
 
         return $out;

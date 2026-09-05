@@ -9,6 +9,7 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Admin\AdminAuth;
@@ -103,10 +104,11 @@ final class MisbehavingCrawlerTest extends TestCase
             $config->tarpitPagesPerIpHr,
             15,
         );
-        $labyrinth = new LabyrinthController($store, $geo, $budget, $config->personaSeed, $config->tarpitBytesPerRespMb);
+        $identity = IdentityTestSupport::httpIdentity();
+        $labyrinth = new LabyrinthController($store, $geo, $budget, $identity->personaSeed(), $config->tarpitBytesPerRespMb);
 
         $hint = LabyrinthController::entryHint();
-        $honeypot = new HoneypotController($store, $geo, $config, $decoys);
+        $honeypot = new HoneypotController($store, $geo, $config, $decoys, IdentityTestSupport::coreConfigFactory());
         $dashboard = new DashboardController($store, $geo, $config, $assets, null, null, $store, new AdminAuth($this->path('auth')), new ConfigStore($this->path('cfg')));
         // Wire the hint into the controller that fronts login in this mode, exactly as demo/index.php does.
         $corporate = new CorporateController($store, $geo, $config, $assets, null, $mode === 'stealth' ? $hint : null);

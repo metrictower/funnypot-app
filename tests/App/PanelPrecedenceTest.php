@@ -6,6 +6,7 @@ namespace Funnypot\Tests\App;
 
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Llm\LlmOutputSanitizer;
@@ -138,6 +139,7 @@ final class PanelPrecedenceTest extends TestCase
             $geo,
             $config,
             $decoys,
+            IdentityTestSupport::coreConfigFactory(),
             null,
             null,
             null,

@@ -1,71 +1,34 @@
 #!/bin/sh
 # Run php-fpm (background) + nginx (foreground) in one container, serving HTTP on the
-# common web ports and HTTPS (self-signed) on the common TLS ports.
+# common web ports and HTTPS on the common TLS ports.
 set -e
 
-CRT=/etc/nginx/funnypot.crt
-KEY=/etc/nginx/funnypot.key
-CN_FILE=/etc/nginx/funnypot.cn
+RUNTIME="${FUNNYPOT_IDENTITY_RUNTIME_DIR:-/run/funnypot}"
+NGINX_CONFD="${FUNNYPOT_NGINX_CONFD:-/etc/nginx/http.d}"
 
-# Generate a self-signed cert on first boot (persisted if /etc/nginx is a volume).
-# The CN/SAN are per-host so the cert is not byte-identical across deployments (a shared
-# CN=localhost/no-SAN cert is a content-hash clustering tell and unusual for a public host).
-# Name precedence: operator-set FUNNYPOT_CN, else the container hostname, else a stable random
-# subdomain saved next to the cert so it survives restarts. Derived names are persisted so the
-# CN stays fixed even if the cert is later regenerated.
-if [ ! -f "$CRT" ] || [ ! -f "$KEY" ]; then
-    if [ -n "${FUNNYPOT_CN:-}" ]; then
-        CN="$FUNNYPOT_CN"
-    elif [ -s "$CN_FILE" ]; then
-        CN=$(cat "$CN_FILE")
-    else
-        CN=$(hostname 2>/dev/null || true)
-        case "$CN" in
-            ''|localhost|localhost.*) CN= ;;
-        esac
-        if [ -z "$CN" ]; then
-            RAND=$(openssl rand -hex 5 2>/dev/null || true)
-            [ -n "$RAND" ] || RAND=$(date +%s | tail -c 7)
-            CN="srv-${RAND}.internal"
-        fi
-        printf '%s\n' "$CN" > "$CN_FILE"
-    fi
+# Install identity FIRST — before php-fpm, every listener and every worker. Resolves (or creates once)
+# the persisted install master, derives the closed keyset, selects + verifies the TLS pair, publishes
+# the root-only and www-data-readable runtime bundles under $RUNTIME and root-reads them back.
+# Deliberately NOT guarded by `|| true`: with `set -e` a failure stops the container right here, when
+# nothing has bound a socket yet — a broken identity is a dark box, never a box serving a fallback
+# persona or an unkeyed console.
+php /app/bin/funnypot identity:prepare
 
-    # subjectAltName mirrors the CN; append the host's public DNS when the deploy supplies it.
-    SAN="DNS:${CN}"
-    if [ -n "${FUNNYPOT_PUBLIC_DNS:-}" ] && [ "$FUNNYPOT_PUBLIC_DNS" != "$CN" ]; then
-        SAN="${SAN},DNS:${FUNNYPOT_PUBLIC_DNS}"
-    fi
-
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$KEY" -out "$CRT" \
-        -subj "/CN=${CN}" \
-        -addext "subjectAltName=${SAN}" >/dev/null 2>&1
-fi
-
-# Real HTTPS for the admin hostname once Let's Encrypt has issued a cert (mounted from the
-# host at /etc/letsencrypt). Named vhost wins by SNI; every other host/IP keeps self-signed.
-# Absent a cert (first boot, before scripts/letsencrypt.sh runs), the block is skipped and
-# the hostname is served by the default self-signed 443 vhost.
-ADMIN_CONF=/etc/nginx/http.d/10-admin-ssl.conf
-LE_LIVE="/etc/letsencrypt/live/${FUNNYPOT_LE_DOMAIN:-__none__}"
-if [ -n "${FUNNYPOT_LE_DOMAIN:-}" ] && [ -f "$LE_LIVE/fullchain.pem" ]; then
-    cat > "$ADMIN_CONF" <<EOF
-server {
-    listen 443 ssl;
-    server_name ${FUNNYPOT_LE_DOMAIN};
-    server_tokens off;
-    access_log off;
-    ssl_certificate ${LE_LIVE}/fullchain.pem;
-    ssl_certificate_key ${LE_LIVE}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    set \$funnypot_https on;
-    include /etc/nginx/funnypot-location.conf;
-}
-EOF
+# Real HTTPS for the admin hostname once Let's Encrypt has issued a cert: identity:prepare rendered the
+# named vhost (strictly validated domain, no shell interpolation) only when the live pair verified;
+# absent a cert (first boot, before scripts/letsencrypt.sh runs) the block is removed and the hostname
+# is served by the default vhost. Named vhost wins by SNI; every other host/IP keeps the selected pair.
+if [ -f "$RUNTIME/nginx/admin-ssl.conf" ]; then
+    cp "$RUNTIME/nginx/admin-ssl.conf" "$NGINX_CONFD/10-admin-ssl.conf"
 else
-    rm -f "$ADMIN_CONF"
+    rm -f "$NGINX_CONFD/10-admin-ssl.conf"
 fi
+
+# None of the identity inputs may reach a child: a php-fpm worker or listener that could read the
+# master, a persona override or an operator key path from its environment would make every process a
+# disclosure surface. A child PHP process cannot scrub its parent's environment, so this unset is
+# mandatory here. Children find their scoped bundle through $RUNTIME (a path, kept).
+unset FUNNYPOT_INSTALL_SECRET_FILE FUNNYPOT_INSTALL_SECRET FUNNYPOT_PERSONA_SEED FUNNYPOT_PERSONA_SECRET FUNNYPOT_TLS_CERT_FILE FUNNYPOT_TLS_KEY_FILE FUNNYPOT_FS_SECRET
 
 php-fpm --daemonize
 

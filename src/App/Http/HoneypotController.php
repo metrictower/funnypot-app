@@ -13,7 +13,6 @@ use Funnypot\App\ThreatIntel\Blocklist;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\ThreatIntel\ReportComment;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
-use Funnypot\Core\Config;
 use Funnypot\Core\Honeypot;
 use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
@@ -34,6 +33,7 @@ final class HoneypotController
         private Geo $geo,
         private AppConfig $config,
         private string $decoyDir,
+        private CoreConfigFactory $coreConfig,
         private ?Blocklist $blocklist = null,
         private ?AbuseIpdb $abuse = null,
         private ?ThreatIntelReporter $threatIntel = null,
@@ -241,23 +241,13 @@ final class HoneypotController
 
         // The emulation catalog's on/off choices become the engine's deny-set + corpus flag.
         $policy = EmulationPolicy::fromPackage(is_file($this->config->vulnsPath) ? $this->config->vulnsPath : null);
-        $funnypot = Honeypot::default(new Config(
-            mode: 'respond',
-            gate: static fn (RequestContext $r): bool => true,          // standalone honeypot: everything hostile-looking gets a fake
-            severityCeiling: $this->config->severityCeiling,
-            responseStyle: $this->config->httpStyle(), // core supports realistic|taunt; 'malformed' (protocol-only) -> realistic here
-            personaSeed: static fn (RequestContext $r) => $clientIp ?: 'anon',
-            // Per-deploy identity material shared with the app tier: once the engine wires deploySeed()
-            // into its renderers, the template tier's {{persona.*}} resolves the SAME company/domain/admin
-            // the LLM/skin pages show. Distinct from personaSeed above (per-request; drives fake secrets).
-            deploySeed: $this->config->personaMaterial,
-            latencyMs: $this->config->latencyMs,
-            latencyJitterMs: $this->config->jitterMs,
-            attackEmulation: $this->config->attackEmulation,
-            poweredBy: $this->config->poweredBy,
-            exclude: $policy->disabledIds(),
-            nucleiReflection: $policy->nucleiEnabled(),
-            isolatedOrigin: true, // standalone honeypot owns its origin — reflecting decoys (XSS/open-redirect) are safe bait here (FP-0159; requires core >= 0.6.1)
+        // The engine Config comes from the factory so its two identity inputs (private render salt +
+        // visible persona material) are explicit and testable. The closure is the per-REQUEST seed
+        // that drives request-scoped fake secrets — distinct from the per-deploy persona identity.
+        $funnypot = Honeypot::default($this->coreConfig->build(
+            $this->config,
+            $policy,
+            static fn (RequestContext $r) => $clientIp ?: 'anon',
         ));
 
         $detection = $funnypot->detect($context);
