@@ -67,7 +67,7 @@ final class OllamaDialectTest extends TestCase
 
     public function test_buffered_chat_is_the_done_object_with_full_text(): void
     {
-        $req = new ChatRequest('ollama-chat', 'llama3.2', 'hi', false, false, false);
+        $req = new ChatRequest('ollama-chat', 'llama3.2', 'hello world', false, false, false);
         [$status, $headers, $body] = $this->dialect()->bufferedOk('hello world', $req);
 
         self::assertSame(200, $status);
@@ -79,7 +79,8 @@ final class OllamaDialectTest extends TestCase
         self::assertSame('stop', $decoded['done_reason']);
         self::assertSame('assistant', $decoded['message']['role']);
         self::assertSame('hello world', $decoded['message']['content']);
-        self::assertSame(26, $decoded['prompt_eval_count']);
+        // prompt_eval_count is derived from the prompt (no longer the hard-coded literal that was a tell).
+        self::assertSame((int) ceil(strlen('hello world') / 4), $decoded['prompt_eval_count']);
         self::assertGreaterThan(0, $decoded['total_duration']);
         self::assertArrayNotHasKey('context', $decoded);
     }
@@ -101,7 +102,7 @@ final class OllamaDialectTest extends TestCase
     {
         $emitter = new StreamEmitter(static function (): void {
         }, 0);
-        $req = new ChatRequest('ollama-chat', 'llama3.2', 'hi', true, false, false);
+        $req = new ChatRequest('ollama-chat', 'llama3.2', 'hello world', true, false, false);
 
         $this->dialect()->streamOk('one two three', $req, $emitter);
 
@@ -125,7 +126,7 @@ final class OllamaDialectTest extends TestCase
                 self::assertTrue($obj['done']);
                 self::assertSame('stop', $obj['done_reason']);
                 self::assertSame('', $obj['message']['content']);
-                self::assertSame(26, $obj['prompt_eval_count']);
+                self::assertSame((int) ceil(strlen('hello world') / 4), $obj['prompt_eval_count']);
                 self::assertGreaterThan(0, $obj['eval_duration']);
             }
         }

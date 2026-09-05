@@ -67,6 +67,13 @@ final class IdentityResponder
         return $math === null ? $line : $line . ' And ' . $math . '.';
     }
 
+    /** The trivial-arithmetic clause ("1 + 1 = 2") bundled in a probe, or null — reused by the
+     *  model-aware responder so both identity paths answer a sanity-check sum identically. */
+    public static function mathClause(string $userText): ?string
+    {
+        return self::trivialMath($userText);
+    }
+
     /**
      * "1 + 1 = 2" for a single bounded binary expression found in the text, else null. Only simple
      * integer arithmetic (+, -, *, /) on small operands — enough to satisfy a probe's sanity check

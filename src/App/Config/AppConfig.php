@@ -107,6 +107,11 @@ final class AppConfig
         // the budget refreshes after a quiet gap, like a real session.
         public int $aiRealFirst,
         public int $aiRealWindowS,
+        /** Fabricated tool calls per conversation on the fake chat API; clamped to the hard ceiling of 4. */
+        public int $aiToolCallLimit,
+        /** Opt-in raw-prompt capture on the fake chat API — a SEPARATE, sensitive, off-by-default store,
+         *  never implied by FUNNYPOT_CAPTURE_RAW; 24h-retained, private-mode, no dashboard/export reader. */
+        public bool $aiPromptCaptureRaw,
         public string $llmUrl,
         public int $llmTimeoutMs,
         public int $llmNPredict,
@@ -362,6 +367,8 @@ final class AppConfig
             aiTopP: (float) $str('FUNNYPOT_AI_TOP_P', '1.0'),
             aiRealFirst: max(0, (int) $str('FUNNYPOT_AI_REAL_FIRST', '5')),
             aiRealWindowS: max(1, (int) $str('FUNNYPOT_AI_REAL_WINDOW_S', '600')),
+            aiToolCallLimit: max(0, min(4, (int) $str('FUNNYPOT_AI_TOOL_CALL_LIMIT', '2'))),
+            aiPromptCaptureRaw: in_array(strtolower((string) $env('FUNNYPOT_AI_PROMPT_CAPTURE_RAW')), ['1', 'on', 'true', 'yes'], true),
             llmUrl: $str('FUNNYPOT_LLM_URL', 'http://funnypot-llm:8080/completion'),
             // A CPU 0.5B GBNF generation runs ~3-8s (slower on a small box); the timeout must clear
             // that or every fake times out into a plain 404. The concurrency cap bounds how many

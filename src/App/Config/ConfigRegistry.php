@@ -124,6 +124,9 @@ final class ConfigRegistry
             'ai.top_p' => ['field' => 'aiTopP', 'env' => 'FUNNYPOT_AI_TOP_P', 'type' => 'float', 'default' => '1.0', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
             'ai.real_first' => ['field' => 'aiRealFirst', 'env' => 'FUNNYPOT_AI_REAL_FIRST', 'type' => 'int', 'min' => 0, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(0,...))
             'ai.real_window_s' => ['field' => 'aiRealWindowS', 'env' => 'FUNNYPOT_AI_REAL_WINDOW_S', 'type' => 'int', 'min' => 1, 'default' => '600', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'ai.tool_call_limit' => ['field' => 'aiToolCallLimit', 'env' => 'FUNNYPOT_AI_TOOL_CALL_LIMIT', 'type' => 'int', 'min' => 0, 'max' => 4, 'default' => '2', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(0,min(4,...))) hard ceiling
+            // Sensitive privacy toggle: a SEPARATE opt-in raw-prompt capture, never implied by capture_raw.
+            'ai.prompt_capture_raw' => ['field' => 'aiPromptCaptureRaw', 'env' => 'FUNNYPOT_AI_PROMPT_CAPTURE_RAW', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false],
             'llm.url' => ['field' => 'llmUrl', 'env' => 'FUNNYPOT_LLM_URL', 'type' => 'string', 'default' => 'http://funnypot-llm:8080/completion', 'group' => 'LLM', 'live' => false, 'secret' => false],
             'llm.timeout_ms' => ['field' => 'llmTimeoutMs', 'env' => 'FUNNYPOT_LLM_TIMEOUT_MS', 'type' => 'int', 'min' => 200, 'default' => '9000', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(200,...))
             'llm.n_predict' => ['field' => 'llmNPredict', 'env' => 'FUNNYPOT_LLM_N_PREDICT', 'type' => 'int', 'min' => 64, 'default' => '320', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(64,...))

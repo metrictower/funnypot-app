@@ -49,6 +49,8 @@ a 500).
 | `FUNNYPOT_AI_TOP_P` | `1.0` | Sampling `top_p` for the chat sidecar call. |
 | `FUNNYPOT_AI_REAL_FIRST` | `5` | A fresh IP's first N chat answers in the window are answered **straight** (real, correct) before the box degrades to the troll persona. `0` = always troll (the pre-escalation behavior). |
 | `FUNNYPOT_AI_REAL_WINDOW_S` | `600` | The sliding window (seconds) the first-N budget is counted over. A quiet gap longer than this refreshes the budget, so a returning scanner gets believable answers again — like a real session. |
+| `FUNNYPOT_AI_TOOL_CALL_LIMIT` | `2` | Fabricated tool calls per conversation before the loop converges to a normal completion. Clamped to the hard ceiling of **4**; `0` disables tool calling (chat still answers text). |
+| `FUNNYPOT_AI_PROMPT_CAPTURE_RAW` | off | **Sensitive.** A *separate* opt-in that retains accepted system/user prompt text to a private, 0600, 24-hour-retained `ai-capture/ai-prompt-capture.sqlite`. NOT implied by `FUNNYPOT_CAPTURE_RAW` (the AI surface is excluded from that general store), has no dashboard/export/reporter reader, and is bounded per-request (16 KiB), per-actor and globally. Leave off unless you specifically need raw prompts. |
 
 These four sampling/gating vars are read directly by `AppConfig::fromEnv()` — see
 `src/App/Config/AppConfig.php` for the exact parsing (the `_STRICT_` flags use the same
@@ -79,10 +81,14 @@ corrupted question straight:
 
 0. **Identity/capability probes are answered for real** (checked first, so they never reach the troll
    path). A message that reads as "what model are you / who made you / what can you do" gets a
-   deterministic hardcoded persona line (house identity: **Mythos**, by **Anthropic** — cosmetic,
-   swap it in `IdentityResponder`), with a correct answer to a bundled trivial sum appended when the
-   probe carries one ("what model are you, and what is 1+1" → "…And 1 + 1 = 2."). No sidecar call, no
-   gate: the answer is cheap and canned, so it convinces without becoming usable compute. The detector
+   deterministic hardcoded persona line that is **coherent with the requested model** — the vendor is
+   resolved from the catalog's `owned_by` (a `kimi-k3` request says *Moonshot AI*, `gpt-oss` says
+   *OpenAI*), with a closed family-prefix fallback for an unlisted open-box model and no vendor claim at
+   all for an unknown name (`ModelIdentityResponder`). Version + knowledge cutoff are added only when the
+   probe asks ("what model are you exactly? version + cutoff"), and a correct answer to a bundled trivial
+   sum is appended when the probe carries one ("what model are you, and what is 1+1" → "…And 1 + 1 = 2.").
+   No sidecar call, no gate: the answer is cheap and canned, so it convinces without becoming usable
+   compute. The detector
    is deliberately narrower than a bare "model" so it doesn't misfire on requests like "download the
    model file".
 1. **Believable-first budget (per IP).** A fresh IP's first `FUNNYPOT_AI_REAL_FIRST` chat answers
@@ -116,10 +122,47 @@ Every path streams (or buffers) real per-dialect framing: NDJSON for Ollama, SSE
 codes are always app-chosen — 401/404/400 for genuinely-believable auth/model/malformed errors, 200
 for every generated answer, never a model-driven redirect and never a 500.
 
+## Tool calling
+
+Production AI traffic is dominated by **tool-using agents** ("Call the `inspect_file` tool exactly once
+with path README.md. Do not answer with normal text."). A plain-text reply to that is an instant tell,
+so the OpenAI (`/v1/chat/completions`), Anthropic (`/v1/messages`) and Ollama (`/api/chat`) chat paths
+emit a **believable but inert tool call** — provider-exact framing (`finish_reason:"tool_calls"` /
+`stop_reason:"tool_use"` / an Ollama `tool_calls` record), buffered and streamed. `/api/generate` stays
+text-only (its shape has no tool loop).
+
+The whole path is **inert by construction** — the server never executes a tool, opens a path, follows a
+URL, calls the sidecar with a tool result, or reflects a returned result:
+
+- **Closed selection (`SafeToolSelector`).** A tool is eligible only if its tokenised name starts with a
+  read/search/inspect verb and contains no mutation/execution/network token (`get_url`, `read_and_exec`,
+  `run_command` are all refused), and its required properties are all scalar and drawn from a closed
+  argument vocabulary (`path`, `query`, `limit`, …). A forcing `tool_choice` never weakens this — an
+  unsafe forced tool yields a short clarification, not a call.
+- **Inert arguments (`SafeArgumentSynthesizer`).** Values come only from a matching scalar enum or a
+  closed pool of harmless constants (`README.md`, `.`, `TODO`, small ints, booleans), never from prompt,
+  schema-description or result content; the output can carry no shell metacharacter, URL, absolute/UNC
+  path, `..` segment or credential-looking value.
+- **Bounded loop.** A returned tool result advances a coherent `call → result → reply` loop that
+  converges by `FUNNYPOT_AI_TOOL_CALL_LIMIT` (default 2, hard ceiling 4). A dedicated metadata-only
+  ledger (`ai-state/ai-tool-state.sqlite`, digests only — no prompt/argument/result/id/tool-name/IP)
+  single-consumes each result so a replay can't advance the loop twice, and keeps actors isolated. A
+  broken/locked/missing store degrades to a plausible stateless call — never a 500 or a retry.
+- **Budget honoured.** A `max_tokens`/`num_predict` too small to fit the call yields a provider length
+  stop (`length` / `max_tokens` / `done_reason:"length"`) with no partial JSON; Anthropic `max_tokens:0`
+  is the valid cache-warm case (HTTP 200, empty content, `stop_reason:"max_tokens"`).
+
 ## Threat intel
 
-Every chat-path hit is logged (path, method, IP, requested model, whether a key was sent) and
-classified `ai_api_recon` (medium severity). The row is tagged with event `ai-api`, so the dashboard's
+Every chat-path hit is logged and classified `ai_api_recon` (medium severity). The stored hit body is
+**privacy-safe structured metadata** (`AiTelemetry`) — provider, bounded model id, tool names/count,
+canonical schema hashes, request/response byte counts, token estimates, loop turn, choice/intent class,
+outcome — and never a prompt excerpt, tool schema, argument, result, authorization value or cookie. The
+AI surface is also excluded from the general `FUNNYPOT_CAPTURE_RAW` store; raw prompts have only the
+separate, sensitive, off-by-default `FUNNYPOT_AI_PROMPT_CAPTURE_RAW` store described above.
+
+The row records path, method, IP, requested model and whether a key was sent, and is tagged with event
+`ai-api`, so the dashboard's
 **AI API** quick-view filter narrows the feed to this surface (distinct from the LLM-generated fake
 pages, which carry event `llm-fake` behind the **LLM pages** filter). It is then reported to AbuseIPDB
 the same way any other attack class is — through the existing self-guarded reporter, so `FUNNYPOT_SELF_IPS` still protects the

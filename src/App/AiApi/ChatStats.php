@@ -56,6 +56,12 @@ final class ChatStats
         return 'msg_' . $this->randomAlnum(24);
     }
 
+    /** A provider-shaped tool-call id, e.g. OpenAI's "call_…" / Anthropic's "toolu_…". */
+    public function toolId(string $prefix, int $len = 24): string
+    {
+        return $prefix . $this->randomAlnum($len);
+    }
+
     /** Plain RFC3339 UTC, no fractional seconds — for dialects that don't follow ollama's shape. */
     public function nowRfc3339(): string
     {

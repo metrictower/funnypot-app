@@ -18,6 +18,7 @@ use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Engagement\EngagementCaps;
 use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Storage\LlmFakeCache;
+use Funnypot\App\AiApi\AiPromptCapture;
 use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteEngagementStore;
 use Funnypot\App\Storage\SqliteHitStore;
@@ -86,6 +87,21 @@ if (is_file($rawPath)) {
         }
     } catch (Throwable $e) {
         fwrite(STDERR, 'retention (raw-capture): ' . $e->getMessage() . "\n");
+    }
+}
+
+// AI raw-prompt capture upkeep (FP-0300): guarded on the FILE existing, not on the opt-in flag, so a
+// store left behind after the operator turns capture off is still serviced. The hard 24-hour age is a
+// constant inside the store (no environment/UI setting lengthens it), so no knob is threaded here.
+$aiCapPath = AiPromptCapture::defaultPath($config->dbPath);
+if (is_file($aiCapPath)) {
+    try {
+        $aiRemoved = (new AiPromptCapture($aiCapPath))->retain();
+        if ($aiRemoved > 0) {
+            fwrite(STDERR, sprintf("retention: ai-prompt-capture pruned %d rows\n", $aiRemoved));
+        }
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'retention (ai-prompt-capture): ' . $e->getMessage() . "\n");
     }
 }
 

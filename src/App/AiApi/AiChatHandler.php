@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Funnypot\App\AiApi;
 
-use Closure;
 use Funnypot\Core\Ai\ModelCatalog;
+use Funnypot\App\AiApi\Value\AssistantTurn;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeGate;
@@ -20,9 +20,14 @@ use Throwable;
 /**
  * Orchestrates one fake chat-completion turn for a picked dialect (the AiApiRouter chose it by path).
  * The whole point is fidelity WITHOUT the two tells a naive proxy would leak: it resolves the full
- * answer string BEFORE emitting a single byte (so a fault never becomes a half-stream), and any
- * failure degrades to a deterministic troll fallback framed in the dialect's own shape — never a 500,
- * which would itself unmask the honeypot.
+ * answer (text, an inert tool call, or a length stop) BEFORE emitting a single byte (so a fault never
+ * becomes a half-stream), and any failure degrades to a deterministic troll fallback framed in the
+ * dialect's own shape — never a 500, which would itself unmask the honeypot.
+ *
+ * Tool calls, identity answers, code snippets and length stops are all inert: they never touch the
+ * sidecar, so they neither charge the LLM gen-budget nor run the LLM output sanitizer (there is no model
+ * output to sanitise). Only the ordinary text path consults the gated LLM. The server NEVER executes a
+ * supplied tool, opens a path, follows a URL or reflects a returned result.
  *
  * Not final: the router unit test spies on serve().
  */
@@ -32,6 +37,10 @@ class AiChatHandler
     private const MAX_ANSWER_BYTES = 4000;
 
     private bool $emitted = false;
+    private int $respBytes = 0;
+    private ?ToolTurnPlanner $planner = null;
+    private ?ModelIdentityResponder $identity = null;
+    private UsageEstimator $usageEstimator;
 
     /**
      * @param callable(int,array<string,string>,string):void|null $emitBuffered writes a buffered
@@ -71,16 +80,25 @@ class AiChatHandler
         private int $delayMs = 20,
         private $emitBuffered = null,
         private $emitterFactory = null,
+        // Bounded tool-calling loop (spec §5): default 2 fabricated calls per conversation, clamped to
+        // the hard ceiling of 4. The state store single-consumes a returned result; null degrades to a
+        // plausible stateless first turn.
+        private int $toolCallLimit = 2,
+        private ?AiToolStateStore $toolState = null,
+        // Opt-in raw-prompt capture (OFF by default); null unless the operator armed it.
+        private ?AiPromptCapture $promptCapture = null,
     ) {
+        $this->usageEstimator = new UsageEstimator();
     }
 
     /**
-     * Resolve-then-frame (spec §6.4). Parse → auth → model → gate/generate → emit → log → report, with
+     * Resolve-then-frame (spec §6.4). Parse → auth → model → resolve turn → emit → log → report, with
      * the whole body wrapped so any fault degrades to a dialect-shaped fallback rather than a 500.
      */
     public function serve(ChatDialect $dialect, RequestContext $ctx, string $ip): void
     {
         $this->emitted = false;
+        $this->respBytes = 0;
         $req = null;
 
         try {
@@ -113,17 +131,12 @@ class AiChatHandler
                 return;
             }
 
-            // Full answer resolved up front so streaming can never emit a partial then fault.
-            $text = $this->resolveText($req, $ctx, $ip);
+            // Full turn resolved up front so streaming can never emit a partial then fault.
+            $turn = $this->resolveTurn($dialect, $req, $ctx, $ip);
+            $this->emit($dialect, $turn, $req);
 
-            if ($req->stream) {
-                $this->emitted = true;
-                $dialect->streamOk($text, $req, $this->makeEmitter());
-            } else {
-                $this->emitTuple($dialect->bufferedOk($text, $req));
-            }
-
-            $this->logHit($ctx, $ip, $req);
+            $this->logHit($ctx, $ip, $req, $turn);
+            $this->promptCapture?->capture($req, $ip);
             $this->report($ctx, $ip);
         } catch (Throwable $e) {
             // Never a 500. If nothing was emitted, frame a plain fallback in this dialect's buffered
@@ -139,18 +152,73 @@ class AiChatHandler
         }
     }
 
+    /** Frame the resolved turn into the dialect's wire shape (streamed or buffered). */
+    private function emit(ChatDialect $dialect, AssistantTurn $turn, ChatRequest $req): void
+    {
+        if ($req->stream) {
+            $this->emitted = true;
+            $out = $this->makeEmitter();
+            if ($turn->isToolCall() && $turn->call !== null) {
+                $dialect->streamTool($turn->call, $req, $out);
+                $this->respBytes = strlen($turn->call->name) + strlen($turn->call->argumentsJson);
+            } elseif ($turn->isLength()) {
+                $dialect->streamLength($req, $out);
+            } else {
+                $dialect->streamOk($turn->text, $req, $out);
+                $this->respBytes = strlen($turn->text);
+            }
+
+            return;
+        }
+
+        if ($turn->isToolCall() && $turn->call !== null) {
+            $tuple = $dialect->bufferedTool($turn->call, $req);
+        } elseif ($turn->isLength()) {
+            $tuple = $dialect->bufferedLength($req);
+        } else {
+            $tuple = $dialect->bufferedOk($turn->text, $req);
+        }
+        $this->emitTuple($tuple);
+        $this->respBytes = strlen($tuple[2]);
+    }
+
+    /**
+     * Decide the semantic turn: a zero output budget is a length stop; a tools-bearing request may
+     * fabricate one inert call (else falls through); otherwise the ordinary text path resolves the reply.
+     */
+    private function resolveTurn(ChatDialect $dialect, ChatRequest $req, RequestContext $ctx, string $ip): AssistantTurn
+    {
+        if ($req->maxOutputTokens === 0) {
+            return AssistantTurn::length();
+        }
+        if ($req->tools !== []) {
+            $turn = $this->toolPlanner()->plan(
+                $req,
+                $dialect->toolCallId(),
+                $this->actor($ip),
+                $this->toolState,
+                $this->effectiveLimit()
+            );
+            if ($turn !== null) {
+                return $turn;
+            }
+        }
+
+        return AssistantTurn::text($this->resolveText($req, $ctx, $ip));
+    }
+
     /**
      * Resolve the answer: the sidecar's sanitized output when the gate allows and a slot is free, else
      * the deterministic troll fallback. Any decline/fault returns a fallback — this only ever answers.
      */
     private function resolveText(ChatRequest $req, RequestContext $ctx, string $ip): string
     {
-        // Identity/capability probes ("what model are you") get a believable hardcoded persona answer —
-        // no sidecar call, no gate. Answering these plainly is what reads as a live box and keeps a
-        // scanner engaged, while the canned text stays useless as free compute. serve() still logs +
-        // reports the recon. Checked first, so an identity probe is never diverted to the troll path.
+        // Identity/capability probes ("what model are you") get a believable hardcoded persona answer,
+        // coherent with the requested model's real vendor — no sidecar call, no gate. Answering these
+        // plainly is what reads as a live box and keeps a scanner engaged, while the canned text stays
+        // useless as free compute. Checked first, so an identity probe is never diverted to the troll path.
         if (IdentityResponder::matches($req->userText)) {
-            return IdentityResponder::answer($req->userText);
+            return $this->modelIdentity()->answer($req->userText, $req->model);
         }
 
         // Code requests get a static wrong-language snippet — no model call, no gate. (serve() still
@@ -266,11 +334,37 @@ class AiChatHandler
         return new StreamEmitter(null, $this->delayMs);
     }
 
-    private function logHit(RequestContext $ctx, string $ip, ?ChatRequest $req = null): void
+    private function toolPlanner(): ToolTurnPlanner
+    {
+        if ($this->planner === null) {
+            $selector = new SafeToolSelector();
+            $this->planner = new ToolTurnPlanner($selector, new SafeArgumentSynthesizer($selector), $this->usageEstimator);
+        }
+
+        return $this->planner;
+    }
+
+    private function modelIdentity(): ModelIdentityResponder
+    {
+        return $this->identity ??= new ModelIdentityResponder($this->catalog);
+    }
+
+    private function effectiveLimit(): int
+    {
+        return max(0, min(ToolTurnPlanner::HARD_CEILING, $this->toolCallLimit));
+    }
+
+    private function actor(string $ip): string
+    {
+        return hash('sha256', 'a|' . $ip);
+    }
+
+    private function logHit(RequestContext $ctx, string $ip, ?ChatRequest $req = null, ?AssistantTurn $turn = null): void
     {
         // Same store method HoneypotController::handle() uses, so AI probes show in the feed + count
         // toward the per-IP velocity gate. The requested model + whether a key was sent are the recon
-        // intel, recorded on the entry (they ride the JSON-lines export even without dedicated columns).
+        // intel; the body carries ONLY privacy-safe structured telemetry — never a prompt excerpt, tool
+        // schema, argument, result, auth value or cookie (spec §8).
         $this->store->append([
             'ts' => gmdate('c'),
             'ip' => $ip,
@@ -286,8 +380,24 @@ class AiChatHandler
             'served' => true,
             'model' => $req !== null ? substr($req->model, 0, 120) : '',
             'hasAuth' => $req !== null && $req->hasAuth,
-            'body' => $ctx->rawBody !== null ? substr($ctx->rawBody, 0, 300) : null,
+            'body' => $this->telemetry($ctx, $req, $turn),
         ]);
+    }
+
+    private function telemetry(RequestContext $ctx, ?ChatRequest $req, ?AssistantTurn $turn): ?string
+    {
+        if ($req === null) {
+            return null;
+        }
+        $reqBytes = $ctx->rawBody !== null ? strlen($ctx->rawBody) : 0;
+        $outcome = AiTelemetry::OUT_TEXT;
+        $outputTokens = 0;
+        if ($turn !== null) {
+            $outputTokens = $this->usageEstimator->outputTokens($turn);
+            $outcome = $turn->isToolCall() ? AiTelemetry::OUT_TOOL_CALL : ($turn->isLength() ? AiTelemetry::OUT_LENGTH : AiTelemetry::OUT_TEXT);
+        }
+
+        return AiTelemetry::forHit($req, $reqBytes, $this->respBytes, max(1, $req->inputTokens), $outputTokens, $outcome);
     }
 
     private function report(RequestContext $ctx, string $ip): void

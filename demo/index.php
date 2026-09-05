@@ -18,6 +18,8 @@ use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\AiApi\AiChatHandler;
 use Funnypot\App\AiApi\AiChatPromptBuilder;
+use Funnypot\App\AiApi\AiPromptCapture;
+use Funnypot\App\AiApi\AiToolStateStore;
 use Funnypot\App\AiApi\NonsenseFallback;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
@@ -146,8 +148,10 @@ $clientIp = HoneypotController::clientIp($config->trustedProxies);
 
 // Full-request capture (opt-in, FUNNYPOT_CAPTURE_RAW) — record EVERY request's complete headers + query +
 // body to a separate raw-capture.sqlite, for analysing a vuln scan. At the front controller so nothing is
-// missed regardless of which handler serves it; fail-open so it never affects the response.
-if ($config->captureRaw) {
+// missed regardless of which handler serves it; fail-open so it never affects the response. The AI-API
+// surface is excluded (trailing-slash tolerant): AI prompts/keys must never enter the general store —
+// their only capture is the separate, sensitive FUNNYPOT_AI_PROMPT_CAPTURE_RAW opt-in below.
+if ($config->captureRaw && !AiApiRouter::isAiSurface($context->path)) {
     (new RawCapture(RawCapture::defaultPath($config->dbPath)))->capture($context, $clientIp);
 }
 
@@ -297,6 +301,14 @@ if ($config->aiApiEnabled) {
         $config->llmMaxConcurrent,
         $config->aiRealFirst,
         $config->aiRealWindowS,
+        20,     // stream pacing (ms) — the handler's default
+        null,   // emitBuffered sink (tests only)
+        null,   // emitterFactory (tests only)
+        $config->aiToolCallLimit,
+        new AiToolStateStore(AiToolStateStore::defaultPath($config->dbPath)),
+        // Raw-prompt capture is a separate, sensitive opt-in: built only when armed, so it is inert (and
+        // its file never created) by default.
+        $config->aiPromptCaptureRaw ? new AiPromptCapture(AiPromptCapture::defaultPath($config->dbPath)) : null,
     ));
 }
 

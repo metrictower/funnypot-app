@@ -317,6 +317,80 @@ final class ServedSurfacesFingerprintTest extends TestCase
         self::assertHeadersClean($streamedHeaders, "AiApiRouter streamed chat response for {$path}");
     }
 
+    /**
+     * FP-0300: a fabricated tool call is served bytes too. Force one on each chat provider (buffered +
+     * streamed) and scan the response for a fingerprint signature — the tool name is echoed from the
+     * client and the arguments come from the inert pool, so nothing self-identifying may leak.
+     *
+     * @return array<string,array{0:string,1:bool}>
+     */
+    public static function toolChatByStreamMode(): array
+    {
+        $out = [];
+        foreach (['/v1/chat/completions', '/v1/messages', '/api/chat'] as $path) {
+            foreach ([true, false] as $stream) {
+                $out[$path . ' tool (stream=' . ($stream ? 'true' : 'false') . ')'] = [$path, $stream];
+            }
+        }
+
+        return $out;
+    }
+
+    /** @dataProvider toolChatByStreamMode */
+    public function test_ai_api_tool_call_response_carries_no_fingerprint_signature(string $path, bool $stream): void
+    {
+        $ip = '203.0.113.51';
+        $store = new AlwaysBulkFlaggedHitStore();
+        $emitter = new StreamEmitter(static fn (string $b): ?string => null, 0);
+        $bufferedBody = '';
+        $bufferedHeaders = [];
+        $emitBuffered = static function (int $s, array $h, string $b) use (&$bufferedHeaders, &$bufferedBody): void {
+            $bufferedHeaders = $h;
+            $bufferedBody = $b;
+        };
+        $handler = new AiChatHandler(
+            new LlmClient('http://127.0.0.1:1/unreachable', 50, 32),
+            new AiChatPromptBuilder(),
+            new LlmOutputSanitizer(),
+            new NonsenseFallback(),
+            new WordSwap(),
+            new WrongLanguageCode(),
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $store),
+            new LlmFakeCache(sys_get_temp_dir() . '/fp-served-surfaces-unused-cache.sqlite'),
+            $store,
+            ModelCatalog::fromPackage(),
+            null,
+            false,
+            false,
+            0.8, 0.0, 1.0, 4, 5, 600, 0,
+            $emitBuffered,
+            static fn (): StreamEmitter => $emitter,
+        );
+        $router = new AiApiRouter($handler);
+
+        $tool = $path === '/v1/messages'
+            ? ['name' => 'read_file', 'input_schema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]]
+            : ['type' => 'function', 'function' => ['name' => 'read_file', 'parameters' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]]];
+        $payload = [
+            'model' => 'served-surfaces-test-model',
+            'max_tokens' => 1024,
+            'messages' => [['role' => 'user', 'content' => 'call the read_file tool exactly once']],
+            'tools' => [$tool],
+            'stream' => $stream,
+        ];
+        if ($path !== '/api/chat') {
+            $payload['tool_choice'] = $path === '/v1/messages' ? ['type' => 'any'] : 'required';
+        }
+        $ctx = new RequestContext('POST', $path, '', ['x-api-key' => 'sk-ant-test'], (string) json_encode($payload));
+        $router->handle($ctx, $ip);
+
+        $streamed = $emitter->captured();
+        self::assertTrue($streamed !== '' || $bufferedBody !== '', "no tool response captured for {$path}");
+        self::assertServedClean($streamed, "AiApiRouter streamed tool call for {$path}");
+        self::assertServedClean($bufferedBody, "AiApiRouter buffered tool call for {$path}");
+        self::assertHeadersClean($bufferedHeaders, "AiApiRouter buffered tool call for {$path}");
+    }
+
     // --- 3b. DownloadRouter's three declared paths ---------------------------------------------------
 
     public function test_download_router_sw_js_path_serves_the_real_file_clean(): void

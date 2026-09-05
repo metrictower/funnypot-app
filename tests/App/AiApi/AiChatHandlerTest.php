@@ -205,7 +205,11 @@ final class AiChatHandlerTest extends TestCase
 
         self::assertSame(0, $calls);                                        // sidecar never touched
         self::assertSame(200, $this->cap->status);
-        self::assertStringContainsString('Mythos', $this->cap->body);       // believable identity
+        // Identity coherence (FP-0300): gpt-oss is OpenAI's — the answer names OpenAI + the requested
+        // model, and never the wrong house vendor.
+        self::assertStringContainsString('OpenAI', $this->cap->body);
+        self::assertStringContainsString(self::OPENAI_MODEL, $this->cap->body);
+        self::assertStringNotContainsString('Anthropic', $this->cap->body);
         self::assertStringContainsString('1 + 1 = 2', $this->cap->body);    // bundled math answered
         self::assertSame(1, $this->abuse->queueCount());                    // still reported as recon
 
