@@ -615,12 +615,22 @@ bin/funnypot vulns:sync            # refresh the on/off toggle list
 php scripts/check-ports.php        # port inventory vs nginx/entrypoint/Dockerfile/deploy/compose (--format, --print sg)
 ```
 
+Service-persona preflight/status (see [`docs/SERVICE-PROFILES.md`](docs/SERVICE-PROFILES.md)):
+
+```bash
+bin/funnypot bootstrap:prepare --target=deploy --publish=exact   # identity then service preflight (no network)
+bin/funnypot services:prepare  --target=deploy --publish=exact   # service preflight only (--json prints the manifest)
+bin/funnypot services:status   --healthcheck                     # exit 0 on a fresh ready/degraded heartbeat, else 1
+bin/funnypot services:status   --wait-ready=45                    # poll the heartbeat up to N seconds
+```
+
 ## Docs
 
 - [`demo/README.md`](demo/README.md): running the standalone honeypot.
 - [`docs/EMULATION-CATALOG.md`](docs/EMULATION-CATALOG.md): the configurable capability surface.
 - [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md): engagement episodes — schema, identity/privacy rules, caps, benchmark.
 - [`docs/IDENTITY.md`](docs/IDENTITY.md): the persisted install identity — master, derived keys, runtime bundles, TLS selection, migration, backup and rotation.
+- [`docs/SERVICE-PROFILES.md`](docs/SERVICE-PROFILES.md): operator-configurable service personas — named/manual/all modes, coherent bundles, the desired/published/effective states, the exposure manifest and the closed listener supervisor.
 - [`docs/PROTOCOL-HONEYPOT-PLAN.md`](docs/PROTOCOL-HONEYPOT-PLAN.md): the TCP service emulators and SSH server.
 - [funnypot-core](https://github.com/metrictower/funnypot-core): the HTTP inversion engine, its spec and its integration guide.
 

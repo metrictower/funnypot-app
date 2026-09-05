@@ -23,7 +23,7 @@ FROM php:8.3-fpm-alpine
 RUN apk add --no-cache nginx openssl sqlite-libs libpng libjpeg-turbo freetype \
     && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS sqlite-dev libpng-dev libjpeg-turbo-dev freetype-dev \
     && docker-php-ext-configure gd --with-jpeg --with-freetype \
-    && docker-php-ext-install pdo_sqlite gd \
+    && docker-php-ext-install pdo_sqlite gd pcntl \
     && pecl install apcu \
     && docker-php-ext-enable apcu \
     && apk del .build-deps
