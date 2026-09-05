@@ -276,9 +276,12 @@ final class PolluterControllerTest extends TestCase
         $ctrl = new PolluterController($store, $geo, $budget, self::SEED, 8, null, $factory);
 
         // A served hit wins the (only) slot and DOES incur the latency — proves the sleeper is wired.
+        // (Jittered within the band below 500: min(200, 500/10) = 50 ⇒ one sleep in [450, 500].)
         $this->get($ctrl, PolluterController::CONFIG_PATH, [], '192.0.2.70');
         self::assertSame(200, $this->status(), 'a served polluter hit wins a slot');
-        self::assertSame([500], $slept, 'server latency is applied on the served (slot-holding) hit');
+        self::assertCount(1, $slept, 'server latency is applied once on the served (slot-holding) hit');
+        self::assertGreaterThanOrEqual(450, $slept[0]);
+        self::assertLessThanOrEqual(500, $slept[0]);
 
         // Now an occupier holds the only slot; the next polluter hit finds none free and is SHED.
         $occupier = new TarpitBudget($bpath, true, 1, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15);
@@ -287,8 +290,8 @@ final class PolluterControllerTest extends TestCase
 
         $this->get($ctrl, PolluterController::LOG_PATH, [], '192.0.2.71');
         self::assertSame(404, $this->status(), 'no free slot ⇒ bounded 404');
-        self::assertSame(
-            [500],
+        self::assertCount(
+            1,
             $slept,
             'a shed polluter hit is served immediately: applyLatency() runs ONLY after a won guard(); '
             . 'moving it above guard() would record a 2nd sleep here'

@@ -37,19 +37,31 @@ final class ConfigDump
 
     /**
      * Stream the settings.py through the emitter up to $capBytes, halting on client hang-up ($aborted,
-     * injectable for tests; defaults to the real connection_aborted()). Returns bytes actually emitted,
-     * for the budget ledger. A fixed preamble goes first, then generated sections until the cap.
+     * injectable for tests; defaults to the real connection_aborted()) or at the wall-clock deadline
+     * ({@see SeededStream::DEADLINE_MS} by default, so a slow reader can never hold the worker past the
+     * TarpitBudget slot TTL). Returns bytes actually emitted, for the budget ledger. A fixed preamble
+     * goes first, then generated sections until the cap or the deadline.
      *
-     * @param callable():int|null $aborted
+     * The deadline check runs AFTER each section is emitted, so the overshoot is at most one section's
+     * fabricate+emit time. It bounds FABRICATION time; a write blocked by a slow reader is bounded by
+     * nginx's buffering and send timeouts, not by this check. Ending early yields a shorter body, never
+     * a 500.
+     *
+     * @param callable():int|null   $aborted
+     * @param int|null              $deadlineMs wall-clock budget for the whole stream (default SeededStream::DEADLINE_MS)
+     * @param callable():float|null $now        monotonic clock in ms (tests inject a fake)
      */
-    public function stream(StreamEmitter $e, int $capBytes, ?callable $aborted = null): int
+    public function stream(StreamEmitter $e, int $capBytes, ?callable $aborted = null, ?int $deadlineMs = null, ?callable $now = null): int
     {
         $aborted ??= static fn (): int => connection_aborted();
+        $now ??= SeededStream::clock();
+        $deadlineMs ??= SeededStream::DEADLINE_MS;
+        $start = $now();
         $sent = 0;
         foreach ($this->chunks($capBytes) as $chunk) {
             $e->chunk($chunk);
             $sent += strlen($chunk);
-            if ($aborted() !== 0) {
+            if ($aborted() !== 0 || $now() - $start >= $deadlineMs) {
                 break;
             }
         }

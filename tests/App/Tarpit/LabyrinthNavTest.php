@@ -56,9 +56,11 @@ final class LabyrinthNavTest extends TestCase
      * the exact status/headers/body without emitting real HTTP.
      *
      * @param array<string,int> $over budget overrides
+     * @param int $latencyMs server latency knob (a no-op sleeper is wired, so it only arms client pacing)
+     * @param string $pacingScript the service-worker bytes to serve (empty = pacing off)
      * @return array{0:LabyrinthController,1:array<string,mixed>&object,2:SqliteHitStore}
      */
-    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $personaSeed = 4242): array
+    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $personaSeed = 4242, int $latencyMs = 0, string $pacingScript = ''): array
     {
         $cap = new class {
             public int $status = 0;
@@ -81,12 +83,43 @@ final class LabyrinthNavTest extends TestCase
             $over['globalBytesHr'] ?? 1024 * 1024 * 1024,
             $over['pagesPerIpHr'] ?? 2000,
             15,
+            null,
+            $latencyMs,
+            static function (int $ms): void {
+                // no-op sleeper: these tests are about bytes, never about real waiting
+            },
         );
         $store = new SqliteHitStore($this->path('hits'));
         $geo = new Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
-        $lab = new LabyrinthController($store, $geo, $budget, $personaSeed, 8, null, $emit);
+        $lab = new LabyrinthController($store, $geo, $budget, $personaSeed, 8, null, $emit, null, $latencyMs, $pacingScript);
 
         return [$lab, $cap, $store];
+    }
+
+    /** The first app fingerprint-denylist hit in $t (leak-IN literals/patterns + leak-OUT own vocabulary), or null when clean. */
+    private static function fingerprintHit(string $t): ?string
+    {
+        static $d = null;
+        $d ??= require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
+        $literals = array_values((array) ($d['literals'] ?? []));
+        $patterns = array_values((array) ($d['patterns'] ?? []));
+        $ownVocabulary = array_values((array) ($d['own_vocabulary'] ?? []));
+        $ownVocabularyPattern = '/(?<![a-zA-Z0-9])(' . implode('|', $ownVocabulary) . ')(?![a-zA-Z0-9])/i';
+        foreach ($literals as $n) {
+            if ($n !== '' && stripos($t, (string) $n) !== false) {
+                return 'lit:' . $n;
+            }
+        }
+        foreach ($patterns as $p) {
+            if (@preg_match('~' . $p . '~i', $t) === 1) {
+                return 'pat:' . $p;
+            }
+        }
+        if (preg_match($ownVocabularyPattern, $t, $m) === 1) {
+            return 'own_vocabulary:' . strtolower($m[0]);
+        }
+
+        return null;
     }
 
     private function get(LabyrinthController $lab, string $path, string $ip = '203.0.113.9'): void
@@ -253,28 +286,7 @@ final class LabyrinthNavTest extends TestCase
      */
     public function test_no_rendered_page_trips_the_fingerprint_denylist_across_seeds_and_depth(): void
     {
-        $d = require dirname(__DIR__, 3) . '/resources/app-fingerprint-denylist.php';
-        $literals = array_values((array) ($d['literals'] ?? []));
-        $patterns = array_values((array) ($d['patterns'] ?? []));
-        $ownVocabulary = array_values((array) ($d['own_vocabulary'] ?? []));
-        $ownVocabularyPattern = '/(?<![a-zA-Z0-9])(' . implode('|', $ownVocabulary) . ')(?![a-zA-Z0-9])/i';
-        $scan = static function (string $t) use ($literals, $patterns, $ownVocabularyPattern): ?string {
-            foreach ($literals as $n) {
-                if ($n !== '' && stripos($t, (string) $n) !== false) {
-                    return 'lit:' . $n;
-                }
-            }
-            foreach ($patterns as $p) {
-                if (@preg_match('~' . $p . '~i', $t) === 1) {
-                    return 'pat:' . $p;
-                }
-            }
-            if (preg_match($ownVocabularyPattern, $t, $m) === 1) {
-                return 'own_vocabulary:' . strtolower($m[0]);
-            }
-
-            return null;
-        };
+        $scan = static fn (string $t): ?string => self::fingerprintHit($t);
 
         $seeds = [5, 4242, 99991, 1, 2, 3, 7, 13, 42];
         $ipN = 0;
@@ -291,6 +303,92 @@ final class LabyrinthNavTest extends TestCase
             $this->get($lab, '/admin/audit-archive/record/abcDEF012ghiJKL345mnoPQR', '198.51.100.2');
             self::assertNull($scan($cap->body), "fingerprint self-tell on seed {$seed} record leaf");
         }
+    }
+
+    // --- the served pacing worker + its registration reveal nothing about the trap -----------------
+
+    /** The real on-disk worker source, exactly the bytes the composition root hands the controller. */
+    private static function pacingWorkerSource(): string
+    {
+        $path = dirname(__DIR__, 3) . '/src/App/Tarpit/aa-sw.js';
+        self::assertFileExists($path, 'the pacing worker must live at the path demo/index.php reads');
+
+        return (string) file_get_contents($path);
+    }
+
+    /**
+     * The worker is served VERBATIM to an unauthenticated GET, so its bytes are a de-cloak surface: no
+     * strategy word, no knob name, no ticket id, no comment of any kind, and nothing on the fingerprint
+     * denylist (either direction) may appear in the body or the headers. The one functional literal it
+     * must keep is the intercept prefix `/admin/export/` — a real path set, not a tell — which is why
+     * the bare word "export" is deliberately NOT on the banned list (the identifier EXPORT_PREFIX is).
+     */
+    public function test_served_pacing_worker_reveals_no_tarpit_or_strategy_strings(): void
+    {
+        $src = self::pacingWorkerSource();
+        [$lab, $cap] = $this->make(latencyMs: 750, pacingScript: $src);
+        $this->get($lab, LabyrinthController::PACING_SW_PATH, '198.51.100.30');
+
+        self::assertSame(200, $cap->status);
+        self::assertStringContainsString('javascript', $cap->headers['Content-Type'] ?? '');
+        self::assertSame($src, $cap->body, 'served byte-for-byte from the source file');
+        // Sanity: still the real worker (a rewrite cannot make this pass vacuously).
+        self::assertStringContainsString("addEventListener('fetch'", $cap->body);
+        self::assertStringContainsString('/admin/export/', $cap->body, 'the functional intercept prefix stays');
+        self::assertStringNotContainsString('tarpit', strtolower(LabyrinthController::PACING_SW_PATH), 'the served path names no strategy');
+
+        foreach (['tarpit', 'polluter', 'pacing', 'paced', 'byte-cap', 'FUNNYPOT_TARPIT', 'FP-0245', 'DownloadRouter',
+            'client-side theater', 'EXPORT_PREFIX', 'attacker', 'honeypot', 'slow-drip', 'php-fpm', ] as $banned) {
+            self::assertStringNotContainsStringIgnoringCase($banned, $cap->body, "served worker must not contain '{$banned}'");
+        }
+        self::assertSame(0, preg_match('~(^|[^:])//|/\*~m', $cap->body), 'the served worker carries no comments at all');
+        self::assertNull(self::fingerprintHit($cap->body), 'the served worker trips no fingerprint denylist entry');
+        foreach ($cap->headers as $name => $value) {
+            self::assertNull(self::fingerprintHit($name . ': ' . $value), "header {$name} is fingerprint-clean");
+        }
+    }
+
+    /**
+     * The registration snippet in page source is the other half of the de-cloak: it must name the
+     * neutral worker path and carry the interval as an opaque token — never `?i=<ms>` or the literal
+     * configured latency — while still round-tripping to the configured ms through the exact decode
+     * the worker implements (base36, XOR the shared mask), so the paced experience is unchanged.
+     */
+    public function test_pacing_registration_snippet_leaks_no_raw_latency_ms(): void
+    {
+        $src = self::pacingWorkerSource();
+        [$lab, $cap] = $this->make(latencyMs: 1234, pacingScript: $src);
+        $this->get($lab, '/admin/audit-archive/page-000001', '198.51.100.31');
+        self::assertSame(200, $cap->status);
+
+        self::assertSame(1, preg_match('~serviceWorker\.register\("([^"]+)"~', $cap->body, $m), 'the registration snippet is present');
+        $swUrl = $m[1];
+        self::assertStringEndsWith(
+            '/aa-sw.js?' . LabyrinthController::PACING_PARAM . '=' . LabyrinthController::encodePacingInterval(1234),
+            $swUrl
+        );
+        self::assertStringNotContainsString('tarpit', strtolower($swUrl));
+        self::assertStringNotContainsString('?i=', $cap->body, 'the old readable interval key is gone');
+        self::assertStringNotContainsString('1234', $swUrl, 'the raw latency-ms never appears in the registration URL');
+
+        // Round-trip through the worker's own decode (parseInt(v, 36) ^ mask): pacing itself is unchanged.
+        parse_str((string) parse_url($swUrl, PHP_URL_QUERY), $q);
+        $token = (string) ($q[LabyrinthController::PACING_PARAM] ?? '');
+        self::assertMatchesRegularExpression('/^[0-9a-z]{1,8}$/', $token, 'an opaque base36 token, not a number');
+        self::assertSame(1234, ((int) base_convert($token, 36, 10)) ^ LabyrinthController::PACING_MASK);
+        // The cap clamps before encoding, exactly as the old raw value was clamped.
+        self::assertSame(
+            LabyrinthController::encodePacingInterval(TarpitBudget::LATENCY_HARD_CAP_MS),
+            LabyrinthController::encodePacingInterval(99_999)
+        );
+
+        // Both ends stay in lock-step: the worker reads the same key and XORs the same mask.
+        self::assertStringContainsString("searchParams.get('" . LabyrinthController::PACING_PARAM . "')", $src);
+        self::assertStringContainsString('parseInt(q,36)', $src);
+        self::assertStringContainsString('^' . LabyrinthController::PACING_MASK, $src);
+
+        // And the whole page — registration snippet included — is fingerprint-clean.
+        self::assertNull(self::fingerprintHit($cap->body));
     }
 
     public function test_entry_hint_carries_no_href_and_decodes_to_the_root(): void

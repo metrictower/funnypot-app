@@ -52,6 +52,14 @@ final class TarpitBudget
      */
     public const LATENCY_HARD_CAP_MS = 2000;
 
+    /**
+     * Ceiling on the latency jitter band. {@see applyLatency()} reserves this much headroom BELOW its
+     * effective ms and adds a random amount inside it, so latency-armed responses vary instead of
+     * carrying one constant added delay (a uniform-timing tell). Shared with {@see \Funnypot\App\Http\SleepDecoy},
+     * which applies the same band below its per-request cap.
+     */
+    public const MAX_JITTER_MS = 200;
+
     private ?PDO $db = null;
 
     /** @var callable():int */
@@ -59,6 +67,9 @@ final class TarpitBudget
 
     /** @var callable(int):void the latency sleeper (ms → sleep); injectable so tests don't really sleep. */
     private $sleeper;
+
+    /** @var callable(int):int jitter source (band-ceiling ms → jitter ms in [0, ceiling]); injectable for tests. */
+    private $jitter;
 
     /**
      * @param bool $enabled       master switch (FUNNYPOT_TARPIT); OFF => guard() is inert (always null)
@@ -73,13 +84,17 @@ final class TarpitBudget
      * @param int  $latencyMs     optional server latency (FP-0245d) applied by {@see applyLatency()} ONLY
      *                            while a slot is held; 0 = off (default), hard-clamped ≤ LATENCY_HARD_CAP_MS
      * @param callable(int):void|null $sleeper injectable sleeper (ms) for tests; defaults to real usleep
+     * @param callable(int):int|null $jitter band-ceiling-ms → jitter-ms in [0, ceiling] for
+     *                            {@see applyLatency()}; defaults to random_int. Injectable so tests are deterministic
      *
      * NOTE for the 0245b/c/d wiring (flagged by the FP-0245a review): the SHORT slotTtlSecs means a
      * LEGITIMATE holder whose response streams longer than the TTL will have its slot reaped out from
      * under it, softening the concurrency ceiling. That is the deliberate trade — a short TTL is the
      * only safe reclaim for a crashed holder (release() never runs on a fatal/OOM/SIGTERM). So the
-     * wiring MUST keep a single tarpit response under slotTtlSecs (the byte/latency caps already bound
-     * it) OR refresh started_at mid-stream; do not let a normal tarpit response outlive its slot.
+     * wiring MUST keep a single tarpit response under slotTtlSecs: the latency sleep is clamped by
+     * LATENCY_HARD_CAP_MS and every streamed body is cut at the {@see \Funnypot\App\Tarpit\SeededStream::DEADLINE_MS}
+     * fabrication deadline (10 s), which together fit inside the 15 s TTL. Keep that ordering (sleep +
+     * deadline < TTL) if any of the three values ever moves.
      */
     public function __construct(
         private string $dbPath,
@@ -93,12 +108,14 @@ final class TarpitBudget
         private int $slotTtlSecs = 15,
         ?callable $clock = null,
         private int $latencyMs = 0,
-        ?callable $sleeper = null
+        ?callable $sleeper = null,
+        ?callable $jitter = null
     ) {
         $this->clock = $clock ?? static fn (): int => time();
         $this->sleeper = $sleeper ?? static function (int $ms): void {
             usleep($ms * 1000);
         };
+        $this->jitter = $jitter ?? static fn (int $ceil): int => $ceil > 0 ? random_int(0, $ceil) : 0;
     }
 
     /**
@@ -118,6 +135,13 @@ final class TarpitBudget
      * charge the ledger — they measure one hrtime wall window that SPANS this sleep and charge that, so
      * the slept time is already inside the per-IP/global wall charge. That is how an IP's repeated
      * latency accrues until it trips overBudget() and is then served immediately.
+     *
+     * The sleep is JITTERED the way {@see \Funnypot\App\Http\SleepDecoy} jitters its honoured delay: a
+     * band of up to MAX_JITTER_MS (or a tenth of the effective ms, whichever is smaller) is reserved
+     * BELOW the effective ms and a random amount inside it is added back, so the slept time lands in
+     * [ms - band, ms] and varies per response instead of being one constant — a fixed added delay is a
+     * timing tell. The band sits below the value, never above it, so the clamp still holds: no
+     * response ever sleeps longer than the (capped) configured ms.
      */
     public function applyLatency(): int
     {
@@ -129,9 +153,12 @@ final class TarpitBudget
             return 0; // default-off / disabled
         }
         try {
-            ($this->sleeper)($ms);
+            $band = min(self::MAX_JITTER_MS, intdiv($ms, 10));
+            $jitter = max(0, min($band, (int) ($this->jitter)($band)));
+            $slept = $ms - $band + $jitter;
+            ($this->sleeper)($slept);
 
-            return $ms;
+            return $slept;
         } catch (Throwable $e) {
             return 0; // fail-safe: no latency, never a slow/500 failure mode
         }
@@ -172,6 +199,15 @@ final class TarpitBudget
      * it. Returns a held slot id when the caller may proceed, or null to shed to a bounded 404. Fails
      * closed in every branch: master switch off, over budget, no free slot, or any storage error =>
      * null. The caller releases the slot id in a finally and charges the ledger on the way out.
+     *
+     * Ledger overshoot bound: overBudget() and acquire() are two separate transactions, and charge()
+     * lands only after the response is served, so N concurrent requests from one IP can all read
+     * "under budget" before any of them is billed. What bounds the overshoot is acquire()'s per-IP
+     * concurrency cap — at most $maxPerIp of those readers win a slot, so a just-crossed hourly ledger
+     * can be exceeded by at most $maxPerIp in-flight responses per IP (and $maxConcurrent globally).
+     * The default maxPerIp = 1 makes that "one extra response". Raising maxPerIp widens the overshoot
+     * proportionally; that is a deliberate trade, not a race to fix by folding the read into the
+     * acquire transaction (the ledger is best-effort by design — the hard controls are the slots).
      */
     public function guard(string $ip): ?int
     {

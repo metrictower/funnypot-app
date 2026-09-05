@@ -43,7 +43,9 @@ use Throwable;
  *      released in a `finally`, the ledger charged with the hit's bytes/wall-ms. Streamed bodies are
  *      O(block) memory and hard byte-capped; buffered bodies (hostile/shadow) are small and capped.
  *      No server-side pacing (StreamEmitter delay 0) — pacing would pin a worker (the DownloadRouter
- *      lesson) — so every response stays far under the short slot-reap TTL.
+ *      lesson) — and every streamed body is additionally cut at the {@see \Funnypot\App\Tarpit\SeededStream::DEADLINE_MS}
+ *      fabrication deadline, so even a slow reader cannot hold the worker past the short slot-reap TTL
+ *      (a reaped-but-still-busy slot would silently soften the concurrency ceiling).
  *   2. INERT / CRAWLER-SAFE. Nothing served is a real secret, a working credential, or exploit code;
  *      every credential-shaped value is a FakeSecrets shape (authenticates nowhere) or a dead FLAG.
  *      The routes are NOT listed in robots.txt or any sitemap (the caps are the backstop, not

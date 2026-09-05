@@ -86,28 +86,101 @@ final class TarpitLatencyTest extends TestCase
         self::assertSame([], $slept);
     }
 
-    /** A configured value is honoured (single sleep of exactly that many ms), and the ms is returned. */
-    public function test_configured_latency_sleeps_once_for_the_configured_ms(): void
+    /** A configured value is honoured as a SINGLE sleep inside the jitter band just below it, and the
+     *  ms actually slept is returned. (Default random jitter here; the deterministic band test is below.) */
+    public function test_configured_latency_sleeps_once_within_the_band_below_the_configured_ms(): void
     {
         $slept = [];
         $b = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 750, function (int $ms) use (&$slept): void {
             $slept[] = $ms;
         });
-        self::assertSame(750, $b->applyLatency());
-        self::assertSame([750], $slept, 'a single bounded sleep, never a per-byte drip');
+        $returned = $b->applyLatency();
+        self::assertCount(1, $slept, 'a single bounded sleep, never a per-byte drip');
+        self::assertSame($slept[0], $returned, 'the returned ms is what was really slept');
+        self::assertGreaterThanOrEqual(750 - 75, $returned, 'band = min(200, ms/10) below the value');
+        self::assertLessThanOrEqual(750, $returned, 'never above the configured ms');
     }
 
     /** Clamp: a wild config value is capped at LATENCY_HARD_CAP_MS by TarpitBudget itself (a second wall
-     *  behind AppConfig's clamp) so an operator typo can never pin a worker near nginx's 15 s timeout. */
+     *  behind AppConfig's clamp) so an operator typo can never pin a worker near nginx's 15 s timeout.
+     *  Full-band jitter injected so the sleep lands exactly ON the cap — the band tops out at the cap,
+     *  never above it. */
     public function test_latency_is_hard_clamped_regardless_of_config(): void
     {
         $slept = [];
         $b = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 99999, function (int $ms) use (&$slept): void {
             $slept[] = $ms;
-        });
+        }, static fn (int $ceil): int => $ceil);
         self::assertSame(TarpitBudget::LATENCY_HARD_CAP_MS, $b->applyLatency());
         self::assertSame([TarpitBudget::LATENCY_HARD_CAP_MS], $slept);
         self::assertLessThanOrEqual(2000, TarpitBudget::LATENCY_HARD_CAP_MS, 'the hard cap stays well under nginx fastcgi_read_timeout 15s and the 15s slot TTL');
+    }
+
+    /**
+     * The jitter band (the SleepDecoy pattern): a band of min(MAX_JITTER_MS, ms/10) is reserved BELOW
+     * the effective ms and the injected jitter added back, so the sleep varies in [ms - band, ms]
+     * instead of being one constant (a uniform-timing tell) — and an out-of-band jitter source is
+     * clamped so the total can never exceed the (capped) ms. The jitter is never consulted when
+     * latency is off.
+     */
+    public function test_apply_latency_is_jittered_within_the_band_below_the_cap(): void
+    {
+        $slept = [];
+        $asked = [];
+        $next = 0;
+        $jitter = function (int $ceil) use (&$asked, &$next): int {
+            $asked[] = $ceil;
+
+            return $next;
+        };
+        // latency 2000 (the cap): band = min(200, 200) = 200 ⇒ sleeps in [1800, 2000].
+        $b = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 2000, function (int $ms) use (&$slept): void {
+            $slept[] = $ms;
+        }, $jitter);
+
+        $next = 0;
+        self::assertSame(1800, $b->applyLatency(), 'zero jitter ⇒ the bottom of the band');
+        $next = 200;
+        self::assertSame(2000, $b->applyLatency(), 'full jitter ⇒ exactly the cap, never above');
+        $next = 57;
+        self::assertSame(1857, $b->applyLatency(), 'in-band jitter is added to the base');
+        $next = 9999;
+        self::assertSame(2000, $b->applyLatency(), 'an out-of-band jitter source is clamped to the band ceiling');
+        $next = -50;
+        self::assertSame(1800, $b->applyLatency(), 'a negative jitter is clamped to zero');
+        self::assertSame([1800, 2000, 1857, 2000, 1800], $slept, 'the sleeper saw the jittered values — no longer a constant');
+        self::assertSame([200, 200, 200, 200, 200], $asked, 'the band ceiling handed to the jitter source is MAX_JITTER_MS at the cap');
+
+        // A small latency gets a proportionally small band (ms/10), so it still varies but stays close.
+        $asked = [];
+        $small = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 80, static function (int $ms): void {
+        }, $jitter);
+        $next = 8;
+        self::assertSame(80, $small->applyLatency());
+        self::assertSame([8], $asked, 'band = 80/10');
+
+        // Off (latency 0) and master-switch-off never consult the jitter source at all.
+        $asked = [];
+        $off = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 0, static function (int $ms): void {
+        }, $jitter);
+        $masterOff = new TarpitBudget($this->path(), false, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 500, static function (int $ms): void {
+        }, $jitter);
+        self::assertSame(0, $off->applyLatency());
+        self::assertSame(0, $masterOff->applyLatency());
+        self::assertSame([], $asked, 'no jitter draw when no latency is applied');
+    }
+
+    /** Fail-safe extends to the jitter source: a jitter fault adds NO latency and never throws. */
+    public function test_fail_safe_a_jitter_fault_adds_no_latency_and_never_throws(): void
+    {
+        $slept = [];
+        $b = new TarpitBudget($this->path(), true, 4, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 500, function (int $ms) use (&$slept): void {
+            $slept[] = $ms;
+        }, static function (int $ceil): int {
+            throw new RuntimeException('entropy source blew up');
+        });
+        self::assertSame(0, $b->applyLatency());
+        self::assertSame([], $slept, 'a jitter fault degrades to no sleep at all, never a slow/500 failure');
     }
 
     /** Fail-safe: a sleeper fault adds NO latency and never propagates (a tarpit must never fail slow). */
@@ -311,13 +384,13 @@ final class TarpitLatencyTest extends TestCase
         $budget = new TarpitBudget($this->path('sw'), true, 1, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, null, 500, function (int $ms) use (&$slept): void {
             $slept[] = $ms;
         });
-        [$lab, $cap] = $this->labyrinth($budget, 500, "// tarpit pacing sw\n");
+        [$lab, $cap] = $this->labyrinth($budget, 500, "// injected sw fixture\n");
 
-        $lab->handle(new RequestContext('GET', LabyrinthController::PACING_SW_PATH . '?i=500'), '198.51.100.10');
+        $lab->handle(new RequestContext('GET', LabyrinthController::PACING_SW_PATH . '?' . LabyrinthController::PACING_PARAM . '=' . LabyrinthController::encodePacingInterval(500)), '198.51.100.10');
         self::assertSame(200, $cap->status);
         self::assertStringContainsString('javascript', $cap->headers['Content-Type'] ?? '');
         self::assertSame('/admin/', $cap->headers['Service-Worker-Allowed'] ?? '');
-        self::assertSame("// tarpit pacing sw\n", $cap->body, 'the SW body is the injected pacing script verbatim');
+        self::assertSame("// injected sw fixture\n", $cap->body, 'the SW body is the injected pacing script verbatim');
         self::assertSame([], $slept, 'serving the SW must not incur server latency');
         self::assertSame(0, $budget->inflightCount(), 'serving the SW must not hold a TarpitBudget slot');
     }

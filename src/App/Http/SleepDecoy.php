@@ -37,10 +37,6 @@ use Throwable;
  */
 final class SleepDecoy
 {
-    /** Ceiling on the jitter band; the honoured delay reserves this much headroom below the per-request
-     *  cap so even a capped response varies instead of being a constant (a uniform-timing tell). */
-    private const MAX_JITTER_MS = 200;
-
     /** @var callable(int):int an injectable jitter source (band-ceiling ms → jitter ms); tests pass a spy/0. */
     private $jitter;
 
@@ -99,8 +95,9 @@ final class SleepDecoy
                 $capMs = max(0, $this->config->sleepPerReqCapMs);
                 // Reserve headroom for jitter BELOW the cap, so even a capped response (SLEEP(2)+ at the
                 // 2000 ms cap) still VARIES instead of being a constant 2000 ms tell. The jitter cancels
-                // in lonkero's slope on the small {0,1,2} calibration set.
-                $jitterCeil = min(self::MAX_JITTER_MS, intdiv(max(1, $capMs), 10));
+                // in lonkero's slope on the small {0,1,2} calibration set. Same band the fixed tarpit
+                // latency uses (TarpitBudget::applyLatency()), so the two never drift apart.
+                $jitterCeil = min(TarpitBudget::MAX_JITTER_MS, intdiv(max(1, $capMs), 10));
                 $baseMs = min($seconds * 1000, max(0, $capMs - $jitterCeil));
                 $sleptMs = $this->budget->applyLatencyMs($baseMs + ($this->jitter)($jitterCeil));
                 // Charge the honoured sleep as wall time on the SAME ledger (rides wall_ms, not a second

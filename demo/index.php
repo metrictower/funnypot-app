@@ -374,11 +374,12 @@ if ($config->tarpitEnabled) {
         // so at most MAX_CONCURRENT workers ever sleep at once. 0 = off by default; hard-clamped ≤ 2000 ms.
         $config->tarpitLatencyMs,
     );
-    // FP-0245d client-side pacing: when the server-latency knob is on, hand the labyrinth the tarpit
+    // FP-0245d client-side pacing: when the server-latency knob is on, hand the labyrinth the pacing
     // service worker so a browser-shaped agent gets the believable-slow "export" download paced on ITS
-    // OWN CPU (the DownloadRouter lesson — server-side pacing would pin a worker). No SW when off.
+    // OWN CPU (the DownloadRouter lesson — server-side pacing would pin a worker). No SW when off. The
+    // file is served verbatim, so it is kept comment-free under a neutral name (see PACING_SW_PATH).
     $tarpitPacingSw = $config->tarpitLatencyMs > 0
-        ? (string) @file_get_contents(dirname(__DIR__) . '/src/App/Tarpit/tarpit-sw.js')
+        ? (string) @file_get_contents(dirname(__DIR__) . '/src/App/Tarpit/aa-sw.js')
         : '';
     $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder);
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole

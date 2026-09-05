@@ -66,8 +66,24 @@ final class LabyrinthController
      * routes it here). Served as a tiny STATIC asset — no TarpitBudget slot, no server latency — only
      * when the client-pacing layer is armed (server-latency knob > 0). A browser registers it to pace
      * the "export" download on its own CPU; a non-browser agent (curl/LLM fetch) simply ignores it.
+     *
+     * The asset is served VERBATIM to an unauthenticated GET, so everything about it must read as an
+     * ordinary site asset: a neutral filename (no strategy word in the path), a source file kept
+     * comment-free and minified with opaque identifiers (a narrating comment would explain the whole
+     * trap to one `curl`), and an interval parameter that is an opaque version-tag-shaped token rather
+     * than a readable latency-in-ms ({@see pacingRegistration()}). None of that is a security boundary
+     * — the containment is TarpitBudget — it only removes the free de-cloak.
      */
-    public const PACING_SW_PATH = self::ENTRY_BASE . '/tarpit-sw.js';
+    public const PACING_SW_PATH = self::ENTRY_BASE . '/aa-sw.js';
+
+    /**
+     * The registration query key + mask for the worker's base pacing interval. The worker decodes
+     * symmetrically (`parseInt(v, 36) ^ PACING_MASK`), so the value in page source is a short base36
+     * token that neither equals nor reads as the configured latency-ms. Cosmetic de-identification
+     * only; the two ends must stay in lock-step (pinned by test against the worker source).
+     */
+    public const PACING_PARAM = 'v';
+    public const PACING_MASK = 127911;
 
     /** FIXED rows per page — the genuine O(page) bound (SHOULD-FIX 6). Never derived from the byte cap. */
     private const ROWS_PER_PAGE = 25;
@@ -488,22 +504,36 @@ final class LabyrinthController
 
     /**
      * The FP-0245d client-pacing registration — a FIXED constant snippet (same bytes on every page, so
-     * the O(page) byte-identity bound is preserved) that registers the tarpit service worker so a real
+     * the O(page) byte-identity bound is preserved) that registers the pacing service worker so a real
      * browser paces the "export" download on its OWN CPU. It is NOT a followable link: no href/src
      * attribute, and the SW path rides only a single-quoted JS string a `href|src` regex never matches
      * (the crawler-undiscoverability invariant). Degrades gracefully: absent Service Worker support (or
      * any error) it is a no-op and a normal browser renders the page unchanged. Empty when disarmed.
+     * The interval rides as an opaque base36 token ({@see PACING_PARAM}/{@see PACING_MASK}), never as
+     * the raw configured ms.
      */
     private function pacingRegistration(): string
     {
         if (!$this->clientPacingOn()) {
             return '';
         }
-        $sw = self::PACING_SW_PATH . '?i=' . max(0, min(TarpitBudget::LATENCY_HARD_CAP_MS, $this->latencyMs));
+        $sw = self::PACING_SW_PATH . '?' . self::PACING_PARAM . '=' . self::encodePacingInterval($this->latencyMs);
 
         return '<script>(function(){if(!("serviceWorker" in navigator)){return;}'
             . 'try{navigator.serviceWorker.register(' . json_encode($sw, JSON_UNESCAPED_SLASHES)
             . ',{scope:"/admin/"}).catch(function(){});}catch(e){}})();</script>';
+    }
+
+    /**
+     * The worker's base pacing interval as the opaque registration token: the (cap-clamped) ms XOR
+     * {@see PACING_MASK}, in base36. Pure and static so a test can pin the round-trip against the
+     * worker's own decode.
+     */
+    public static function encodePacingInterval(int $latencyMs): string
+    {
+        $ms = max(0, min(TarpitBudget::LATENCY_HARD_CAP_MS, $latencyMs));
+
+        return base_convert((string) ($ms ^ self::PACING_MASK), 10, 36);
     }
 
     /** Path with any query/fragment stripped (the matcher's canonical form). */

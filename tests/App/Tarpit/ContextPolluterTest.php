@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Tarpit;
 
+use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\Tarpit\ConfigDump;
 use Funnypot\App\Tarpit\HostileFormat;
 use Funnypot\App\Tarpit\LogRabbitHole;
+use Funnypot\App\Tarpit\SeededStream;
 use Funnypot\App\Tarpit\ShadowBait;
 use PHPUnit\Framework\TestCase;
 
@@ -266,6 +268,62 @@ final class ContextPolluterTest extends TestCase
         }
 
         return $out;
+    }
+
+    // --- wall-clock deadline: the two production streamers stop even when the reader never hangs up --
+
+    /** A fake monotonic clock: 0 at the start read, 1 ms after chunk one, then past the deadline. */
+    private static function clockPastDeadlineAfterTwoChunks(): callable
+    {
+        $reads = 0;
+
+        return static function () use (&$reads): float {
+            return ++$reads <= 2 ? (float) ($reads - 1) : (float) SeededStream::DEADLINE_MS;
+        };
+    }
+
+    /** Byte length of the first $n chunks a generator would yield — the exact expected truncation point. */
+    private static function firstChunksLength(\Generator $chunks, int $n): int
+    {
+        $len = 0;
+        foreach ($chunks as $c) {
+            $len += strlen($c);
+            if (--$n === 0) {
+                break;
+            }
+        }
+
+        return $len;
+    }
+
+    /**
+     * ConfigDump::stream() is one of the two PRODUCTION streamers (PolluterController's settings.py). A
+     * slow reader that never aborts must still be cut at the wall-clock deadline, not run to the 8 MiB
+     * cap and outlive its slot: with the clock past the deadline after the second piece, exactly the
+     * preamble + one section is emitted.
+     */
+    public function test_config_stream_stops_at_the_wall_clock_deadline(): void
+    {
+        $emitter = new StreamEmitter(static function (string $b): void {
+        }, 0);
+        $dump = new ConfigDump(self::SEED);
+        $sent = $dump->stream($emitter, self::CAP, static fn (): int => 0, null, self::clockPastDeadlineAfterTwoChunks());
+
+        self::assertSame(self::firstChunksLength($dump->chunks(self::CAP), 2), $sent, 'stopped after the piece in flight when the deadline was crossed');
+        self::assertSame(strlen($emitter->captured()), $sent);
+        self::assertLessThan(self::CAP, $sent, 'nowhere near the byte cap — time bound it, not bytes');
+    }
+
+    /** Same for LogRabbitHole::stream() (the app.log full-body path): two fixed-width lines, then stop. */
+    public function test_log_stream_stops_at_the_wall_clock_deadline(): void
+    {
+        $emitter = new StreamEmitter(static function (string $b): void {
+        }, 0);
+        $log = new LogRabbitHole(self::SEED);
+        $sent = $log->stream($emitter, self::CAP, static fn (): int => 0, null, self::clockPastDeadlineAfterTwoChunks());
+
+        self::assertSame(2 * LogRabbitHole::LINE_WIDTH, $sent, 'two lines, then the deadline cut it');
+        self::assertSame(strlen($emitter->captured()), $sent);
     }
 
     // --- flat / bounded memory (SHOULD-FIX 1: non-vacuous, memory_reset_peak_usage) -----------------

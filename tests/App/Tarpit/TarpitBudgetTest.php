@@ -321,6 +321,41 @@ final class TarpitBudgetTest extends TestCase
     }
 
     /**
+     * The check-then-act between overBudget() and acquire() is documented on guard(): two same-IP
+     * requests can BOTH read "under budget" before either is charged (charge() lands post-serve), but
+     * acquire()'s per-IP concurrency cap bounds how many of them get to serve — so a just-crossed hourly
+     * ledger can be overshot by at most maxPerIp responses per IP. Pins the bound at the default (1) and
+     * shows it widening with maxPerIp, so a future bump is a visible, deliberate trade.
+     */
+    public function test_ledger_overshoot_is_bounded_by_max_per_ip(): void
+    {
+        // Per-IP hourly page budget of 1 with nothing charged yet: both racing guard() reads pass the
+        // overBudget() check, but only ONE wins a slot (per-IP = 1) — the other is denied before serving.
+        $b = $this->budget($this->path(), ['pagesPerIpHr' => 1]);
+        $first = $b->guard('9.9.9.9');
+        $second = $b->guard('9.9.9.9');
+        self::assertNotNull($first, 'the first racer serves');
+        self::assertNull($second, 'the second racer is denied by the per-IP slot cap, not by the (unbilled) ledger');
+        self::assertSame(1, $b->inflightForIp('9.9.9.9'), 'at most maxPerIp (1) responses can overshoot the ledger');
+
+        // The winner's post-serve charge closes the window: every later guard() sheds on the ledger.
+        $b->charge('9.9.9.9', 0, 0, 1);
+        $b->release($first);
+        self::assertTrue($b->overBudget('9.9.9.9'));
+        self::assertNull($b->guard('9.9.9.9'));
+
+        // Raising maxPerIp widens the overshoot proportionally — the documented trade, not a bug.
+        $wide = $this->budget($this->path(), ['pagesPerIpHr' => 1, 'maxPerIp' => 3]);
+        $won = 0;
+        for ($i = 0; $i < 5; $i++) {
+            if ($wide->guard('8.8.8.8') !== null) {
+                $won++;
+            }
+        }
+        self::assertSame(3, $won, 'the overshoot bound equals maxPerIp');
+    }
+
+    /**
      * Guard-first invariant (plan-review SHOULD-FIX 3): guard() is the ONLY seam that both checks the
      * budget and takes a slot, and it fails closed in every branch. On the gate-exempt tarpit routes
      * nothing may dispatch work without a slot from guard() — so a null from guard() is "shed to a
