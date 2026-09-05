@@ -30,6 +30,7 @@ final class IdentityBundleReader
     {
         [$dir, $file] = match ($bundle) {
             HttpIdentity::BUNDLE => ['identity-http', IdentityPaths::HTTP_BUNDLE],
+            ServiceProfileIdentity::BUNDLE => ['identity-http', IdentityPaths::SERVICE_PROFILE_BUNDLE],
             ShellIdentity::BUNDLE => ['identity-private', IdentityPaths::SHELL_BUNDLE],
             SipIdentity::BUNDLE => ['identity-private', IdentityPaths::SIP_BUNDLE],
             RedisIdentity::BUNDLE => ['identity-private', IdentityPaths::REDIS_BUNDLE],

@@ -154,6 +154,10 @@ final class IdentityPreparer
         $post = PostExploitIdentity::fromDeriver($deriver, $personaMaterial);
         $httpGid = $httpGroupApplied ? $this->ops->groupByName(self::HTTP_GROUP)['gid'] ?? null : null;
         $this->writeAtomic($this->paths->httpBundlePath(), self::bundleJson($envelopeBase, HttpIdentity::BUNDLE, $http->toPayload()), 0640, is_int($httpGid) ? $httpGid : null, 'bundle');
+        // The FP-0310 scoped service-profile bundle rides the same 0640 root:www-data runtime dir as the
+        // HTTP bundle (root and the web preview may read it). It exposes only the ranking key.
+        $serviceProfile = ServiceProfileIdentity::fromDeriver($deriver);
+        $this->writeAtomic($this->paths->serviceProfileBundlePath(), self::bundleJson($envelopeBase, ServiceProfileIdentity::BUNDLE, $serviceProfile->toPayload()), 0640, is_int($httpGid) ? $httpGid : null, 'bundle');
         $this->writeAtomic($this->paths->shellBundlePath(), self::bundleJson($envelopeBase, ShellIdentity::BUNDLE, $shell->toPayload()), 0600, null, 'bundle');
         $this->writeAtomic($this->paths->sipBundlePath(), self::bundleJson($envelopeBase, SipIdentity::BUNDLE, $sip->toPayload()), 0600, null, 'bundle');
         $this->writeAtomic($this->paths->redisBundlePath(), self::bundleJson($envelopeBase, RedisIdentity::BUNDLE, $redis->toPayload()), 0600, null, 'bundle');
@@ -171,6 +175,9 @@ final class IdentityPreparer
         ] as $class => [$bundle, $dir, $file]) {
             $verified[$class] = $this->verifyBundle($class, $bundle, $dir, $file, $envelopeBase);
         }
+        // The service-profile bundle is verified inline (root-read + envelope compare) without joining
+        // the strict result DTO, so no FP-0313 result shape changes for this scoped addition.
+        $this->verifyBundle('service-profile', ServiceProfileIdentity::BUNDLE, 'identity-http', IdentityPaths::SERVICE_PROFILE_BUNDLE, $envelopeBase);
 
         $tlsEnvelope = ['fingerprint_sha256' => $tls->fingerprintSha256, 'selection' => $tls->selection];
         $result = new IdentityPreparationResult(

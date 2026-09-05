@@ -23,6 +23,7 @@ final class ServiceEndpoint
         public readonly ?string $forwardTargetEndpointId,
         public readonly bool $tls,
         public readonly array $targets,
+        public readonly ?string $deployOptIn,
         public readonly bool $scannerExposed,
         public readonly bool $runtimeToggleable,
     ) {
@@ -49,9 +50,16 @@ final class ServiceEndpoint
             $e['forward_target_endpoint_id'] === null ? null : (string) $e['forward_target_endpoint_id'],
             (bool) $e['tls'],
             $targets,
+            ($e['deploy_opt_in'] ?? null) === null ? null : (string) $e['deploy_opt_in'],
             (bool) $e['scanner_exposed'],
             (bool) $e['runtime_toggleable'],
         );
+    }
+
+    /** Part of the base published set for $target (opt-in endpoints are separately gated). */
+    public function inBasePublishSet(string $target): bool
+    {
+        return $this->publishedOn($target) && $this->deployOptIn === null;
     }
 
     public function isBind(): bool

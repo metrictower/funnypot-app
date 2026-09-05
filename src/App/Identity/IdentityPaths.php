@@ -33,6 +33,7 @@ final class IdentityPaths
     public const MANIFEST_FILE = 'manifest.json';
 
     public const HTTP_BUNDLE = 'http.json';
+    public const SERVICE_PROFILE_BUNDLE = 'service-profile.json';
     public const SHELL_BUNDLE = 'shell.json';
     public const SIP_BUNDLE = 'sip.json';
     public const REDIS_BUNDLE = 'redis.json';
@@ -154,6 +155,12 @@ final class IdentityPaths
     public function httpBundlePath(): string
     {
         return $this->httpRuntimeDir() . '/' . self::HTTP_BUNDLE;
+    }
+
+    /** The scoped service-profile bundle, beside the HTTP bundle (0640 root:www-data). */
+    public function serviceProfileBundlePath(): string
+    {
+        return $this->httpRuntimeDir() . '/' . self::SERVICE_PROFILE_BUNDLE;
     }
 
     public function shellBundlePath(): string
