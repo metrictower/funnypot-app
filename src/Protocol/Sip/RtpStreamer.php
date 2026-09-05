@@ -13,16 +13,20 @@ namespace Funnypot\Protocol\Sip;
  */
 class RtpStreamer
 {
-    /** @var resource|null UDP socket for sending RTP media */
+    /** @var resource|null UDP socket for sending RTP media (null until a return-routable dialog opens) */
     private $udpSocket = null;
 
-    /** Fixed local media port to bind, so it can be published through Docker NAT (0 = ephemeral). */
+    /** The one cataloged/published fixed media port. Never an ephemeral fallback (Docker cannot NAT it). */
     private int $preferredPort;
+
+    /** @var array<string,bool> active return-routable dialog ids sharing the one media socket */
+    private array $activeDialogs = [];
 
     public function __construct(int $preferredPort = 0)
     {
         $this->preferredPort = $preferredPort;
-        $this->initSocket();
+        // Construction does NOT bind: the media socket opens only on a return-routable dialog, so an
+        // idle honeypot never holds an unused UDP port and a spoofed INVITE never opens one.
     }
 
     public function __destruct()
@@ -32,25 +36,33 @@ class RtpStreamer
         }
     }
 
-    private function initSocket(): void
+    /**
+     * Open the media socket for a return-routable dialog (called after the ACK To-tag check). The first
+     * active dialog binds the ONE fixed port; further dialogs share it. A fixed-port bind failure never
+     * falls back to an ephemeral port — an unpublished port could not receive caller media anyway, so
+     * the call simply streams no media rather than opening a socket Docker cannot reach.
+     */
+    public function activateDialog(string $dialogId): bool
     {
-        // A fixed media port can be published through Docker NAT so inbound RTP (caller audio, and
-        // out-of-band DTMF) actually reaches us. If it is already bound, fall back to an ephemeral
-        // port rather than failing — a live call is worth more than the port number.
-        if ($this->preferredPort > 0) {
+        $this->activeDialogs[$dialogId] = true;
+        if ($this->udpSocket === null && $this->preferredPort > 0) {
             $sock = @stream_socket_server("udp://0.0.0.0:{$this->preferredPort}", $errno, $errstr, STREAM_SERVER_BIND);
             if ($sock) {
                 stream_set_blocking($sock, false);
                 $this->udpSocket = $sock;
-
-                return;
             }
         }
 
-        $sock = @stream_socket_server('udp://0.0.0.0:0', $errno, $errstr, STREAM_SERVER_BIND);
-        if ($sock) {
-            stream_set_blocking($sock, false);
-            $this->udpSocket = $sock;
+        return $this->udpSocket !== null && is_resource($this->udpSocket);
+    }
+
+    /** Close the media socket once the last bounded dialog ends. */
+    public function deactivateDialog(string $dialogId): void
+    {
+        unset($this->activeDialogs[$dialogId]);
+        if ($this->activeDialogs === [] && $this->udpSocket !== null && is_resource($this->udpSocket)) {
+            @fclose($this->udpSocket);
+            $this->udpSocket = null;
         }
     }
 
@@ -84,8 +96,10 @@ class RtpStreamer
         }
 
         if (!$this->udpSocket || !is_resource($this->udpSocket)) {
-            $this->initSocket();
-            if (!$this->udpSocket) {
+            // A validated ACK opens the dialog; a send before that binds the one fixed port for this
+            // session's dialog. Never an ephemeral fallback: no fixed port ⇒ no media socket.
+            $this->activateDialog($s->callId);
+            if (!$this->udpSocket || !is_resource($this->udpSocket)) {
                 return false;
             }
         }
@@ -117,18 +131,13 @@ class RtpStreamer
     }
 
     /**
-     * Local UDP port bound by this RTP streamer instance.
+     * The advertised media port for SDP. It is the configured fixed port and does NOT imply a live
+     * socket (the socket opens only on a return-routable dialog); the SDP answer must carry the fixed
+     * port so a later ACK-bound socket lines up with what the caller was told.
      */
     public function getLocalPort(): int
     {
-        if ($this->udpSocket && is_resource($this->udpSocket)) {
-            $name = stream_socket_get_name($this->udpSocket, false);
-            if ($name && preg_match('/:(\d+)$/', $name, $m)) {
-                return (int) $m[1];
-            }
-        }
-
-        return 10000;
+        return $this->preferredPort > 0 ? $this->preferredPort : 10000;
     }
 
     /**

@@ -48,7 +48,9 @@ final class RtpStreamerTest extends TestCase
 
     public function test_send_packet_advances_sequence_and_timestamp(): void
     {
-        $streamer = new RtpStreamer();
+        // A fixed media port is required now (no ephemeral fallback); a send opens the dialog socket.
+        $port = self::freeUdpPort();
+        $streamer = new RtpStreamer($port);
         $s = new SipSession('call-seq-test', '127.0.0.1', 5060);
         $s->remoteRtpPort = 16402;
 
@@ -62,5 +64,40 @@ final class RtpStreamerTest extends TestCase
         $this->assertSame(1, $s->rtpPacketsSent);
         $this->assertSame(($startSeq + 1) & 0xffff, $s->rtpSeq);
         $this->assertSame(($startTimestamp + 160) & 0xffffffff, $s->rtpTimestamp);
+    }
+
+    public function test_no_socket_until_a_dialog_activates_and_no_ephemeral_fallback(): void
+    {
+        $port = self::freeUdpPort();
+        $streamer = new RtpStreamer($port);
+        // Construction binds nothing; the advertised port is the configured fixed port regardless.
+        $this->assertNull($streamer->getSocket());
+        $this->assertSame($port, $streamer->getLocalPort());
+
+        $this->assertTrue($streamer->activateDialog('call-a'));
+        $this->assertNotNull($streamer->getSocket());
+
+        // A second dialog shares the one socket; the last dialog to end closes it.
+        $streamer->activateDialog('call-b');
+        $streamer->deactivateDialog('call-a');
+        $this->assertNotNull($streamer->getSocket(), 'socket stays open while another dialog is active');
+        $streamer->deactivateDialog('call-b');
+        $this->assertNull($streamer->getSocket(), 'the last dialog closes the media socket');
+    }
+
+    public function test_zero_port_never_binds_an_ephemeral_socket(): void
+    {
+        $streamer = new RtpStreamer(0);
+        $this->assertFalse($streamer->activateDialog('call-x'));
+        $this->assertNull($streamer->getSocket());
+    }
+
+    private static function freeUdpPort(): int
+    {
+        $sock = stream_socket_server('udp://127.0.0.1:0', $errno, $errstr, STREAM_SERVER_BIND);
+        $name = (string) stream_socket_get_name($sock, false);
+        fclose($sock);
+
+        return (int) substr($name, strrpos($name, ':') + 1);
     }
 }

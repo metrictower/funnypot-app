@@ -1088,6 +1088,9 @@ final class SipServer
             $s->wasStreaming = true;   // FP-0247: latch — this call passed the ACK To-tag check
             $s->lastRtpSendTime = microtime(true);
             $s->lastInboundTime = microtime(true); // baseline for hangup/idle detection
+            // FP-0310: open the media socket only now — the validated ACK proves return-routability, so
+            // the one fixed media port binds for this dialog (never before, never an ephemeral port).
+            $this->rtpStreamer->activateDialog($s->callId);
 
             // B2: Bidirectional ACK confirms legitimate two-way connectivity!
             $this->logEvent([
@@ -1674,6 +1677,8 @@ final class SipServer
     {
         $duration = round($s->getDuration(), 2);
         $pkts = $s->rtpPacketsSent;
+        // FP-0310: release this dialog's hold on the shared media socket; the last active dialog closes it.
+        $this->rtpStreamer->deactivateDialog($s->callId);
 
         // Save the call audio as gzip'd 8kHz mu-law: mu-law is already half a PCM WAV, gzip then
         // collapses the long silence gaps (a scanner call shrinks to a few KB). The dashboard route
