@@ -309,6 +309,9 @@ if ($config->aiApiEnabled) {
         // Raw-prompt capture is a separate, sensitive opt-in: built only when armed, so it is inert (and
         // its file never created) by default.
         $config->aiPromptCaptureRaw ? new AiPromptCapture(AiPromptCapture::defaultPath($config->dbPath)) : null,
+        // Same shared ledger the gate above consults: the handler charges it after each real generation,
+        // so anonymously-reachable chat generation is bounded by the one global hourly budget.
+        budget: $llmBudget,
     ));
 }
 

@@ -7,6 +7,7 @@ namespace Funnypot\App\AiApi;
 use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\AiApi\Value\AssistantTurn;
 use Funnypot\App\Llm\LlmClient;
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Storage\HitStore;
@@ -87,6 +88,10 @@ class AiChatHandler
         private ?AiToolStateStore $toolState = null,
         // Opt-in raw-prompt capture (OFF by default); null unless the operator armed it.
         private ?AiPromptCapture $promptCapture = null,
+        // The global generations/hour ledger, shared with the ProbeGate that guards this path: the gate
+        // CHECKS it, this handler CHARGES it after each real sidecar call, so a rotating-IP chat flood is
+        // bounded per hour, not per source. Null = uncharged (tests / a wiring that carries no budget).
+        private ?LlmGenBudget $budget = null,
     ) {
         $this->usageEstimator = new UsageEstimator();
     }
@@ -269,6 +274,10 @@ class AiChatHandler
                 'seed' => random_int(1, PHP_INT_MAX),
             ]);
             if (is_string($raw) && trim($raw) !== '') {
+                // Charge at the point of actual spend — a sidecar call that produced output — so the
+                // hourly cap counts real generations, whether or not the sanitizer later rejects them
+                // (the compute was spent either way). Best-effort: a charge fault never blocks the reply.
+                $this->budget?->charge();
                 $clean = $this->sanitizeAnswer($raw);
                 if ($clean !== null) {
                     return $clean;

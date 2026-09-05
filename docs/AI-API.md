@@ -69,8 +69,10 @@ can't oversubscribe the sidecar between them: `FUNNYPOT_LLM_URL` (default
 `FUNNYPOT_LLM_N_PREDICT` (default `320`), `FUNNYPOT_LLM_MAX_CONCURRENT` (default `4`),
 `FUNNYPOT_LLM_VELOCITY_PER_60S` / `_PER_10M` (defaults `5` / `15`, the same probe-velocity gate used
 elsewhere), `FUNNYPOT_LLM_GENS_PER_HOUR` (default `60`, the global fresh-generation budget shared with
-the page layer — once the hour is spent the chat gate falls back to the static nonsense, no sidecar
-call). None of these are AI-API-specific — tune them once for the sidecar as a whole.
+the page layer — every real chat generation charges the same hourly ledger the gate checks, so an
+IP-rotating chat flood is bounded per hour, not per source (the per-IP velocity gate cannot catch
+one); once the hour is spent the chat gate falls back to the static nonsense, no sidecar call). None
+of these are AI-API-specific — tune them once for the sidecar as a whole.
 
 ## How the nonsense works
 
@@ -111,9 +113,9 @@ corrupted question straight:
    is emitted, so a fault never produces a half-finished stream:
    - Sidecar reachable, gate open, concurrency slot free → live LLM answer (straight within the
      believable-first budget, word-swapped once past it).
-   - Probe gate declines (bulk-scan pin, velocity, plausibility), no concurrency slot, sidecar
-     timeout/error/empty output → static curated nonsense answer (deterministic per question, so a
-     retried question gets the same wrong answer).
+   - Probe gate declines (bulk-scan pin, velocity, plausibility, hourly gen-budget spent), no
+     concurrency slot, sidecar timeout/error/empty output → static curated nonsense answer
+     (deterministic per question, so a retried question gets the same wrong answer).
    - `FUNNYPOT_AI_API` unset → core's Tier-1 buffered floor answers instead, in the same dialect
      shape, `stream:false`.
 

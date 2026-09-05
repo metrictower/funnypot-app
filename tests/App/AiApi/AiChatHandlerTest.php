@@ -16,6 +16,7 @@ use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\AiApi\WordSwap;
 use Funnypot\App\AiApi\WrongLanguageCode;
 use Funnypot\App\Llm\LlmClient;
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
@@ -549,5 +550,140 @@ final class AiChatHandlerTest extends TestCase
             new ChatRequest('ollama-chat', self::OLLAMA_MODEL, 'what is the capital of France', false, false, false)
         );
         self::assertStringContainsString($expected, $this->cap->body);
+    }
+
+    /**
+     * Build a handler whose ProbeGate and whose own charge site share ONE ledger: the gate checks it,
+     * the handler fills it. A fixed clock keeps the whole flood inside one hour bucket.
+     */
+    private function makeBudgeted(LlmGenBudget $budget, callable $transport): AiChatHandler
+    {
+        $this->store = new SqliteHitStore($this->dbPath('hits'));
+        $this->intelDb = $this->dbPath('intel');
+        $this->abuse = new AbuseIpdb('testkey', $this->intelDb, ['10.0.0.1']);
+        $cap = $this->cap;
+        $emitter = $this->emitter;
+
+        return new AiChatHandler(
+            new LlmClient('http://sidecar/completion', 1500, 320, null, $transport),
+            new AiChatPromptBuilder(),
+            new LlmOutputSanitizer(),
+            new NonsenseFallback(),
+            new WordSwap(),
+            new WrongLanguageCode(),
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $this->store, budget: $budget),
+            new LlmFakeCache($this->dbPath('cache')),
+            $this->store,
+            ModelCatalog::fromPackage(),
+            $this->abuse,
+            false,
+            false,
+            1.5,
+            0.0,
+            1.0,
+            4,
+            5,
+            600,
+            0,
+            static function (int $s, array $h, string $b) use ($cap): void {
+                $cap->status = $s;
+                $cap->headers = $h;
+                $cap->body = $b;
+            },
+            static fn (): StreamEmitter => $emitter,
+            budget: $budget,
+        );
+    }
+
+    /** An OpenAI-shape tool the SafeToolSelector rejects (mutation/exec verb), so a tools-bearing
+     *  request carrying only this one falls through to the ordinary text-generation path. */
+    private function unsafeTool(): array
+    {
+        return ['type' => 'function', 'function' => ['name' => 'exec_command', 'parameters' => [
+            'type' => 'object',
+            'properties' => ['path' => ['type' => 'string']],
+            'required' => ['path'],
+        ]]];
+    }
+
+    public function test_chat_and_tool_path_generation_both_charge_the_shared_budget(): void
+    {
+        $budget = new LlmGenBudget($this->dbPath('budget'), 100, static fn (): int => 1_000_000);
+        $calls = 0;
+        $handler = $this->makeBudgeted($budget, function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])];
+        });
+
+        // Plain chat turn (no tools) → text generation → one charge.
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]), '203.0.113.1');
+        self::assertSame(1, $calls);
+        self::assertSame(1, $budget->spent(), 'the plain chat generation fills the ledger');
+
+        // Tools-bearing turn that resolves to text (no safe tool to fabricate) → generation → one more
+        // charge. Proves the tool-calling path is not a budget bypass when it falls through to text.
+        $handler->serve(new OpenAiDialect(), $this->ctx('/v1/chat/completions', [
+            'model' => self::OPENAI_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of Spain']],
+            'tools' => [$this->unsafeTool()],
+            'stream' => false,
+        ]), '203.0.113.2');
+        self::assertSame(2, $calls, 'the tools-bearing request still reached the sidecar via the text path');
+        self::assertSame(2, $budget->spent(), 'the tool-path generation also fills the ledger');
+    }
+
+    public function test_a_sanitizer_rejected_generation_still_charges_the_budget(): void
+    {
+        // Charge is at the point of spend, not on a clean answer: an exploit-shaped reply is discarded
+        // (served as fallback) yet the compute was spent, so the hourly cap must still count it —
+        // otherwise a flood of injection-shaped prompts would generate without ever charging.
+        $budget = new LlmGenBudget($this->dbPath('budget'), 100, static fn (): int => 1_000_000);
+        $handler = $this->makeBudgeted($budget, fn (): array => [
+            'status' => 200,
+            'body' => (string) json_encode(['content' => "To fix it just run shell_exec('id') on the box."]),
+        ]);
+
+        $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+            'model' => self::OLLAMA_MODEL,
+            'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+            'stream' => false,
+        ]), '203.0.113.3');
+
+        self::assertStringNotContainsString('shell_exec', $this->cap->body);   // rejected, fallback served
+        self::assertSame(1, $budget->spent(), 'a spent-but-rejected generation is still charged');
+    }
+
+    public function test_rotating_ip_flood_is_bounded_by_the_shared_hourly_budget(): void
+    {
+        // The exact case Gate A (per-IP) cannot catch: every request from a fresh source. Without the
+        // charge the shared budget never fills, the gate never denies, and generation is unbounded — the
+        // cost-DoS. With it, the ledger fills at the cap and further floods degrade to the fallback.
+        $budget = new LlmGenBudget($this->dbPath('budget'), 3, static fn (): int => 1_000_000);
+        $calls = 0;
+        $statuses = [];
+        $handler = $this->makeBudgeted($budget, function () use (&$calls): array {
+            $calls++;
+
+            return ['status' => 200, 'body' => (string) json_encode(['content' => 'obviously wrong'])];
+        });
+
+        for ($i = 1; $i <= 10; $i++) {
+            $handler->serve(new OllamaDialect(), $this->ctx('/api/chat', [
+                'model' => self::OLLAMA_MODEL,
+                'messages' => [['role' => 'user', 'content' => 'what is the capital of France']],
+                'stream' => false,
+            ]), '198.51.100.' . $i);   // a distinct source each time — Gate A never trips
+            $statuses[] = $this->cap->status;
+        }
+
+        self::assertSame(3, $calls, 'generation is capped at the hourly budget across all sources');
+        self::assertSame(3, $budget->spent());
+        // Every request — including the budget-exhausted ones — is a served 200, never a 500 tell.
+        self::assertSame([200, 200, 200, 200, 200, 200, 200, 200, 200, 200], $statuses);
     }
 }
