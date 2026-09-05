@@ -22,7 +22,7 @@ and writes back the reply that the scanner's own matcher is looking for. The sca
 believable, completely wrong vulnerability report, and you log every move it made.
 
 This repo is the **standalone honeypot app**: a Docker image that stands the whole thing up on your own
-box. It runs the HTTP deception engine across the common web ports and adds 38 network-service honeypots
+box. It runs the HTTP deception engine across the common web ports and adds 40 network-service honeypots
 (a real pure-PHP SSH server, an Asterisk-persona **VoIP PBX** that answers scam calls with recorded
 voices, a telnet fake shell, redis, ftp, smtp, mysql, postgres, mongodb, modbus and more). Every
 listener is fault-isolated and auto-respawned, so one bad packet can't take a service down. It ships
@@ -173,7 +173,7 @@ CVEs, attack classes and services this box pretends to be.
 
 The [`demo/`](demo/) directory is a complete front controller: a welcome homepage and live dashboard at
 `/`, with every other request run through the engine and logged. The image runs nginx and php-fpm across
-the web ports and launches all 38 service listeners (each auto-respawned on a bounded backoff if it
+the web ports and launches all 40 service listeners (each auto-respawned on a bounded backoff if it
 ever exits). Which port belongs to whom — nginx, a listener, a host-side forward — is one checked
 inventory, [`demo/ports.json`](demo/ports.json) (`php scripts/check-ports.php`).
 

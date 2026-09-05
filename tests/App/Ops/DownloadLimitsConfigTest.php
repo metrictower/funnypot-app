@@ -93,6 +93,8 @@ final class DownloadLimitsConfigTest extends TestCase
     {
         $conf = (string) file_get_contents(self::root() . '/demo/funnypot-location.conf');
         $named = self::directives(self::block($conf, 'location @funnypot_dl_throttled'));
+        // An empty types table, or mime.types types the 429 body by the request's extension.
+        self::assertContains('types { }', $named);
         self::assertContains('default_type text/plain;', $named);
         self::assertContains('add_header Retry-After 10 always;', $named);
         self::assertContains('add_header Cache-Control no-store always;', $named);
