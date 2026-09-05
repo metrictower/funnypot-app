@@ -138,6 +138,18 @@ final class SqliteEngagementStoreTest extends TestCase
         $sum = $s->summary(0);
         self::assertSame(2, $sum['episodes'], 'now < last_seen never lengthens an episode');
         self::assertSame(1, $sum['health']['clock_rollback']);
+
+        // The clock advances again but stays below the ORIGINAL episode's last_seen: the replacement
+        // (newest row, earlier started_at) must be the current episode, or every request re-splits.
+        for ($i = 0; $i < 3; $i++) {
+            $this->now += 3;
+            self::assertSame(EngagementStore::RECORDED, $s->resolveAndRecord($this->key(), $this->event()));
+        }
+
+        $sum = $s->summary(0);
+        self::assertSame(2, $sum['episodes'], 'the replacement episode absorbs the later events');
+        self::assertSame(5, $sum['events']);
+        self::assertSame(1, $sum['health']['clock_rollback'], 'one rollback is counted once, not once per request');
     }
 
     // --- caps --------------------------------------------------------------------------------------

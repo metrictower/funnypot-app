@@ -509,10 +509,13 @@ final class SqliteEngagementStore implements EngagementStore, EngagementAnalytic
     /** @return array{episode_id:string,started_at:int,last_seen:int,event_count:int,artifact_count:int,bytes_accum:int}|null */
     private function currentEpisode(string $digest): ?array
     {
+        // Most recently CREATED, not latest started_at: a clock-rollback split creates an episode
+        // with an earlier started_at than the one it replaces, and ordering by started_at would
+        // keep re-selecting the old episode (and re-splitting) until the clock caught up.
         $st = $this->prepared(
             'current_episode',
             'SELECT episode_id, started_at, last_seen, event_count, artifact_count, bytes_accum
-             FROM engagement_episodes WHERE evidence_digest = :d ORDER BY started_at DESC, rowid DESC LIMIT 1'
+             FROM engagement_episodes WHERE evidence_digest = :d ORDER BY rowid DESC LIMIT 1'
         );
         $st->execute([':d' => $digest]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
