@@ -27,7 +27,15 @@ use Funnypot\App\Build\ProtocolCompiler;
 use Funnypot\App\Emulation\EmulationCatalog;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Identity\IdentityBootstrapException;
+use Funnypot\App\Identity\IdentityPaths;
 use Funnypot\App\Identity\IdentityPreparer;
+use Funnypot\App\Identity\ServiceProfileIdentity;
+use Funnypot\App\Service\ServiceCapabilityPolicy;
+use Funnypot\App\Service\ServiceCatalog;
+use Funnypot\App\Service\ServiceCli;
+use Funnypot\App\Service\ServiceProfilePreparer;
+use Funnypot\App\Service\ServiceStatusReader;
+use Funnypot\App\Service\ServicePaths;
 
 $root = dirname(__DIR__);
 $autoload = $root . '/vendor/autoload.php';
@@ -183,5 +191,98 @@ if ($command === 'vulns:sync' || $command === 'vulns:list') {
     exit(0);
 }
 
-fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list | identity:prepare | identity:status\n");
+if ($command === 'services:status') {
+    $env = static fn (string $k) => getenv($k);
+    $paths = ServicePaths::fromEnvironment($root . '/demo', $env);
+    $reader = new ServiceStatusReader($paths->statusFile());
+    if (in_array('--healthcheck', $argvv, true)) {
+        exit(ServiceCli::healthcheck($reader));
+    }
+    foreach ($argvv as $arg) {
+        if (strncmp($arg, '--wait-ready=', 13) === 0) {
+            $seconds = (int) substr($arg, 13);
+            $clock = static fn (): int => time();
+            $sleep = static function (int $s): void { sleep($s); };
+            exit(ServiceCli::waitReady($reader, $seconds, $clock, $sleep));
+        }
+    }
+    $view = $reader->current();
+    if (in_array('--json', $argvv, true)) {
+        $snap = $view->snapshot();
+        fwrite(STDOUT, json_encode([
+            'status_freshness' => $view->freshness(),
+            'base_family' => $view->profile()->baseFamily(),
+            'variant_id' => $view->profile()->variantId(),
+            'state' => $snap?->state(),
+            'acceptance_mode' => $snap?->acceptanceMode(),
+        ], JSON_UNESCAPED_SLASHES) . "\n");
+        exit(0);
+    }
+    fwrite(STDOUT, 'services: ' . $view->freshness() . ' (' . $view->profile()->baseFamily() . ")\n");
+    exit($view->freshness() === 'fresh' ? 0 : 1);
+}
+
+if ($command === 'services:prepare' || $command === 'bootstrap:prepare') {
+    $target = 'deploy';
+    $publish = 'flex';
+    $json = false;
+    foreach ($argvv as $arg) {
+        if (strncmp($arg, '--target=', 9) === 0) {
+            $target = substr($arg, 9);
+        } elseif (strncmp($arg, '--publish=', 10) === 0) {
+            $publish = substr($arg, 10);
+        } elseif ($arg === '--json') {
+            $json = true;
+        } else {
+            fwrite(STDERR, "usage: funnypot {$command} [--target=deploy|compose] [--publish=flex|exact] [--json]\n");
+            exit(2);
+        }
+    }
+    if (!in_array($target, ['deploy', 'compose'], true) || !in_array($publish, ['flex', 'exact'], true)) {
+        fwrite(STDERR, "{$command}: --target must be deploy|compose and --publish flex|exact\n");
+        exit(2);
+    }
+    $env = static fn (string $k) => getenv($k);
+    // bootstrap:prepare runs identity preparation first, in this same PHP process, because the scoped
+    // /run bundle it produces must be consumed before the no-network preflight container exits.
+    if ($command === 'bootstrap:prepare') {
+        try {
+            IdentityPreparer::fromEnvironment($root . '/demo', $env)->prepare()->close();
+        } catch (IdentityBootstrapException $e) {
+            fwrite(STDERR, "bootstrap:prepare failed: {$e->errorCode()} (remedy: {$e->remedy()})\n");
+            exit(1);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'bootstrap:prepare failed: unexpected (' . (new \ReflectionClass($e))->getShortName() . ")\n");
+            exit(1);
+        }
+    }
+    try {
+        $idPaths = IdentityPaths::fromEnvironment($root . '/demo', $env);
+        $identity = ServiceProfileIdentity::load($idPaths);
+        $paths = ServicePaths::fromEnvironment($root . '/demo', $env);
+        $catalog = ServiceCatalog::fromPackage();
+        $dockerOn = in_array(strtolower((string) $env('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true);
+        $policy = ServiceCapabilityPolicy::fromEnvironment($target, $dockerOn, $env);
+        $preparer = new ServiceProfilePreparer($paths, $catalog, $identity, $policy, $target, $publish, $identity->publicPersonaHash(), null, null, $env);
+        $manifest = $preparer->prepare();
+    } catch (\Throwable $e) {
+        fwrite(STDERR, "{$command} failed: unexpected (" . (new \ReflectionClass($e))->getShortName() . ")\n");
+        exit(1);
+    }
+    if ($json) {
+        fwrite(STDOUT, $manifest->toJson());
+        exit(0);
+    }
+    $art = $manifest->effectiveArtifact();
+    fwrite(STDOUT, sprintf(
+        "services: prepared (target=%s, publish=%s, generation=%s, revision=%d)\n",
+        $target,
+        $publish,
+        $art->generation(),
+        $art->revision(),
+    ));
+    exit(0);
+}
+
+fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list | identity:prepare | identity:status | services:prepare | services:status | bootstrap:prepare\n");
 exit($command === '' || $command === 'help' || $command === '--help' ? 0 : 2);
