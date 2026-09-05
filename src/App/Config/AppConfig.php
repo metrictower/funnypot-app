@@ -119,6 +119,9 @@ final class AppConfig
         /** Distinct paths in 60s / 10min that flag an IP as bulk-scanning (Gate A). */
         public int $llmVelocityPer60s,
         public int $llmVelocityPer10m,
+        /** Fresh LLM generations per hour across ALL IPs — the rotating-IP backstop Gate A cannot be.
+         *  Over it, cached fakes keep serving and new paths get the plain 404 until the next hour. */
+        public int $llmGensPerHour,
         /** IPs/CIDRs exempt from the LLM velocity gate — operator test IPs generate unlimited fakes. */
         public array $llmGateAllowIps,
         /** Endless throttled backup-download bait (fleet console). On by default; the client SW reads
@@ -229,6 +232,25 @@ final class AppConfig
     public function httpStyle(): string
     {
         return in_array($this->style, ['realistic', 'taunt'], true) ? $this->style : 'realistic';
+    }
+
+    /**
+     * The deploy's real secret values, for the LLM output sanitizer's canary scan: a generated body
+     * carrying any of them is rejected outright. Only the env-only secrets this object holds — the
+     * install identity's keys live in the scoped runtime bundles and never reach a prompt or the
+     * sidecar. Values shorter than 8 bytes are dropped (a short common word would reject most bodies).
+     * Never log or display the result; it is handed straight to the sanitizer and nowhere else.
+     *
+     * @return string[]
+     */
+    public function secretCanaries(): array
+    {
+        $values = [
+            $this->honeytokenKey, $this->adminPassword, $this->adminKnock,
+            $this->abuseIpdbKey, $this->threatIntelKey, $this->analyticsKey,
+        ];
+
+        return array_values(array_unique(array_filter($values, static fn (string $v): bool => strlen($v) >= 8)));
     }
 
     /**
@@ -349,11 +371,14 @@ final class AppConfig
             llmCacheDb: $str('FUNNYPOT_LLM_CACHE_DB', $store . '/llm_cache.sqlite'),
             llmCacheMaxBytes: (int) $str('FUNNYPOT_LLM_CACHE_MAX_BYTES', '0'),
             llmMaxConcurrent: max(1, (int) $str('FUNNYPOT_LLM_MAX_CONCURRENT', '4')),
-            llmPromptVersion: $str('FUNNYPOT_LLM_PROMPT_VERSION', 'v2'),
+            // v3: direct-kind bodies are now sampled with a per-install, per-path seed; the bump retires
+            // every entry generated under the old fleet-wide seed instead of serving it until evicted.
+            llmPromptVersion: $str('FUNNYPOT_LLM_PROMPT_VERSION', 'v3'),
             llmBreakerThreshold: max(1, (int) $str('FUNNYPOT_LLM_BREAKER_THRESHOLD', '5')),
             llmBreakerCooldownS: max(1, (int) $str('FUNNYPOT_LLM_BREAKER_COOLDOWN_S', '30')),
             llmVelocityPer60s: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_60S', '5')),
             llmVelocityPer10m: max(1, (int) $str('FUNNYPOT_LLM_VELOCITY_PER_10M', '15')),
+            llmGensPerHour: max(1, (int) $str('FUNNYPOT_LLM_GENS_PER_HOUR', '60')),
             llmGateAllowIps: array_values(array_filter(array_map('trim', explode(',', $str('FUNNYPOT_LLM_GATE_ALLOW', ''))))),
             // Endless-download bait: on unless explicitly "0". Throttle knobs clamped to sane bounds so
             // a bad env value can't produce a firehose (instant tell + fills disk) or a dead stall.

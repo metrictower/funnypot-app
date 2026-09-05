@@ -55,9 +55,10 @@ These four sampling/gating vars are read directly by `AppConfig::fromEnv()` — 
 `in_array(strtolower(...), ['1','on','true','yes'])` truthy-string parsing as `FUNNYPOT_LLM`).
 
 **Chat sampling is separate from HTML page-gen.** `FUNNYPOT_AI_TEMP`/`_MIN_P`/`_TOP_P` apply only to
-the chat path. The LLM fake-page layer keeps its own low, fixed-seed sampling for HTML/JSON bodies —
-a helpful model answers correctly at low temperature, but a believable *wrong* chat answer needs a
-high temperature and `min_p` 0, so the two paths must not share settings.
+the chat path. The LLM fake-page layer keeps its own low-temperature sampling with a per-install,
+per-path derived seed for HTML/JSON bodies — a helpful model answers correctly at low temperature, but
+a believable *wrong* chat answer needs a high temperature and `min_p` 0, so the two paths must not
+share settings.
 
 **Sidecar reuse.** The chat handler builds its own `LlmClient` + circuit breaker but points at the
 same sidecar as the page-realism layer and shares its concurrency slot cache, so the two features
@@ -65,7 +66,9 @@ can't oversubscribe the sidecar between them: `FUNNYPOT_LLM_URL` (default
 `http://funnypot-llm:8080/completion`), `FUNNYPOT_LLM_TIMEOUT_MS` (default `9000`),
 `FUNNYPOT_LLM_N_PREDICT` (default `320`), `FUNNYPOT_LLM_MAX_CONCURRENT` (default `4`),
 `FUNNYPOT_LLM_VELOCITY_PER_60S` / `_PER_10M` (defaults `5` / `15`, the same probe-velocity gate used
-elsewhere). None of these are AI-API-specific — tune them once for the sidecar as a whole.
+elsewhere), `FUNNYPOT_LLM_GENS_PER_HOUR` (default `60`, the global fresh-generation budget shared with
+the page layer — once the hour is spent the chat gate falls back to the static nonsense, no sidecar
+call). None of these are AI-API-specific — tune them once for the sidecar as a whole.
 
 ## How the nonsense works
 

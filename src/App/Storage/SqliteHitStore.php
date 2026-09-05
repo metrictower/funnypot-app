@@ -417,9 +417,12 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
             return ['recent' => 0, 'extended' => 0];
         }
         $now = time();
+        // Only genuine fall-throughs count as probing: a row that was served (engine fake, decoy
+        // archive, LLM fake, panel) or matched (an attack payload — reported, not shed) is engagement
+        // with our own bait, and a human following decoy links must never accrue velocity from it.
         $st = $this->db->prepare(
             'SELECT COUNT(DISTINCT CASE WHEN ts >= :c60 THEN path END) recent, COUNT(DISTINCT path) extended
-             FROM hits WHERE ip = :ip AND ts >= :c600'
+             FROM hits WHERE ip = :ip AND ts >= :c600 AND served = 0 AND matched = 0'
         );
         $st->execute([':ip' => $ip, ':c60' => gmdate('c', $now - 60), ':c600' => gmdate('c', $now - 600)]);
         $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];

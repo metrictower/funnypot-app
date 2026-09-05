@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App;
 
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
@@ -154,5 +155,80 @@ final class ProbeGateTest extends TestCase
         $v = new VelocityTracker(100, 1000);
         self::assertFalse($v->isBulkScan(['recent' => 50, 'extended' => 500]));
         self::assertTrue($v->isBulkScan(['recent' => 100, 'extended' => 0]));
+    }
+
+    // --- the global generations/hour budget behind Gate A ---
+
+    private function budget(int $perHour, int $charged = 0): LlmGenBudget
+    {
+        $p = sys_get_temp_dir() . '/fp_gate_budget_' . bin2hex(random_bytes(6)) . '.sqlite';
+        $this->tmp[] = $p;
+        $b = new LlmGenBudget($p, $perHour);
+        for ($i = 0; $i < $charged; $i++) {
+            $b->charge();
+        }
+
+        return $b;
+    }
+
+    /** @param string[] $allow */
+    private function budgetGate(SqliteHitStore $s, LlmGenBudget $b, array $allow = []): ProbeGate
+    {
+        return new ProbeGate(new ProbeClassifier(), new VelocityTracker(5, 15), $s, 24, $allow, $b);
+    }
+
+    public function test_exhausted_global_budget_denies_with_its_own_reason(): void
+    {
+        $d = $this->budgetGate($this->store(), $this->budget(2, 2))->decide('GET', '/super-rare-app/login.asp', '2.2.2.2');
+        self::assertFalse($d['generate']);
+        self::assertSame('gen-budget', $d['reason']);
+
+        // One under the cap still generates.
+        $d = $this->budgetGate($this->store(), $this->budget(2, 1))->decide('GET', '/super-rare-app/login.asp', '2.2.2.2');
+        self::assertTrue($d['generate']);
+        self::assertSame('plausible', $d['reason']);
+    }
+
+    public function test_allowlisted_ip_bypasses_the_global_budget(): void
+    {
+        $d = $this->budgetGate($this->store(), $this->budget(1, 1), ['7.7.7.7'])->decide('GET', '/admin/login.php', '7.7.7.7');
+        self::assertTrue($d['generate']);
+        self::assertSame('allowlisted', $d['reason']);
+    }
+
+    public function test_budget_storage_fault_fails_closed_to_deny(): void
+    {
+        // An unopenable ledger must stop fresh generation (never unbounded spend) — cache and the
+        // static 404 still serve, so this is neither a self-DoS nor a tell.
+        $b = new LlmGenBudget('/dev/null/no-such-dir/budget.sqlite', 1000);
+        $d = $this->budgetGate($this->store(), $b)->decide('GET', '/super-rare-app/login.asp', '2.2.2.2');
+        self::assertFalse($d['generate']);
+        self::assertSame('gen-budget', $d['reason']);
+    }
+
+    public function test_bulk_scan_pin_still_lands_while_the_budget_is_spent(): void
+    {
+        $s = $this->store();
+        foreach (['/a', '/b', '/c', '/d', '/e', '/f'] as $p) {
+            $s->append(['ts' => gmdate('c'), 'ip' => '6.6.6.6', 'method' => 'GET', 'path' => $p]);
+        }
+        $d = $this->budgetGate($s, $this->budget(1, 1))->decide('GET', '/admin/login.php', '6.6.6.6');
+        self::assertSame('bulk-scan', $d['reason'], 'velocity is judged before the budget so the pin is written');
+        self::assertTrue($s->isBulkFlagged('6.6.6.6'));
+    }
+
+    public function test_human_following_served_decoy_links_is_never_pinned(): void
+    {
+        // Six served path-pairs inside the window — the controller's main row (served, unmatched) plus
+        // the responder's own llm-fake row per path, the real dual-row write pattern. None is probing.
+        $s = $this->store();
+        foreach (['/portal/a', '/portal/b', '/portal/c', '/portal/d', '/portal/e', '/portal/f'] as $p) {
+            $s->append(['ts' => gmdate('c'), 'ip' => '3.3.3.3', 'method' => 'GET', 'path' => $p, 'served' => true]);
+            $s->append(['ts' => gmdate('c'), 'ip' => '3.3.3.3', 'method' => 'GET', 'path' => $p, 'event' => 'llm-fake', 'served' => true, 'matched' => true]);
+        }
+        $d = $this->gate($s)->decide('GET', '/super-rare-app/login.asp', '3.3.3.3');
+        self::assertTrue($d['generate']);
+        self::assertSame('plausible', $d['reason']);
+        self::assertFalse($s->isBulkFlagged('3.3.3.3'));
     }
 }

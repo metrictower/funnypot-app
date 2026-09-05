@@ -350,6 +350,50 @@ final class SqliteHitStoreTest extends TestCase
         self::assertSame(['recent' => 0, 'extended' => 0], $store->probeVelocity('unknown'));
     }
 
+    /** @return array<string,mixed> a minimal in-window row for the velocity tests */
+    private static function velocityRow(string $path, array $flags = []): array
+    {
+        return ['ts' => gmdate('c'), 'ip' => '9.9.9.9', 'method' => 'GET', 'path' => $path] + $flags;
+    }
+
+    public function test_probe_velocity_counts_only_unserved_unmatched_fall_throughs(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+
+        // LLM-fake follows, the real dual-row pattern: the controller's main row (served, unmatched —
+        // the flag reflects the actual outcome) plus the responder's own llm-fake row.
+        foreach (['/p1', '/p2', '/p3', '/p4', '/p5', '/p6'] as $p) {
+            $store->append(self::velocityRow($p, ['served' => true]));
+            $store->append(self::velocityRow($p, ['event' => 'llm-fake', 'served' => true, 'matched' => true]));
+        }
+        self::assertSame(['recent' => 0, 'extended' => 0], $store->probeVelocity('9.9.9.9'));
+
+        // A decoy-archive download: main row served + the archive's own served/matched event row.
+        $store->append(self::velocityRow('/backup.zip', ['served' => true]));
+        $store->append(self::velocityRow('/backup.zip', ['event' => 'decoy-archive', 'served' => true, 'matched' => true]));
+        // An engine-served template fake, and an attack payload on an unknown path (matched, reported).
+        $store->append(self::velocityRow('/wp-login.php', ['matched' => true, 'served' => true]));
+        $store->append(self::velocityRow('/foo.php', ['matched' => true, 'served' => false]));
+        self::assertSame(['recent' => 0, 'extended' => 0], $store->probeVelocity('9.9.9.9'));
+
+        // Genuine plain-404 fall-throughs count, distinct — mixed in with the served stream above.
+        foreach (['/x1', '/x2', '/x3', '/x4', '/x5', '/x1'] as $p) {
+            $store->append(self::velocityRow($p));
+        }
+        self::assertSame(['recent' => 5, 'extended' => 5], $store->probeVelocity('9.9.9.9'));
+    }
+
+    public function test_probe_velocity_would_count_a_served_fake_logged_as_an_unserved_miss(): void
+    {
+        // Regression pin for the controller's write-time flag: the filter is per ROW, so a main row
+        // written before the serve decision (served=0) is NOT rescued by the responder's own served row.
+        // That is why the controller logs after the serve branch.
+        $store = new SqliteHitStore($this->dbPath());
+        $store->append(self::velocityRow('/p1'));
+        $store->append(self::velocityRow('/p1', ['event' => 'llm-fake', 'served' => true, 'matched' => true]));
+        self::assertSame(['recent' => 1, 'extended' => 1], $store->probeVelocity('9.9.9.9'));
+    }
+
     public function test_recent_event_count(): void
     {
         $store = new SqliteHitStore($this->dbPath());

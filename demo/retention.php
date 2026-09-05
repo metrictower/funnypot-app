@@ -16,6 +16,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Engagement\EngagementCaps;
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Storage\LlmFakeCache;
 use Funnypot\App\Storage\RawCapture;
 use Funnypot\App\Storage\SqliteEngagementStore;
@@ -36,8 +37,10 @@ if ($config->llmEnabled && is_file($config->llmCacheDb)) {
         $staleSecs = max(15, (int) ceil($config->llmTimeoutMs / 1000) + 30);
         $stale = $cache->reapInflight($staleSecs);
         $evicted = $config->llmCacheMaxBytes > 0 ? $cache->retainBytes($config->llmCacheMaxBytes) : 0;
-        if ($stale > 0 || $evicted > 0) {
-            fwrite(STDERR, sprintf("retention: llm cache reaped %d locks, evicted %d entries\n", $stale, $evicted));
+        // The generations/hour ledger lives in the same file; keep only the current few hour buckets.
+        $pruned = (new LlmGenBudget($config->llmCacheDb, $config->llmGensPerHour))->pruneLedger();
+        if ($stale > 0 || $evicted > 0 || $pruned > 0) {
+            fwrite(STDERR, sprintf("retention: llm cache reaped %d locks, evicted %d entries, pruned %d budget buckets\n", $stale, $evicted, $pruned));
         }
     } catch (Throwable $e) {
         fwrite(STDERR, 'retention (llm): ' . $e->getMessage() . "\n");

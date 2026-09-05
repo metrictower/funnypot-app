@@ -38,6 +38,9 @@ final class LlmFakeResponder
         private int $personaSeed = 0,
         private string $htmlArtifactVersion = '',
         private ?FakePersistenceStore $persistence = null,
+        /** The global generations/hour ledger, charged on every successful sidecar call; the gate
+         *  consults the same instance. Null = uncharged (tests / a wiring that carries no budget). */
+        private ?LlmGenBudget $budget = null,
     ) {
     }
 
@@ -158,10 +161,17 @@ final class LlmFakeResponder
         }
 
         try {
-            $raw = $this->client->generate($profile->prompt->build($context->method, $context->path), $profile->grammar);
+            $raw = $this->client->generate(
+                $profile->prompt->build($context->method, $context->path),
+                $profile->grammar,
+                ['seed' => $this->deriveSeed($key)]
+            );
             if ($raw === null) {
                 return null;                                  // failure is never cached
             }
+            // Charge at the point of actual spend — a sidecar call that produced output — not on a
+            // declined gate or a transport failure, so the hourly cap counts real generations only.
+            $this->budget?->charge();
             if ($profile->renderer !== null) {
                 // Slot-based path: the model supplies typed field values (not markup), the trusted
                 // skin assembles the page. Validate the decoded slots, render, then re-validate the
@@ -192,6 +202,18 @@ final class LlmFakeResponder
         } finally {
             $this->cache->release($key);
         }
+    }
+
+    /**
+     * The sampling seed for one generation: the install's persona seed mixed with the normalised cache
+     * key, folded to a stable 31-bit int. Deterministic per install + path, so an LRU-evicted entry
+     * regenerates the same body (the cache's byte-identical-forever contract holds); distinct across
+     * paths (no seed-correlation tell) and across installs (each carries its own persona seed). A fixed
+     * fleet-wide seed made every persona-less kind byte-identical on every deployment.
+     */
+    private function deriveSeed(string $key): int
+    {
+        return ((int) hexdec(substr(hash('sha256', $this->personaSeed . '|llm-seed|' . $key), 0, 8))) & 0x7fffffff;
     }
 
     private function build(int $status, string $contentType, string $body): SynthesizedResponse

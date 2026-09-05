@@ -6,6 +6,7 @@ namespace Funnypot\Tests\App;
 
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmFakeResponder;
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\LlmResponseProfiles;
 use Funnypot\App\Llm\ProbeClassifier;
@@ -243,6 +244,119 @@ final class LlmFakeResponderTest extends TestCase
         '<!doctype html><html><head><title>Sign in</title></head><body><h1>Sign in</h1>'
         . '<form method="post" action="/x"><input name="user"><input name="pass" type="password">'
         . '<button>Log in</button></form></body></html>';
+
+    /**
+     * A responder whose transport captures the last request payload and counts calls, with the persona
+     * seed and an optional shared budget/cache — for the seed-derivation and budget tests.
+     *
+     * @return array{0:LlmFakeResponder,1:callable():?array<string,mixed>,2:callable():int} responder, last payload, call count
+     */
+    private function makeCapturing(int $personaSeed, ?LlmGenBudget $budget = null, ?LlmFakeCache $cache = null, int $status = 200): array
+    {
+        $captured = null;
+        $calls = 0;
+        $transport = function (string $url, string $body) use (&$captured, &$calls, $status): array {
+            $captured = json_decode($body, true);
+            $calls++;
+
+            return ['status' => $status, 'body' => (string) json_encode(['content' => self::GOOD_HTML])];
+        };
+        $store = new SqliteHitStore($this->dbPath('hits'));
+        $responder = new LlmFakeResponder(
+            new ProbeGate(new ProbeClassifier(), new VelocityTracker(), $store, 24, [], $budget),
+            $cache ?? new LlmFakeCache($this->dbPath('cache')),
+            new LlmClient('http://sidecar/completion', 1500, 320, null, $transport),
+            new LlmOutputSanitizer(),
+            $store,
+            new LlmResponseProfiles('nginx', 'root ::= "<"', 'root ::= "{"'),
+            'v1',
+            4,
+            $personaSeed,
+            '',
+            null,
+            $budget,
+        );
+
+        return [
+            $responder,
+            function () use (&$captured): ?array {
+                return $captured;
+            },
+            function () use (&$calls): int {
+                return $calls;
+            },
+        ];
+    }
+
+    public function test_seed_is_derived_from_persona_and_path_not_a_fixed_default(): void
+    {
+        [$r, $last] = $this->makeCapturing(101);
+        self::assertNotNull($r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9'));
+        $seed = $last()['seed'] ?? null;
+        self::assertIsInt($seed);
+        self::assertNotSame(42, $seed, 'the fixed fleet-wide default must never reach the sidecar from this path');
+        self::assertGreaterThanOrEqual(0, $seed);
+        self::assertLessThanOrEqual(0x7fffffff, $seed);
+
+        // Same install, same path, fresh responder + empty cache: the same seed (an evicted entry
+        // regenerates byte-identical — the cache contract).
+        [$r2, $last2] = $this->makeCapturing(101);
+        $r2->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');
+        self::assertSame($seed, $last2()['seed']);
+
+        // Same install, another path: a different seed (no cross-path correlation).
+        [$r3, $last3] = $this->makeCapturing(101);
+        $r3->respond(new RequestContext('GET', '/super-rare-app/settings.asp'), '9.9.9.9');
+        self::assertNotSame($seed, $last3()['seed']);
+
+        // Another install (persona seed), same path: a different seed — no fleet-wide body.
+        [$r4, $last4] = $this->makeCapturing(202);
+        $r4->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');
+        self::assertNotSame($seed, $last4()['seed']);
+    }
+
+    public function test_generation_charges_the_global_budget_but_cache_hits_and_declines_do_not(): void
+    {
+        $budget = new LlmGenBudget($this->dbPath('budget'), 10);
+        [$r] = $this->makeCapturing(7, $budget);
+        self::assertSame(0, $budget->spent());
+
+        self::assertNotNull($r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9'));
+        self::assertSame(1, $budget->spent());
+
+        $r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');   // cache hit
+        self::assertSame(1, $budget->spent());
+
+        self::assertNull($r->respond(new RequestContext('GET', '/random9271.php'), '9.9.9.9'));   // gate decline
+        self::assertSame(1, $budget->spent());
+    }
+
+    public function test_client_failure_charges_nothing(): void
+    {
+        $budget = new LlmGenBudget($this->dbPath('budget'), 10);
+        [$r] = $this->makeCapturing(7, $budget, null, 500);
+        self::assertNull($r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9'));
+        self::assertSame(0, $budget->spent(), 'only a sidecar call that produced output is spend');
+    }
+
+    public function test_exhausted_budget_serves_cache_but_never_generates(): void
+    {
+        $budget = new LlmGenBudget($this->dbPath('budget'), 1);
+        $cache = new LlmFakeCache($this->dbPath('cache'));
+        [$r, , $calls] = $this->makeCapturing(7, $budget, $cache);
+
+        $first = $r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '9.9.9.9');
+        self::assertNotNull($first);
+        self::assertTrue($budget->exhausted());
+
+        // The cached path keeps serving byte-identical with no model call …
+        $again = $r->respond(new RequestContext('GET', '/super-rare-app/login.asp'), '1.1.1.1');
+        self::assertNotNull($again);
+        self::assertSame($first->body, $again->body);
+        // … while a new plausible path gets the plain 404 and the transport is never touched.
+        self::assertNull($r->respond(new RequestContext('GET', '/super-rare-app/users.asp'), '2.2.2.2'));
+        self::assertSame(1, $calls());
+    }
 
     public function test_generates_sanitizes_caches_and_serves(): void
     {

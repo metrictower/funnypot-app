@@ -51,12 +51,14 @@ use Funnypot\App\Http\SleepDecoy;
 use Funnypot\App\Llm\CircuitBreaker;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmFakeResponder;
+use Funnypot\App\Llm\LlmGenBudget;
 use Funnypot\App\Llm\LlmOutputSanitizer;
 use Funnypot\App\Llm\LlmResponseProfiles;
 use Funnypot\App\Llm\ProbeClassifier;
 use Funnypot\App\Llm\ProbeGate;
 use Funnypot\App\Llm\VelocityTracker;
 use Funnypot\App\Render\ArtifactVersion;
+use Funnypot\App\Render\Fake\FakeSecrets;
 use Funnypot\App\Render\Fake\FrozenClock;
 use Funnypot\App\Render\PageShellRenderer;
 use Funnypot\App\Render\Skins\AdminLteSkin;
@@ -192,6 +194,21 @@ $threatIntel = ($config->threatIntelReport && $config->threatIntelKey !== '')
 // One cache instance shared by the responder (read/write) and the dashboard (browse/delete). Lazy:
 // it only opens the SQLite file on first query, so it costs nothing when the feature is off.
 $llmCache = new LlmFakeCache($config->llmCacheDb);
+// One global generations/hour ledger (same lazy SQLite file) shared by the fake-page gate + responder
+// and the fake-AI chat gate: one spend pool, so a rotating-IP flood is bounded per hour, not per source.
+$llmBudget = new LlmGenBudget($config->llmCacheDb, $config->llmGensPerHour);
+// One sanitizer for both LLM surfaces. It carries the deploy's real secrets as canaries (any body
+// echoing one is rejected) and the install's own persona-derived fake credentials as shape exemptions,
+// so the live-key shape scan on raw model output can never 404 a page for carrying our own bait.
+$llmSanitizer = null;
+if ($config->llmEnabled || $config->aiApiEnabled) {
+    $fakeSecrets = FakeSecrets::fromSeed($personaSeed);
+    $llmSanitizer = new LlmOutputSanitizer($config->secretCanaries(), array_merge(
+        [VisualPersona::fromSeed($personaSeed)->awsKey()],
+        array_column($fakeSecrets->keys(), 'fullInert'),
+        array_map(static fn (array $kv): string => $kv[1], $fakeSecrets->envVars()),
+    ));
+}
 $llmFakes = null;
 if ($config->llmEnabled) {
     $breaker = new CircuitBreaker($config->llmCacheDb, $config->llmBreakerThreshold, $config->llmBreakerCooldownS);
@@ -222,10 +239,11 @@ if ($config->llmEnabled) {
             new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),
             $store,
             allowIps: $config->llmGateAllowIps,
+            budget: $llmBudget,
         ),
         $llmCache,
         new LlmClient($config->llmUrl, $config->llmTimeoutMs, $config->llmNPredict, $breaker),
-        new LlmOutputSanitizer(),
+        $llmSanitizer,
         $store,
         new LlmResponseProfiles(
             $poweredBy,
@@ -241,6 +259,7 @@ if ($config->llmEnabled) {
         $personaSeed,
         $artifactVersion,
         $fakePersistence,
+        $llmBudget,
     );
 }
 
@@ -255,7 +274,7 @@ if ($config->aiApiEnabled) {
     $aiApi = new AiApiRouter(new AiChatHandler(
         new LlmClient($config->llmUrl, $config->llmTimeoutMs, $config->llmNPredict, $aiBreaker),
         new AiChatPromptBuilder(),
-        new LlmOutputSanitizer(),
+        $llmSanitizer,
         new NonsenseFallback(),
         new WordSwap(),
         new WrongLanguageCode(),
@@ -264,6 +283,7 @@ if ($config->aiApiEnabled) {
             new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),
             $store,
             allowIps: $config->llmGateAllowIps,
+            budget: $llmBudget,
         ),
         $llmCache,
         $store,

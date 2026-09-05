@@ -316,8 +316,9 @@ values; never let it own protocol-structural headers.
   LLM entirely for a cooldown, so a stalled/OOM'd server does not add
   timeout-latency to every unmatched request during an outage.
 - **Resource guards:** `FUNNYPOT_LLM_MAX_CONCURRENT` (COUNT on `llm_inflight`,
-  over cap → straight to 404, no queueing) and a per-minute counter, mirroring
-  `AbuseIpdb`'s daily counter.
+  over cap → straight to 404, no queueing) and a global generations/hour ledger
+  (`FUNNYPOT_LLM_GENS_PER_HOUR`, SQLite hour buckets, fail-closed) — the backstop
+  for a rotating-IP flood the per-IP velocity gate cannot see.
 
 ### Timing indistinguishability
 

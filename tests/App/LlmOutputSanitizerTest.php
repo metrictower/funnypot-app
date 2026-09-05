@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App;
 
 use Funnypot\App\Llm\LlmOutputSanitizer;
+use Funnypot\App\Render\Fake\FakeSecrets;
+use Funnypot\Core\Support\VisualPersona;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -229,6 +231,157 @@ final class LlmOutputSanitizerTest extends TestCase
         self::assertSame('Portal', $ok['app_name']);
         self::assertNull($s->sanitizeToArray('{"heading":"<img x onerror=alert(1)> padding padding padding here"}'));
         self::assertNull($s->sanitizeToArray('not json at all but long enough to clear the size band easily'));
+    }
+
+    // --- entity-encoded tells: a browser renders the tell, a raw strpos never sees it ---
+
+    /**
+     * @param bool $disclosure true for a self-disclosure tell (scanned by the assembled-page pass too);
+     *                         false for an exploit shape, which only the raw-output prelude owns
+     * @dataProvider entityEncodedTells
+     */
+    public function test_entity_encoded_tell_is_rejected_in_every_arm(string $label, string $encoded, bool $disclosure): void
+    {
+        $pad = str_repeat('x', 60);
+        self::assertNull($this->s->sanitize("<html><body><p>{$encoded} {$pad}</p></body></html>", 'html'), "html: $label");
+        self::assertNull($this->s->sanitize("APP_ENV=production\nNOTE={$encoded}\n{$pad}", 'text'), "text: $label");
+        self::assertNull($this->s->sanitize('{"note":"' . $encoded . '","pad":"' . $pad . '"}', 'json'), "json: $label");
+        self::assertNull($this->s->sanitizeToArray('{"note":"' . $encoded . '","pad":"' . $pad . '"}'), "slots: $label");
+        if ($disclosure) {
+            self::assertFalse($this->s->pageBodyOk("<html><body><p>{$encoded}</p></body></html>"), "pageBodyOk: $label");
+            self::assertFalse($this->s->pageBodyOk("<html><body><p>{$encoded}</p></body></html>", true), "trusted chrome: $label");
+        }
+    }
+
+    /** @return array<string,array{0:string,1:string,2:bool}> */
+    public static function entityEncodedTells(): array
+    {
+        return [
+            'decimal entity' => ['decimal', '&#104;oneypot', true],
+            'hex entity' => ['hex', '&#x68;oneypot', true],
+            'mixed-entity hyphen' => ['hyphen', 'security&#45;research', true],
+            'entity + no-break spaces' => ['nbsp', 'as&#32;an&nbsp;ai', true],
+            'own vocabulary' => ['own-vocab', 'this is a &#102;unnypot', true],
+            'exploit list' => ['exploit', '&#101;val(document.cookie)', false],
+        ];
+    }
+
+    public function test_split_across_cells_plus_entities_is_rejected(): void
+    {
+        self::assertFalse($this->s->pageBodyOk('<html><body><table><tr><td>&#104;oney</td><td>pot</td></tr></table></body></html>'));
+        self::assertFalse($this->s->pageBodyOk('<html><body><td>tar</td><td>&#112;it</td> maze</body></html>'));
+    }
+
+    public function test_legitimate_entities_still_pass(): void
+    {
+        $pad = str_repeat('x', 60);
+        $html = "<html><body><h1>Terms &amp; Conditions</h1><p>Use &lt;draft&gt; &quot;v2&quot; &copy; 2024 {$pad}</p></body></html>";
+        self::assertSame($html, $this->s->sanitize($html));
+        self::assertTrue($this->s->pageBodyOk($html));
+    }
+
+    // --- real-secret canaries: the deploy's own values have no legitimate presence in any body ---
+
+    public function test_canary_value_is_rejected_raw_and_encoded_in_both_arms(): void
+    {
+        $s = new LlmOutputSanitizer(['s3cretVALUE123']);
+        $pad = str_repeat('x', 60);
+        self::assertNull($s->sanitize("<html><body><p>key=s3cretVALUE123 {$pad}</p></body></html>"));
+        self::assertNull($s->sanitize("<html><body><p>key=&#115;3cretVALUE123 {$pad}</p></body></html>"));
+        self::assertNull($s->sanitize("KEY=S3CRETvalue123\n{$pad}", 'text'));                 // case-insensitive
+        self::assertNull($s->sanitizeToArray('{"heading":"s3cretVALUE123","pad":"' . $pad . '"}'));
+        self::assertFalse($s->pageBodyOk('<html><body><td>s3cretVALUE123</td></body></html>'));
+        self::assertFalse($s->pageBodyOk('<html><body><td>s3cretVALUE123</td></body></html>', true)); // trusted chrome too
+        self::assertFalse($s->pageBodyOk('<html><body><td>&#115;3cretVALUE123</td></body></html>'));
+        // Same sanitizer, a body without the value: unchanged behaviour.
+        $ok = "<html><body><p>key=tok_7c1d20b4 {$pad}</p></body></html>";
+        self::assertSame($ok, $s->sanitize($ok));
+        self::assertTrue($s->pageBodyOk($ok));
+    }
+
+    public function test_short_and_empty_canaries_are_dropped(): void
+    {
+        // A short/common value would reject most bodies; the empties an unset knob yields must be inert.
+        $s = new LlmOutputSanitizer(['', 'admin', 'pass1']);
+        $pad = str_repeat('x', 60);
+        $html = "<html><body><p>admin pass1 {$pad}</p></body></html>";
+        self::assertSame($html, $s->sanitize($html));
+    }
+
+    // --- live-key shapes: rejected on RAW model output, accepted on assembled pages (our own bait) ---
+
+    /** @return array<string,array{0:string}> shapes built by concatenation so no key literal sits in the repo */
+    public static function liveKeyShapes(): array
+    {
+        return [
+            'aws access key' => ['AKIA' . str_repeat('Q7', 8)],
+            'stripe live' => ['sk_live_' . str_repeat('a1', 8)],
+            'github pat' => ['ghp_' . str_repeat('b2', 12)],
+            'slack bot' => ['xoxb-1234-abcd'],
+            'jwt pair' => ['eyJ' . str_repeat('c', 24) . '.eyJ' . str_repeat('d', 24) . '.sig'],
+        ];
+    }
+
+    /** @dataProvider liveKeyShapes */
+    public function test_live_key_shape_rejected_on_raw_output_only(string $key): void
+    {
+        $pad = str_repeat('x', 60);
+        self::assertNull($this->s->sanitize("<html><body><p>{$key} {$pad}</p></body></html>"), 'html');
+        self::assertNull($this->s->sanitize("AWS_KEY={$key}\n{$pad}", 'text'), 'text');
+        self::assertNull($this->s->sanitizeToArray('{"heading":"' . $key . '","pad":"' . $pad . '"}'), 'slots');
+        $encoded = '&#' . ord($key[0]) . ';' . substr($key, 1);
+        self::assertNull($this->s->sanitize("<html><body><p>{$encoded} {$pad}</p></body></html>"), 'entity-encoded');
+        // The assembled-page pass carries our OWN bait of exactly these shapes — it must pass.
+        self::assertTrue($this->s->pageBodyOk("<html><body><td>{$key}</td></body></html>"));
+        self::assertTrue($this->s->pageBodyOk("<html><body><td>{$key}</td></body></html>", true));
+    }
+
+    public function test_assembled_panel_bait_keys_pass_page_body_ok(): void
+    {
+        // The real collision that scopes the shape scan: the persona AWS key and FakeSecrets values
+        // are rendered into panel/slot pages by trusted chrome.
+        $persona = VisualPersona::fromSeed(4242);
+        $fs = FakeSecrets::fromSeed(4242);
+        self::assertMatchesRegularExpression('/^AKIA[0-9A-Z]{16}$/', $persona->awsKey());
+        $cells = '<td>' . $persona->awsKey() . '</td>';
+        foreach ($fs->keys() as $k) {
+            $cells .= '<td>' . $k['fullInert'] . '</td>';
+        }
+        foreach ($fs->envVars() as [$name, $value]) {
+            $cells .= '<td>' . $name . '=' . $value . '</td>';
+        }
+        $body = '<html><body><table><tr>' . $cells . '</tr></table></body></html>';
+        self::assertTrue($this->s->pageBodyOk($body, true));
+        self::assertTrue($this->s->pageBodyOk($body));
+    }
+
+    public function test_exempted_persona_fake_values_pass_the_shape_scan_on_raw_output(): void
+    {
+        $persona = VisualPersona::fromSeed(4242);
+        $stripe = '';
+        foreach (FakeSecrets::fromSeed(4242)->envVars() as [$name, $value]) {
+            if ($name === 'STRIPE_SECRET_KEY') {
+                $stripe = $value;
+            }
+        }
+        self::assertStringStartsWith('sk_live_', $stripe);
+        $pad = str_repeat('x', 60);
+        $body = "AWS_ACCESS_KEY_ID={$persona->awsKey()}\nSTRIPE_SECRET_KEY={$stripe}\n{$pad}";
+
+        $exempting = new LlmOutputSanitizer([], [$persona->awsKey(), $stripe]);
+        self::assertSame($body, $exempting->sanitize($body, 'text'));
+        // A different key of the same shape is still rejected by the exempting sanitizer …
+        self::assertNull($exempting->sanitize('AWS_ACCESS_KEY_ID=AKIA' . str_repeat('Z9', 8) . "\n{$pad}", 'text'));
+        // … and without the exemption the persona value itself is (it is shape-indistinguishable from real).
+        self::assertNull($this->s->sanitize($body, 'text'));
+    }
+
+    public function test_tok_style_bait_passes_everywhere(): void
+    {
+        $pad = str_repeat('x', 60);
+        $html = "<html><body><td>tok_7c1d20b4</td><td>changeme_7c1d20</td><td>{$pad}</td></body></html>";
+        self::assertSame($html, $this->s->sanitize($html));
+        self::assertTrue($this->s->pageBodyOk($html));
     }
 
     public function test_page_body_ok_allows_trusted_chrome_but_blocks_disclosure_and_script(): void

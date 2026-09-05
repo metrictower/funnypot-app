@@ -21,7 +21,9 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_ENDLESS_DOWNLOAD', 'FUNNYPOT_DL_CHUNK_MIN_KB', 'FUNNYPOT_DL_CHUNK_MAX_KB',
         'FUNNYPOT_DL_INTERVAL_MS', 'FUNNYPOT_DL_VARY_PCT', 'FUNNYPOT_DL_EASE_PERIOD_S',
         'FUNNYPOT_DL_FALLBACK_CAP_MB', 'FUNNYPOT_APP_PATH', 'FUNNYPOT_HIDE_MAIN', 'FUNNYPOT_CAPTURE_RAW',
-        'FUNNYPOT_POWERED_BY',
+        'FUNNYPOT_POWERED_BY', 'FUNNYPOT_LLM_GENS_PER_HOUR', 'FUNNYPOT_LLM_PROMPT_VERSION',
+        'FUNNYPOT_ADMIN_PASSWORD', 'FUNNYPOT_ADMIN_KNOCK', 'FUNNYPOT_ABUSEIPDB_KEY', 'FUNNYPOT_THREATINTEL_KEY',
+        'FUNNYPOT_HONEYTOKEN_KEY', 'FUNNYPOT_ANALYTICS_KEY',
     ];
 
     protected function setUp(): void
@@ -98,6 +100,38 @@ final class AppConfigTest extends TestCase
         // FP-0249: raw-capture is bounded by default (7d / 1GB), unlike $retainDays/$retainGb above.
         self::assertSame(7, $c->rawRetainDays);
         self::assertSame(1.0, $c->rawRetainGb);
+        // The global LLM generation budget is bounded by default; the prompt version is the cache epoch.
+        self::assertSame(60, $c->llmGensPerHour);
+        self::assertSame('v3', $c->llmPromptVersion);
+    }
+
+    public function test_llm_gens_per_hour_env_override_is_floored_at_one(): void
+    {
+        putenv('FUNNYPOT_LLM_GENS_PER_HOUR=500');
+        self::assertSame(500, AppConfig::fromEnv('/app/demo')->llmGensPerHour);
+        putenv('FUNNYPOT_LLM_GENS_PER_HOUR=0');
+        self::assertSame(1, AppConfig::fromEnv('/app/demo')->llmGensPerHour, 'a zero/negative value can never unbound spend');
+        putenv('FUNNYPOT_LLM_GENS_PER_HOUR=-5');
+        self::assertSame(1, AppConfig::fromEnv('/app/demo')->llmGensPerHour);
+    }
+
+    public function test_secret_canaries_are_the_env_only_secrets_deduplicated_and_length_filtered(): void
+    {
+        self::assertSame([], AppConfig::fromEnv('/app/demo')->secretCanaries(), 'nothing set ⇒ no canaries');
+
+        putenv('FUNNYPOT_ADMIN_PASSWORD=short1');                 // < 8 bytes: dropped
+        putenv('FUNNYPOT_ADMIN_KNOCK=knock-value-synthetic');
+        putenv('FUNNYPOT_ABUSEIPDB_KEY=synthetic-key-value-1');
+        putenv('FUNNYPOT_THREATINTEL_KEY=synthetic-key-value-1'); // duplicate: once
+        putenv('FUNNYPOT_HONEYTOKEN_KEY=honeytoken-synthetic');
+        putenv('FUNNYPOT_ANALYTICS_KEY=analytics-synthetic-key');
+        $canaries = AppConfig::fromEnv('/app/demo')->secretCanaries();
+        sort($canaries);
+        self::assertSame(
+            ['analytics-synthetic-key', 'honeytoken-synthetic', 'knock-value-synthetic', 'synthetic-key-value-1'],
+            $canaries
+        );
+        self::assertNotContains('admin', AppConfig::fromEnv('/app/demo')->secretCanaries(), 'the operator username is not a secret');
     }
 
     public function test_raw_retain_env_overrides_and_zero_means_unbounded(): void

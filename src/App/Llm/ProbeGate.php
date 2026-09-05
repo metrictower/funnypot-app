@@ -13,15 +13,17 @@ use Funnypot\App\Storage\HitStore;
  *
  * Gate A has two layers: a persistent pin (an IP that tripped the velocity window stays blocked for
  * a cooldown even after it goes quiet, so it cannot burst then slow-probe) and the live sliding
- * window that trips the pin.
+ * window that trips the pin. Behind both sits the global generations/hour budget: Gate A is per-IP,
+ * so a rotating-IP flood never trips it — the budget is what bounds that case.
  */
 final class ProbeGate
 {
     /**
      * @param int      $pinHours how long a tripped IP stays pinned to plain-404 (the bulk-scan cooldown)
-     * @param string[] $allowIps IPs / IPv4 CIDRs exempt from Gate A (velocity + pin). For operator
-     *                           testing: an allowlisted IP can generate unlimited fakes and is never
-     *                           pinned. Gate B (plausibility) still applies. Keep empty in normal prod.
+     * @param string[] $allowIps IPs / IPv4 CIDRs exempt from Gate A (velocity + pin + budget). For
+     *                           operator testing: an allowlisted IP can generate unlimited fakes and is
+     *                           never pinned. Gate B (plausibility) still applies. Keep empty in normal prod.
+     * @param LlmGenBudget|null $budget the global generations/hour ledger; exhausted ⇒ deny (cache-only)
      */
     public function __construct(
         private ProbeClassifier $lexical,
@@ -29,6 +31,7 @@ final class ProbeGate
         private HitStore $store,
         private int $pinHours = 24,
         private array $allowIps = [],
+        private ?LlmGenBudget $budget = null,
     ) {
     }
 
@@ -47,6 +50,11 @@ final class ProbeGate
             if ($this->velocity->isBulkScan($this->store->probeVelocity($ip))) {
                 $this->store->flagBulkScan($ip, $this->pinHours);  // pin so a quiet-then-probe cannot dodge it
                 return ['generate' => false, 'reason' => 'bulk-scan'];
+            }
+            // After the pin/velocity block so a bulk scanner is still pinned while the hour is spent.
+            // Fail-closed inside exhausted(): a ledger fault stops fresh generation, never cached serving.
+            if ($this->budget !== null && $this->budget->exhausted()) {
+                return ['generate' => false, 'reason' => 'gen-budget'];
             }
         }
         if ($this->lexical->classify($method, $path) !== 'plausible') {

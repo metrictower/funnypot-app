@@ -10,7 +10,9 @@ use Funnypot\Core\Support\VisualPersona;
  * Builds the completion prompt for the sidecar. Qwen ChatML format: a fixed system instruction, a
  * one-shot exemplar turn (a fake request answered with a bare body — stabilises the output format far
  * better than instructions alone), then the real request. Only the method + path are
- * attacker-influenced; they are stripped to printable ASCII and length-capped before interpolation.
+ * attacker-influenced; they are length-capped and stripped to printable ASCII minus the ChatML
+ * metacharacters before interpolation (see clean()), so no request byte can close our user turn and
+ * author a system turn of its own.
  * The final assistant turn is left open for the model to complete, constrained by the profile's GBNF
  * grammar (or, for the grammar-free kinds, by the exemplar's shape + LlmOutputSanitizer).
  *
@@ -329,12 +331,21 @@ final class LlmPromptBuilder
             . "<|im_start|>assistant\n";
     }
 
-    /** Strip to printable ASCII and cap length. The grammar + sanitizer are the real guards; this
-     *  just keeps attacker bytes from corrupting the prompt structure. */
+    /** Cap length, strip to printable ASCII, then drop every byte that could shape the transcript: the
+     *  pipe (with no `|` left, no `<|…|>` delimiter can exist or be rebuilt from surviving bytes — a
+     *  path has no legitimate use for one), plus the quote/backslash pair sanitize() already strips
+     *  from persona values. The strip runs to a fixpoint, and any rule added here MUST stay inside that
+     *  loop: a single pass over a multi-byte sequence is not idempotent (`<<||` minus one `<|` leaves
+     *  `<|`), so one pass can reassemble exactly what it removed. The grammar + sanitizer guard the
+     *  OUTPUT; this guards the prompt itself, the one boundary they cannot re-establish. */
     private function clean(string $s, int $max): string
     {
         $s = substr($s, 0, $max);
+        do {
+            $before = $s;
+            $s = str_replace(['|', '"', '\\'], '', (string) preg_replace('/[^\x20-\x7e]/', '', $s));
+        } while ($s !== $before);
 
-        return (string) preg_replace('/[^\x20-\x7e]/', '', $s);
+        return $s;
     }
 }

@@ -285,7 +285,7 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 | **Nuclei inversion** | About 6,300 templates compiled into route personas; a scanner's own matcher is satisfied by an inert fake. |
 | **Attack-class emulators** (35) | Reflect LFI, SQLi, command injection, SSTI, XXE, shellshock, Struts OGNL, open redirect, reflected XSS and IMDS on any path, with canned inert markers (`root:x:0:0…`, `uid=0(root)…`); 4 are OWASP CRS-broadened siblings (LFI/RCE/SQLi/XSS) that catch what the matching hand-authored class alone would miss, each independently toggleable in the catalog. |
 | **Product and route decoys** (26) | Believable `.git/config`, `.env`, `xmlrpc`, `wp-config`, `phpinfo`, `.htpasswd`, `server-status`, `package.json`, SSH keys, SQL dumps, phpMyAdmin, Tomcat manager and more. Data-bearing decoys are filled by shared seeded generators, so people and records are coherent per deployment, not repeated `jdoe`/`example.com` rows. |
-| **LLM fake pages** (long-tail fallback) | On a template / CRS / nuclei miss, a probe-gated model fills a small JSON slot-set that a trusted PHP shell renders into a full styled page — WordPress, phpMyAdmin, Grafana, AdminLTE or a generic admin look — with seeded, coherent fake people and records. It only ever *upgrades* a plain 404; the HTTP status and content-type stay app-chosen, and every value is escaped by construction. |
+| **LLM fake pages** (long-tail fallback) | On a template / CRS / nuclei miss, a probe-gated model fills a small JSON slot-set that a trusted PHP shell renders into a full styled page — WordPress, phpMyAdmin, Grafana, AdminLTE or a generic admin look — with seeded, coherent fake people and records. It only ever *upgrades* a plain 404; the HTTP status and content-type stay app-chosen, and every value is escaped by construction. Generation is cost-bounded twice over: a per-IP velocity gate (which counts only genuine unserved misses, so a visitor following decoy links is never shed) and a global hourly budget (`FUNNYPOT_LLM_GENS_PER_HOUR`) — over budget, cached pages keep serving. |
 | **Pure-PHP SSH-2.0 server** | Real curve25519-sha256 key exchange, ed25519 host key, aes256-ctr and hmac-sha2-256 transport. No libssh, no OpenSSH. Accept-all auth drops the attacker into a fake shell with decoy files. |
 | **TCP/UDP protocol emulators** (22) | ssh, telnet, redis, ftp, smtp, memcached, pop3, imap, finger, vnc, rsync, clamav, zookeeper, mysql, postgres, mongodb, modbus, ethernet-ip, rdp, smb, tr069, **ntp**. `NTP` (123/udp) answers a client time query with a plausible stratum reply and refuses mode 6/7 (the CVE-2013-5211 `monlist` reflection vector) so it can never be a DDoS amplifier. Every command logged, nothing run. |
 | **RDP, SMB & WinRM credential traps** | Pure-PHP **RDP** (3389, X.224/MCS) logs the `mstshash` username a brute-forcer sprays + the requested security protocols; **SMB2** (445, NTLMSSP) captures crackable net-NTLMv2 hashes (user/domain/workstation) and SMB1 EternalBlue-style probes; **WinRM** (5985, WS-Management) challenges Negotiate/Basic, capturing a Basic cleartext credential or walking the NTLM handshake to the type-3 username/domain/workstation. All answer plausibly, grant no session, share no file, run no command. |
@@ -550,7 +550,12 @@ funnypot is built so it can only ever mislead an attacker, never help one.
   "vulnerable to everything" fingerprint a real analyst would spot.
 - **The LLM only upgrades a 404.** The optional page-realism model can only turn a plain 404 into a richer
   believable page; any model fault degrades back to that 404, never to a 500 (a 500 is itself a tell). It
-  never chooses the HTTP status or content-type.
+  never chooses the HTTP status or content-type. The request path reaches the prompt only as
+  delimiter-stripped data (no ChatML turn can be authored from a URL); every generated body is scanned raw
+  *and* entity-decoded for self-disclosure and for the deploy's own secret values; each install samples
+  with its own persona-derived seed (no fleet-identical bodies); and fresh generation is bounded per hour
+  across all sources (`FUNNYPOT_LLM_GENS_PER_HOUR`, default 60) behind the per-IP velocity gate — over
+  budget, cached fakes keep serving and new paths get the plain 404.
 - **Inert fakes only.** `example.com` hosts, RFC-5737 IPs, obviously-fake keys and hashes. Never a real
   or working secret.
 - **One private install identity, scoped per tier.** Persona and keys derive from a persisted CSPRNG

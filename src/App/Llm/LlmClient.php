@@ -28,11 +28,11 @@ final class LlmClient
     /**
      * Raw generation. Returns the model body, or null on any failure / open breaker.
      *
-     * $sampling is null for the default (page-generation) path, which keeps the exact low-temp,
-     * fixed-seed sampling that the deterministic HTML fakes depend on. The chat path passes an
-     * override map so it can crank temperature / min_p and randomise the seed for real nonsense,
-     * without disturbing page-gen. Only these keys are honoured: temperature, min_p, top_p, top_k,
-     * repeat_penalty, seed. n_predict stays as configured.
+     * $sampling is null for the bare default: low-temp sampling with an inert fixed seed. The page
+     * responder always overrides the seed with one derived from the install persona + path (a fixed
+     * fleet-wide seed made persona-less kinds byte-identical on every install); the chat path cranks
+     * temperature / min_p and randomises the seed for real nonsense. Only these keys are honoured:
+     * temperature, min_p, top_p, top_k, repeat_penalty, seed. n_predict stays as configured.
      *
      * @param array<string,mixed>|null $sampling
      */

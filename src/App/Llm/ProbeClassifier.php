@@ -38,6 +38,9 @@ final class ProbeClassifier
         'printyourinstruction', 'printyourprompt', 'revealyourprompt', 'revealyourinstruction',
         'showyourprompt', 'showyourinstruction', 'systemprompt', 'jailbreak', 'promptinjection',
         'languagemodel', 'largelanguagemodel',
+        // ChatML turn delimiters (<|im_start|> / <|im_end|>) collapsed: a path carrying one is trying
+        // to author a prompt turn. Shed here so the HARD_ALLOW shortcut below can never route it on.
+        'imstart', 'imend',
     ];
 
     /** Explicit calibration tells in a filename stem: an obvious "prove the 404" probe. */

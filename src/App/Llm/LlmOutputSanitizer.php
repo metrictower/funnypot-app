@@ -19,6 +19,12 @@ use DOMDocument;
  * check; the grammar-free kinds (css, js, xml, text) instead reject a leading refusal/fence, since
  * they have no grammar to make a preamble structurally unreachable.
  *
+ * Every tell scan runs over the raw bytes AND an entity-decoded view: `&#104;oneypot` passes a plain
+ * strpos but renders as the tell in a browser. Decoding is detection-only — the body that is cached
+ * and served is always the original bytes, or nothing. The sanitizer also carries the deploy's real
+ * secret values as canaries (rejected wherever they appear) and, on raw model output only, rejects
+ * live-credential shapes the model could only have invented or memorised.
+ *
  * Caveat on JS: JavaScript is Turing-complete, so "is this body inert" is not decidable by a
  * substring blocklist alone. The JS path is defence-in-depth (a data-only exemplar upstream + the
  * blocklist here), not a proof of inertness the way "no <script> tag exists" is for HTML.
@@ -115,6 +121,43 @@ final class LlmOutputSanitizer
         'as a language model', 'here is', "here's", 'sure!', 'certainly', 'unfortunately',
     ];
 
+    /** Live-credential shapes raw MODEL output must never carry: the prompts ask for fake tokens
+     *  (`tok_…`, `changeme_…`, slot markers), so a real-looking key can only be invented (a rare false
+     *  reject just 404s) or memorised from somewhere real (must never ship). Scanned in prelude() ONLY,
+     *  never in the assembled-page pass: the trusted chrome's own bait (VisualPersona::awsKey(),
+     *  FakeSecrets) emits exactly these shapes by design, and a shape scan there would 404 our own pages. */
+    private const LIVE_KEY_SHAPES = [
+        '/AKIA[0-9A-Z]{16}/',
+        '/sk_live_[0-9a-zA-Z]{10,}/',
+        '/ghp_[0-9a-zA-Z]{20,}/',
+        '/xoxb-\d/',
+        '/eyJ[A-Za-z0-9_-]{20,}\.eyJ/',
+    ];
+
+    /** A canary shorter than this is dropped: a short or common value would reject most bodies. */
+    private const MIN_CANARY_LEN = 8;
+
+    /**
+     * @param string[] $canaries    the deploy's REAL secret values (AppConfig::secretCanaries()). A body
+     *                              carrying one, raw or entity-encoded, is rejected in every arm — real
+     *                              secrets have no legitimate presence anywhere, trusted chrome included.
+     * @param string[] $shapeExempt persona-derived FAKE credentials the deploy's own bait emits (the
+     *                              persona AWS key, FakeSecrets values); excluded from the live-key shape
+     *                              scan so a bait value reaching raw output can never 404 its own page.
+     */
+    public function __construct(array $canaries = [], array $shapeExempt = [])
+    {
+        $keep = static fn (int $min): callable => static fn ($v): bool => is_string($v) && strlen($v) >= $min;
+        $this->canaries = array_values(array_unique(array_filter($canaries, $keep(self::MIN_CANARY_LEN))));
+        $this->shapeExempt = array_values(array_unique(array_filter($shapeExempt, $keep(1))));
+    }
+
+    /** @var string[] */
+    private array $canaries;
+
+    /** @var string[] */
+    private array $shapeExempt;
+
     /**
      * @param string $kind html|json|css|js|xml|text (unknown kinds validate as html)
      * @return string|null the validated body, or null on any violation
@@ -187,15 +230,19 @@ final class LlmOutputSanitizer
     public function pageBodyOk(string $html, bool $trustedChrome = false): bool
     {
         $low = strtolower($html);
-        foreach (self::META_DISCLOSURE as $tell) {
-            if (strpos($low, $tell) !== false) {
-                return false;
-            }
+        $decoded = self::decodedLower($html);
+        if (self::containsAny($low, self::META_DISCLOSURE) || self::containsAny($decoded, self::META_DISCLOSURE)) {
+            return false;
         }
         // FP-0112 review #1: same shared own_vocabulary parity as prelude() (see that call site's
         // comment); pageBodyOk() is the whole-assembled-page pass so this must run here too, not just
         // per-slot, and both the raw-markup pass here and the tag-stripped pass below.
-        if (self::hasSharedOwnVocabularyLeak($html)) {
+        if (self::hasSharedOwnVocabularyLeak($html) || self::hasSharedOwnVocabularyLeak($decoded)) {
+            return false;
+        }
+        // The deploy's real secrets are rejected here too (unlike the key-SHAPE scan, which is
+        // prelude-only — see LIVE_KEY_SHAPES): no trusted chrome legitimately carries a real value.
+        if ($this->hasCanary($html)) {
             return false;
         }
         // The active-content checks (<script>/<iframe>/on-handlers) guard UNTRUSTED, model-supplied markup.
@@ -212,16 +259,16 @@ final class LlmOutputSanitizer
         }
         // Re-scan the visible text with tags stripped and whitespace collapsed: a disclosure word
         // can be split across cells (e.g. <td>honey</td><td>pot</td> reads as "honeypot" to a human
-        // even though it's absent from the raw markup).
-        $text = preg_replace('/<[^>]*>/', '', $html) ?? '';
-        $text = strtolower(preg_replace('/\s+/', ' ', $text) ?? '');
-        foreach (self::META_DISCLOSURE as $tell) {
-            if (strpos($text, $tell) !== false) {
+        // even though it's absent from the raw markup). The entity-decoded pass is IN ADDITION to the
+        // raw one and decodes AFTER the tag strip: decoding first would let `&lt;script` materialise
+        // a `<` the strip regex then eats along with the text behind it.
+        $stripped = preg_replace('/<[^>]*>/', '', $html) ?? '';
+        $text = strtolower(preg_replace('/\s+/', ' ', $stripped) ?? '');
+        $textDecoded = preg_replace('/\s+/', ' ', self::decodedLower($stripped)) ?? '';
+        foreach ([$text, $textDecoded] as $view) {
+            if (self::containsAny($view, self::META_DISCLOSURE) || self::hasSharedOwnVocabularyLeak($view)) {
                 return false;
             }
-        }
-        if (self::hasSharedOwnVocabularyLeak($text)) {
-            return false;
         }
 
         return true;
@@ -261,21 +308,21 @@ final class LlmOutputSanitizer
         if (preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', $s) === 1) {
             return false;
         }
-        $low = strtolower($s);
-        foreach (self::BAD_SUBSTRINGS as $bad) {
-            if (strpos($low, $bad) !== false) {
+        // Both views for every list: `&#101;val(` is the same trick against the exploit list as
+        // `&#104;oneypot` is against the disclosure list.
+        foreach ([strtolower($s), self::decodedLower($s)] as $view) {
+            if (self::containsAny($view, self::BAD_SUBSTRINGS) || self::containsAny($view, self::META_DISCLOSURE)) {
+                return false;
+            }
+            // FP-0112 review #1: parity with resources/app-fingerprint-denylist.php's own_vocabulary —
+            // the runtime path had none until this check (funnypot/bait/lure/tarpit/metrictower/troll/
+            // sabotage/deception). Runs for EVERY kind, same as META_DISCLOSURE above.
+            if (self::hasSharedOwnVocabularyLeak($view)) {
                 return false;
             }
         }
-        foreach (self::META_DISCLOSURE as $tell) {
-            if (strpos($low, $tell) !== false) {
-                return false;
-            }
-        }
-        // FP-0112 review #1: parity with resources/app-fingerprint-denylist.php's own_vocabulary —
-        // the runtime path had none until this check (funnypot/bait/lure/tarpit/metrictower/troll/
-        // sabotage/deception). Runs for EVERY kind, same as META_DISCLOSURE above.
-        if (self::hasSharedOwnVocabularyLeak($s)) {
+        // Raw model output is the one surface where a live-key shape cannot be our own bait.
+        if ($this->hasCanary($s) || $this->hasLiveKeyShape($s)) {
             return false;
         }
 
@@ -442,6 +489,59 @@ final class LlmOutputSanitizer
         foreach (self::REFUSAL_MARKERS as $m) {
             if (strpos($head, $m) !== false) {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Lower-cased, entity-decoded view of $s for the tell scans, with the no-break space folded to a
+     *  plain one (a browser renders `as&nbsp;an&nbsp;ai` as the tell). Detection-only: never served. */
+    private static function decodedLower(string $s): string
+    {
+        return strtolower(str_replace("\xc2\xa0", ' ', html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    }
+
+    /** @param string[] $needles plain substrings, already in the haystack's case */
+    private static function containsAny(string $haystack, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if (strpos($haystack, $needle) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** True if the body carries one of the deploy's real secret values, raw or entity-encoded. */
+    private function hasCanary(string $s): bool
+    {
+        if ($this->canaries === []) {
+            return false;
+        }
+        $decoded = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        foreach ($this->canaries as $secret) {
+            if (stripos($s, $secret) !== false || stripos($decoded, $secret) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** True if the body carries a live-credential shape (LIVE_KEY_SHAPES), raw or entity-encoded,
+     *  once the deploy's own persona-derived fake values are blanked out. */
+    private function hasLiveKeyShape(string $s): bool
+    {
+        foreach ([$s, html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8')] as $view) {
+            if ($this->shapeExempt !== []) {
+                $view = str_replace($this->shapeExempt, '', $view);
+            }
+            foreach (self::LIVE_KEY_SHAPES as $shape) {
+                if (preg_match($shape, $view) === 1) {
+                    return true;
+                }
             }
         }
 

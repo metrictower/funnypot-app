@@ -61,10 +61,13 @@ interface HitStore
     public function import(): int;
 
     /**
-     * How many distinct paths this IP has probed recently — the signal for the LLM gate's per-IP
-     * velocity check (a bulk dirbuster sweeps many distinct paths fast).
+     * How many distinct UNSERVED, UNMATCHED paths this IP has probed recently — the signal for the
+     * LLM gate's per-IP velocity check (a bulk dirbuster sweeps many distinct paths fast). Rows that
+     * were served (any fake, decoy or panel) or matched (an attack payload) are engagement with our
+     * bait, not probing, and must not count: a human following decoy links would otherwise trip the
+     * window and watch the lure vanish. Every implementation must keep this filter.
      *
-     * @return array{recent:int,extended:int} distinct paths in the last 60s and last 10min
+     * @return array{recent:int,extended:int} distinct such paths in the last 60s and last 10min
      */
     public function probeVelocity(string $ip): array;
 

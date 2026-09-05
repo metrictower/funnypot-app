@@ -106,6 +106,13 @@ Phase 2, but note them as known gaps so Phase 3 tuning does not assume they exis
 
 ### 1.5 MEDIUM - `probeVelocity()` counts all paths, and counts the current request
 
+> **Resolved.** `probeVelocity()` now counts only rows with `served = 0 AND matched = 0`, and the
+> controller appends the main hit row *after* the serve branch with `served` reflecting the actual
+> outcome (engine fake, decoy archive or LLM fake — the decoy-archive event row is served+matched too),
+> so neither served follows nor the current request are in the count: a human following decoy links
+> is never pinned. The compensating bound for a plausible-wordlist scanner that accrues no velocity is
+> the global `FUNNYPOT_LLM_GENS_PER_HOUR` budget. The text below describes the original state.
+
 `SqliteHitStore::probeVelocity()` (`SqliteHitStore.php:283-296`) does
 `COUNT(DISTINCT path) ... WHERE ip = :ip AND ts >= :cutoff`. Two divergences from
 the plan text ("distinct not-found paths"):
@@ -217,7 +224,7 @@ and length-capped by the PHP prompt builder):
   "repeat_penalty": 1.1,
   "cache_prompt": true,
   "stop": ["</html>"],
-  "seed": 42
+  "seed": "<derived per install + path: persona seed mixed with the cache key>"
 }
 ```
 
@@ -225,8 +232,12 @@ Notes:
 - `cache_prompt: true` keeps the fixed system+exemplar prefix warm across calls, so
   time-to-first-token drops after the first generation (the research doc's warm-prefix
   assumption).
-- `seed` fixed makes generation reproducible, reinforcing the "one deterministic
-  fake per path" property even before the SQLite cache is consulted.
+- `seed` is derived by the responder from the install's persona seed and the normalised
+  cache key: reproducible for one path on one install (reinforcing the "one deterministic
+  fake per path" property even before the SQLite cache is consulted), different across
+  paths, and different across installs — a fixed fleet-wide seed made every persona-less
+  kind byte-identical on every deployment. The client's bare default is inert; the
+  responder always overrides it.
 - The `grammar` field is the structural safety control. `llama-server` compiles the
   GBNF and constrains every sampled token to it, so `<script`, a leading `Sure!`,
   or an unterminated document are unreachable.
@@ -579,13 +590,13 @@ var:
 |---|---|---|
 | `FUNNYPOT_LLM` | off (`0`) | Master opt-in. Off = responder never constructed. |
 | `FUNNYPOT_LLM_URL` | `http://funnypot-llm:8080/completion` | Sidecar completion endpoint. |
-| `FUNNYPOT_LLM_TIMEOUT_MS` | `1500` | Hard per-request generation timeout. |
+| `FUNNYPOT_LLM_TIMEOUT_MS` | `9000` | Hard per-request generation timeout. |
 | `FUNNYPOT_LLM_N_PREDICT` | `320` | Token cap. |
 | `FUNNYPOT_LLM_CACHE_DB` | `<store>/llm_cache.sqlite` | Cache file. |
 | `FUNNYPOT_LLM_CACHE_MAX_BYTES` | `0` (unbounded) | LRU budget for the retention runner. |
 | `FUNNYPOT_LLM_MAX_CONCURRENT` | `4` | In-flight generation cap; over -> plain 404. |
-| `FUNNYPOT_LLM_MAX_PER_MIN` | `60` | Per-minute generation ceiling. |
-| `FUNNYPOT_LLM_PROMPT_VERSION` | `v1` | Cache invalidation key. |
+| `FUNNYPOT_LLM_GENS_PER_HOUR` | `60` | Global fresh-generation budget per hour across ALL IPs (the rotating-IP backstop the per-IP gate cannot be); over it, cache-only. Fail-closed on a ledger fault. |
+| `FUNNYPOT_LLM_PROMPT_VERSION` | `v3` | Cache invalidation key. |
 | `FUNNYPOT_LLM_BREAKER_THRESHOLD` | `5` | Consecutive failures to open the breaker. |
 | `FUNNYPOT_LLM_BREAKER_COOLDOWN_S` | `30` | Breaker open duration. |
 
@@ -594,7 +605,7 @@ var:
 Confirmed against the code: `respond()` returns `?SynthesizedResponse`, and the hook
 treats `null` as "do nothing, run the existing 404". Every internal decline returns
 null - gate reject, cache miss with lost single-flight and no peer result,
-concurrency cap, per-minute cap, open breaker, transport failure, malformed
+concurrency cap, spent hourly budget, open breaker, transport failure, malformed
 response, sanitizer rejection, and the responder-not-constructed case
 (`$this->llmFakes?->` short-circuits to null). None of these produce a distinct
 error shape; all collapse to the same byte-identical plain 404 the honeypot serves
@@ -676,9 +687,10 @@ change output, so cached fakes from an old grammar should be invalidated with it
    LLM-chosen `Location` can never make the honeypot an open redirect.
 6. **Amplification / DoS guards.** Cache key excludes headers/body (no per-UA
    generation), `FUNNYPOT_LLM_MAX_CONCURRENT` caps in-flight generations,
-   `FUNNYPOT_LLM_MAX_PER_MIN` caps the rate, the circuit breaker sheds load when the
-   model is down, and the LRU budget bounds disk. Verify all four are wired, not
-   just present.
+   `FUNNYPOT_LLM_GENS_PER_HOUR` caps the global rate, the circuit breaker sheds load
+   when the model is down (half-open: one probe per cooldown, so a dead sidecar never
+   produces an open/stampede/open latency sawtooth), and the LRU budget bounds disk.
+   Verify all four are wired, not just present.
 7. **Sanitizer rejects, never truncates**, and enforces a realistic min/max size
    band per content-type (an oddly tiny or huge page is its own tell).
 8. **Timing parity (Phase 0).** Unify `serveDelayMicros()` across the plain-404

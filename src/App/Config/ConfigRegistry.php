@@ -129,11 +129,12 @@ final class ConfigRegistry
             'llm.n_predict' => ['field' => 'llmNPredict', 'env' => 'FUNNYPOT_LLM_N_PREDICT', 'type' => 'int', 'min' => 64, 'default' => '320', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(64,...))
             'llm.cache_max_bytes' => ['field' => 'llmCacheMaxBytes', 'env' => 'FUNNYPOT_LLM_CACHE_MAX_BYTES', 'type' => 'int', 'default' => '0', 'group' => 'LLM', 'live' => false, 'secret' => false], // (no clamp)
             'llm.max_concurrent' => ['field' => 'llmMaxConcurrent', 'env' => 'FUNNYPOT_LLM_MAX_CONCURRENT', 'type' => 'int', 'min' => 1, 'default' => '4', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
-            'llm.prompt_version' => ['field' => 'llmPromptVersion', 'env' => 'FUNNYPOT_LLM_PROMPT_VERSION', 'type' => 'string', 'default' => 'v2', 'group' => 'LLM', 'live' => false, 'secret' => false],
+            'llm.prompt_version' => ['field' => 'llmPromptVersion', 'env' => 'FUNNYPOT_LLM_PROMPT_VERSION', 'type' => 'string', 'default' => 'v3', 'group' => 'LLM', 'live' => false, 'secret' => false],
             'llm.breaker_threshold' => ['field' => 'llmBreakerThreshold', 'env' => 'FUNNYPOT_LLM_BREAKER_THRESHOLD', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
             'llm.breaker_cooldown_s' => ['field' => 'llmBreakerCooldownS', 'env' => 'FUNNYPOT_LLM_BREAKER_COOLDOWN_S', 'type' => 'int', 'min' => 1, 'default' => '30', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
             'llm.velocity_per_60s' => ['field' => 'llmVelocityPer60s', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_60S', 'type' => 'int', 'min' => 1, 'default' => '5', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
             'llm.velocity_per_10m' => ['field' => 'llmVelocityPer10m', 'env' => 'FUNNYPOT_LLM_VELOCITY_PER_10M', 'type' => 'int', 'min' => 1, 'default' => '15', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
+            'llm.gens_per_hour' => ['field' => 'llmGensPerHour', 'env' => 'FUNNYPOT_LLM_GENS_PER_HOUR', 'type' => 'int', 'min' => 1, 'default' => '60', 'group' => 'LLM', 'live' => false, 'secret' => false], // (max(1,...))
             'llm.gate_allow' => ['field' => 'llmGateAllowIps', 'env' => 'FUNNYPOT_LLM_GATE_ALLOW', 'type' => 'csv', 'default' => '', 'group' => 'LLM', 'live' => false, 'secret' => false],
 
             // --- Threat-intel / blocklist knobs (restart-required) ---

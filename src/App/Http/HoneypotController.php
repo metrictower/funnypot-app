@@ -302,28 +302,17 @@ final class HoneypotController
             ? $this->attackClassifier?->classify($context)
             : null;
 
-        $this->store->append([
-            'ts' => gmdate('c'),
-            'ip' => $clientIp,
-            'method' => $context->method,
-            'path' => substr($context->path, 0, 200),
-            'ua' => substr($context->headers['User-Agent'] ?? '', 0, 160),
-            'matched' => $logged->matched || $payloadClass !== null,
-            'severity' => $payloadClass !== null ? AttackClassifier::severityFor($payloadClass) : $logged->highestSeverity,
-            'templates' => $payloadClass !== null ? ['payload-' . $payloadClass] : array_slice($logged->templateIds(), 0, 8),
-            'served' => $response !== null,
-            'style' => $this->config->style,
-            'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
-            'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
-            'log4shell' => Log4ShellProbe::present($context) ?: null,
-            'honeytoken' => $tokenVerdict !== 'off' ? $tokenVerdict : null,
-            'geo' => $this->geo->lookup($clientIp),
-            'known_attacker' => $this->known($clientIp),
-        ]);
-
+        // Serve first, log after: the row's `served` flag must say what actually went out — an engine
+        // fake, a decoy archive, or an LLM fake — not just the engine's answer. Only rows that are both
+        // unserved and unmatched count toward the per-IP velocity window (HitStore::probeVelocity), so a
+        // served fake logged as an unserved miss would make a human following our own decoy links read
+        // as a dirbuster and get pinned. append() after the emit is safe (PHP runs on past output); the
+        // narrow window where a fatal mid-emit loses the row is the store's standing best-effort posture.
+        $decoyServed = false;
+        $llm = null;
         if ($response !== null) {
             ResponseEmitter::emit($response);
-        } elseif (!$this->serveDecoyArchive($context, $clientIp)) {
+        } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,
             // failed, or the responder being off) falls through to the believable plain 404.
             // FP-0112 review #1: this LLM-generated output (like the panel emulator's above) is
@@ -338,6 +327,25 @@ final class HoneypotController
                 self::serveBelievable404();
             }
         }
+
+        $this->store->append([
+            'ts' => gmdate('c'),
+            'ip' => $clientIp,
+            'method' => $context->method,
+            'path' => substr($context->path, 0, 200),
+            'ua' => substr($context->headers['User-Agent'] ?? '', 0, 160),
+            'matched' => $logged->matched || $payloadClass !== null,
+            'severity' => $payloadClass !== null ? AttackClassifier::severityFor($payloadClass) : $logged->highestSeverity,
+            'templates' => $payloadClass !== null ? ['payload-' . $payloadClass] : array_slice($logged->templateIds(), 0, 8),
+            'served' => $response !== null || $decoyServed || $llm !== null,
+            'style' => $this->config->style,
+            'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
+            'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
+            'log4shell' => Log4ShellProbe::present($context) ?: null,
+            'honeytoken' => $tokenVerdict !== 'off' ? $tokenVerdict : null,
+            'geo' => $this->geo->lookup($clientIp),
+            'known_attacker' => $this->known($clientIp),
+        ]);
 
         // Queue an AbuseIPDB report for the attacker (a fast local write; the drain worker sends it):
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.
@@ -432,6 +440,8 @@ final class HoneypotController
         }
         $name = (string) preg_replace('/[^\w.\-]/', '_', $name);
 
+        // Flagged served + matched like the responder's own llm-fake/panel rows: a download of our
+        // bait is an engagement, never an unserved miss the velocity window should count as probing.
         $this->store->append([
             'ts' => gmdate('c'),
             'ip' => $clientIp,
@@ -439,6 +449,8 @@ final class HoneypotController
             'path' => substr($r->path, 0, 200),
             'event' => 'decoy-archive',
             'decoy' => $decoy,
+            'matched' => true,
+            'served' => true,
             'geo' => $this->geo->lookup($clientIp),
             'known_attacker' => $this->known($clientIp),
         ]);
