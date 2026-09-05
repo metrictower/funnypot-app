@@ -173,7 +173,9 @@ CVEs, attack classes and services this box pretends to be.
 
 The [`demo/`](demo/) directory is a complete front controller: a welcome homepage and live dashboard at
 `/`, with every other request run through the engine and logged. The image runs nginx and php-fpm across
-the web ports and launches all 38 service listeners (each auto-respawned if it ever exits).
+the web ports and launches all 38 service listeners (each auto-respawned on a bounded backoff if it
+ever exits). Which port belongs to whom — nginx, a listener, a host-side forward — is one checked
+inventory, [`demo/ports.json`](demo/ports.json) (`php scripts/check-ports.php`).
 
 ```bash
 # compose
@@ -528,7 +530,10 @@ funnypot is built so it can only ever mislead an attacker, never help one.
   `eval`, no real filesystem, no outbound socket. `wget` and `curl` return canned text and the URL is
   logged, never fetched.
 - **Reflect, never harm.** No decompression bombs (decoy archives are small + bounded, a few KB to ~1 MB), no retaliation, no
-  outbound requests. Every response is size-capped.
+  outbound requests. Every response is size-capped, and the one large one — the fleet console's
+  backup-download bait under `/__dl/` — is additionally bounded at nginx (concurrent transfers per
+  source and in total, starts per minute, bytes per second, FastCGI spool) so it can never hold the
+  php-fpm pool, fill the disk or amplify egress; its intel rows are capped per actor per window.
 - **Reflect only escaped, never execute.** Attacker input is not reflected, except the deep panel's
   fake-persistence layer, which echoes a submitted note/message/edit back **HTML-escaped** (bounded,
   per-visitor, TTL'd — never executable, no stored XSS). No request body is ever `unserialize()`d, and
@@ -580,6 +585,11 @@ including a golden test that runs real nuclei against a live server.
 decoy/panel/attack paths and asserts each serves (non-404) — the build-time twin of the post-deploy
 `scripts/canary.sh`, so a wiring regression that dark-404s the whole deception fails here before it ships.
 
+`tests/App/Ops/` pins the deploy rig itself: the port inventory (`demo/ports.json`) against nginx,
+the entrypoint, the Dockerfile, `deploy.sh` and compose (`PortDriftTest` — the same check as
+`php scripts/check-ports.php`), the `/__dl/` download envelope, log rotation, the production
+opcache setting, and the listener respawn backoff (run against the real `entrypoint.sh` with stubs).
+
 ## Build-time helpers
 
 The compiled artifacts under `resources/compiled/` are committed, so a normal run needs no build step.
@@ -589,6 +599,7 @@ To regenerate them after editing templates:
 bin/funnypot compile-protocols     # templates/protocol -> the TCP emulator table
 bin/funnypot compile-catalog       # derive the emulation catalog (app + engine templates)
 bin/funnypot vulns:sync            # refresh the on/off toggle list
+php scripts/check-ports.php        # port inventory vs nginx/entrypoint/Dockerfile/deploy/compose (--format, --print sg)
 ```
 
 ## Docs

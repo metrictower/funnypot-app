@@ -5,6 +5,7 @@ set -e
 
 RUNTIME="${FUNNYPOT_IDENTITY_RUNTIME_DIR:-/run/funnypot}"
 NGINX_CONFD="${FUNNYPOT_NGINX_CONFD:-/etc/nginx/http.d}"
+PHP_CONFD="${FUNNYPOT_PHP_CONFD:-/usr/local/etc/php/conf.d}"
 
 # Install identity FIRST — before php-fpm, every listener and every worker. Resolves (or creates once)
 # the persisted install master, derives the closed keyset, selects + verifies the TLS pair, publishes
@@ -30,6 +31,17 @@ fi
 # mandatory here. Children find their scoped bundle through $RUNTIME (a path, kept).
 unset FUNNYPOT_INSTALL_SECRET_FILE FUNNYPOT_INSTALL_SECRET FUNNYPOT_PERSONA_SEED FUNNYPOT_PERSONA_SECRET FUNNYPOT_TLS_CERT_FILE FUNNYPOT_TLS_KEY_FILE FUNNYPOT_FS_SECRET
 
+# Opcache: the baked image is immutable, so production never stats source files per request
+# (demo/opcache.ini freezes timestamps). A bind-mounted dev tree needs revalidation back: FUNNYPOT_DEV=1
+# drops an override ini before php-fpm reads its config (named to sort AFTER zz-funnypot.ini, so it
+# wins); anything else removes a stale one, so a dev flag never survives into a later production
+# start of the same image.
+if [ "${FUNNYPOT_DEV:-0}" = "1" ]; then
+    printf 'opcache.validate_timestamps=1\nopcache.revalidate_freq=0\n' > "$PHP_CONFD/zzz-funnypot-dev.ini"
+else
+    rm -f "$PHP_CONFD/zzz-funnypot-dev.ini"
+fi
+
 php-fpm --daemonize
 
 # Refresh the emulation toggle list from the compiled catalog: new capabilities auto-appear at
@@ -44,14 +56,36 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     # Respawn a listener if it ever exits. `--restart unless-stopped` only reacts to the CONTAINER
     # dying; a single background listener that hit a fatal would otherwise leave its port silently
     # dead until a manual `docker restart`. The in-process select loops already isolate per-message
-    # faults (degrade, never crash); this is the belt-and-braces layer. A 2s backoff keeps a
-    # crash-on-boot from hot-looping. Each backgrounded subshell snapshots its own proto/bind.
+    # faults (degrade, never crash); this is the belt-and-braces layer.
+    #
+    # The loop is bounded: consecutive short-lived runs back off 2, 4, 8, 16, 32 then
+    # FUNNYPOT_LISTENER_BACKOFF_MAX_S (60) seconds, and the streak resets only once a run stayed up for
+    # FUNNYPOT_LISTENER_HEALTHY_S (60) seconds — so a permanent bind or config fault logs one line a
+    # minute, not one every two seconds forever. One compact line per exit, no banner. The
+    # `|| _rc=$?` capture is load-bearing under `set -e`: a bare failing command would end this
+    # subshell and the port would stay dark with nothing logged. A clean exit (a service switched off
+    # in the catalog) is retried on the same capped cadence, so switching it back on is picked up
+    # within the cap. Each backgrounded subshell snapshots its own proto/bind.
+    # The spawn lines below are a VIEW of demo/ports.json: `php scripts/check-ports.php` fails on drift
+    # or on a port nginx also listens on.
+    HEALTHY_S="${FUNNYPOT_LISTENER_HEALTHY_S:-60}"
+    BACKOFF_MAX_S="${FUNNYPOT_LISTENER_BACKOFF_MAX_S:-60}"
     spawn() {
         _proto="$1"; _bind="$2"
-        ( while true; do
-            php /app/demo/listen.php "$_proto" "$_bind"
-            echo "funnypot: listener '$_proto' exited (rc=$?), respawning in 2s" >&2
-            sleep 2
+        ( _fails=0
+          while true; do
+            _t0=$(date +%s)
+            _rc=0
+            php /app/demo/listen.php "$_proto" "$_bind" || _rc=$?
+            _up=$(( $(date +%s) - _t0 ))
+            if [ "$_up" -ge "$HEALTHY_S" ]; then _fails=1; else _fails=$((_fails + 1)); fi
+            _delay=2; _i=1
+            while [ "$_i" -lt "$_fails" ] && [ "$_delay" -lt "$BACKOFF_MAX_S" ]; do
+                _delay=$((_delay * 2)); _i=$((_i + 1))
+            done
+            if [ "$_delay" -gt "$BACKOFF_MAX_S" ]; then _delay="$BACKOFF_MAX_S"; fi
+            echo "funnypot: listener '$_proto' exited rc=$_rc after ${_up}s (short runs in a row: $_fails); respawning in ${_delay}s" >&2
+            sleep "$_delay"
           done ) &
     }
     spawn redis       0.0.0.0:6379

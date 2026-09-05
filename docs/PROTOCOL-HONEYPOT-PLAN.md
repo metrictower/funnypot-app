@@ -412,9 +412,10 @@ The demo container already runs php-fpm and nginx via `demo/entrypoint.sh`. Add:
   the existing web ports: e.g. `6379` (redis), `23` (telnet), `21` (ftp), `25`
   (smtp), `11211` (memcached), `3306` (mysql), and `2222` for SSH mapped to
   the sidecar (avoid `22`, which collides with the host's real sshd; map
-  `2222:2222` or `22:2222`). Keep the port list in sync across compose, the
-  Dockerfile `EXPOSE`, and `scripts/deploy.sh` PORTS, exactly as the nginx.conf
-  comment already warns for web ports.
+  `2222:2222` or `22:2222`). Compose, the Dockerfile `EXPOSE`, `scripts/deploy.sh`
+  PORTS, the entrypoint spawns and the nginx listens are all views of one inventory,
+  `demo/ports.json`; `php scripts/check-ports.php` fails on any drift or on a port
+  claimed by both nginx and a listener.
 - **Shared artifacts.** Listeners load the compiled protocol-template artifact
   (`resources/compiled/funnypot-protocols.php`, built by the new compiler from
   `templates/protocol/*.yaml`) and write to the same `FUNNYPOT_LOG`, so one

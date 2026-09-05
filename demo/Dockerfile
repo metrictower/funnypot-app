@@ -56,18 +56,20 @@ RUN chmod +x /entrypoint.sh /app/bin/funnypot \
 ENV FUNNYPOT_STYLE=realistic \
     FUNNYPOT_LOG=/app/demo/storage/hits.log
 
-# Common HTTP + alt-HTTP + app/panel ports, and HTTPS on the common TLS ports.
-# (Documentation only; docker publishes ports via -p in scripts/deploy.sh. Keep in sync.)
-EXPOSE 80 81 88 591 2082 2086 2095 2375 3000 3128 4243 5000 5555 5601 5984 7001 7070 7080 7474 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8500 8880 8888 8983 9000 9080 9090 9100 9200 10000 15672
+# Every container bind, once — a VIEW of demo/ports.json (documentation only: docker publishes via
+# -p in scripts/deploy.sh / compose `ports`). Host-side alias forwards (22->2222, 5800/5901/5902->5900,
+# 5061/5080->5060) are publish mappings, not container ports, so they are not listed here.
+# `php scripts/check-ports.php` fails on a missing, extra or duplicated port.
+# nginx: common HTTP + alt-HTTP + app/panel ports.
+EXPOSE 80 81 591 2082 2086 2095 2375 3000 3128 4243 5000 5601 5984 7001 7070 7080 7474 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8500 8880 8888 8983 9000 9080 9090 9100 9200 10000 15672
+# nginx: HTTPS on the common TLS ports.
 EXPOSE 443 2083 2087 2096 4433 4443 8443 8834 8843 9443 10443
 # TCP protocol honeypots: mail/cache/shell (redis/ftp/smtp/telnet/memcached/ssh/pop3/imap/finger),
-# remote/sync (vnc/rsync/clamav/zookeeper), databases (mysql/postgres/mongodb), SCADA (modbus/enip).
-# 5800/5901/5902 are extra VNC scan ports the deploy forwards to the single 5900 listener.
-# 5060 = SIP signaling (TCP+UDP); 10000/udp = SIP RTP media; 3389 = RDP; 445 = SMB; 1433 = MSSQL;
-# 1883 = MQTT; 389 = LDAP; 161/udp = SNMP; 102 = S7comm; 554 = RTSP; 5555 = ADB; 47808/udp = BACnet;
-# 3478/udp = STUN; 5061/5080 = extra SIP discovery ports; 88 = Kerberos; 20000 = DNP3;
-# 623/udp = IPMI; 5683/udp = CoAP; 123/udp = NTP; 1521 = Oracle TNS; 5985 = WinRM; 9042 = Cassandra;
-# 7547/7548 = TR-069/CWMP router-worm trap.
-EXPOSE 21 23 25 79 88 102 110 123/udp 143 161/udp 389 445 502 554 623/udp 873 1433 1521 1883 2181 2222 3306 3310 3389 3478/udp 5060 5060/udp 5061 5061/udp 5080 5080/udp 5432 5555 5683/udp 5800 5900 5901 5902 5985 6379 7547 7548 9042 10000/udp 11211 20000 27017 44818 47808/udp
+# remote/sync (vnc/rsync/clamav/zookeeper), databases (mysql/postgres/mongodb/mssql/oracle/cassandra),
+# SCADA (modbus/enip/s7comm/dnp3), 88 = Kerberos, 5555 = ADB, 5060 = SIP signaling, 3389 = RDP,
+# 445 = SMB, 1883 = MQTT, 389 = LDAP, 554 = RTSP, 5985 = WinRM, 7547/7548 = TR-069/CWMP.
+EXPOSE 21 23 25 79 88 102 110 143 389 445 502 554 873 1433 1521 1883 2181 2222 3306 3310 3389 5060 5432 5555 5900 5985 6379 7547 7548 9042 11211 20000 27017 44818
+# UDP: 123 NTP, 161 SNMP, 623 IPMI, 3478 STUN, 5060 SIP, 5683 CoAP, 10000 SIP RTP media, 47808 BACnet.
+EXPOSE 123/udp 161/udp 623/udp 3478/udp 5060/udp 5683/udp 10000/udp 47808/udp
 
 CMD ["/entrypoint.sh"]

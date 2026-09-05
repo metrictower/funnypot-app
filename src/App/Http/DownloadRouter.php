@@ -36,6 +36,12 @@ use Funnypot\Shell\Fs\Draw;
  *
  * Safety: nothing executes; bytes are procedural. The manifest and headers are resolved before any byte is
  * flushed, so a fault degrades to an empty/plain response, never a 500 (a 500 is itself a tell).
+ *
+ * Resource bounds: this route is gate-exempt, so the worker/temp-disk/egress envelope (concurrent
+ * transfers per source and in total, starts per minute, bytes per second, FastCGI spool) is enforced by
+ * nginx in demo/funnypot-location.conf, ahead of PHP. What THIS class bounds is its own telemetry: the
+ * bait rows one actor can produce per window (BaitEventLimiter), so a hammering source costs a few rows
+ * plus one folded count, not a row per request.
  */
 final class DownloadRouter
 {
@@ -47,6 +53,7 @@ final class DownloadRouter
     private const NAME_MAX = 200;        // host param cap
 
     private Closure $emitterFactory;
+    private BaitEventLimiter $bait;
 
     /**
      * @param int $chunkMinKb minimum chunk size (KiB)   @param int $chunkMaxKb maximum chunk size (KiB)
@@ -63,9 +70,11 @@ final class DownloadRouter
         private int $varyPct = 50,
         private int $easePeriodS = 20,
         private int $fallbackCapMb = 50,
-        ?Closure $emitterFactory = null
+        ?Closure $emitterFactory = null,
+        ?BaitEventLimiter $bait = null
     ) {
         $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
+        $this->bait = $bait ?? new BaitEventLimiter();
     }
 
     public function matches(string $path): bool
@@ -274,8 +283,20 @@ final class DownloadRouter
         return substr($h, 0, self::NAME_MAX);
     }
 
+    /**
+     * One bait row per admitted event; past the per-actor window cap the event is only counted and the
+     * count is folded into the next kept row. $ip is the front controller's trusted-client-IP result.
+     */
     private function logBait(string $ip, string $method, string $host): void
     {
+        $admit = $this->bait->admit($ip);
+        if (!$admit['keep']) {
+            return;
+        }
+        $body = $host !== '' ? 'host=' . $host : '';
+        if ($admit['suppressed'] > 0) {
+            $body .= ($body !== '' ? ' ' : '') . 'suppressed=' . $admit['suppressed'];
+        }
         $this->hits->append([
             'ts' => gmdate('c'),
             'ip' => $ip,
@@ -285,7 +306,7 @@ final class DownloadRouter
             'served' => true,
             'severity' => 'info',
             'event' => 'download',
-            'body' => $host !== '' ? 'host=' . $host : '',
+            'body' => $body,
         ]);
     }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Http;
 
 use Funnypot\App\AiApi\StreamEmitter;
+use Funnypot\App\Http\BaitEventLimiter;
 use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Render\Fake\Fleet;
 use Funnypot\App\Storage\HitStore;
@@ -172,6 +173,63 @@ final class DownloadRouterTest extends TestCase
         $this->assertStringNotContainsString('Fatal', $out);
         $m = json_decode($out, true);
         $this->assertNotEmpty($m['files']);
+    }
+
+    /**
+     * The route is gate-exempt, so its telemetry is what THIS class bounds: one actor hammering the
+     * manifest/zip yields the window cap in rows, every later hit is only counted, and that count is
+     * folded into the first row of the next window. Serving is never affected.
+     */
+    public function testBaitRowsPerActorAreBoundedAndSuppressedCountIsFolded(): void
+    {
+        $now = 1_700_000_000;
+        $limiter = new BaitEventLimiter(3, 600, static function () use (&$now): int { return $now; });
+        $r = $this->routerWith($limiter, $captured);
+
+        for ($i = 0; $i < 5; $i++) {
+            $captured = '';
+            $r->handle(new RequestContext('GET', '/__dl/manifest', 'host=' . $this->host), '203.0.113.9');
+            $this->assertJson($captured, "request {$i} is still served while suppressed");
+        }
+        $rows = $this->downloadRows('203.0.113.9');
+        $this->assertCount(3, $rows, 'window cap');
+
+        // Another actor is independent.
+        $r->handle(new RequestContext('GET', '/__dl/backup.zip', 'host=' . $this->host), '203.0.113.10');
+        $this->assertCount(1, $this->downloadRows('203.0.113.10'));
+
+        // Next window: kept again, carrying the two dropped events in the body.
+        $now += 601;
+        $r->handle(new RequestContext('GET', '/__dl/manifest', 'host=' . $this->host), '203.0.113.9');
+        $rows = $this->downloadRows('203.0.113.9');
+        $this->assertCount(4, $rows);
+        $this->assertStringContainsString('suppressed=2', (string) $rows[3]['body']);
+        $this->assertStringContainsString('host=', (string) $rows[3]['body']);
+    }
+
+    public function testTelemetryFaultNeverChangesWhatIsServed(): void
+    {
+        $limiter = new BaitEventLimiter(3, 600, null, static function (): int { throw new \RuntimeException('shm gone'); }, static fn (): int => 0);
+        $r = $this->routerWith($limiter, $captured);
+        $r->handle(new RequestContext('GET', '/__dl/manifest', 'host=' . $this->host), '203.0.113.11');
+        $this->assertJson($captured);
+        $this->assertCount(1, $this->downloadRows('203.0.113.11'), 'a counter fault admits the event');
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function downloadRows(string $ip): array
+    {
+        return array_values(array_filter($this->hits->appended, static fn (array $e): bool => ($e['event'] ?? '') === 'download' && $e['ip'] === $ip));
+    }
+
+    private function routerWith(BaitEventLimiter $limiter, ?string &$captured): DownloadRouter
+    {
+        $captured = '';
+        $factory = static function () use (&$captured): StreamEmitter {
+            return new StreamEmitter(static function (string $b) use (&$captured): void { $captured .= $b; }, 0);
+        };
+
+        return new DownloadRouter($this->hits, self::SEED, "/* sw */", 100, 200, 100, 50, 20, 2, $factory, $limiter);
     }
 
     private function handle(string $path, string $query, string $method): string

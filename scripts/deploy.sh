@@ -12,7 +12,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -f "$SCRIPT_DIR/deploy.env" ]; then
+# FUNNYPOT_PRINT_PORTS=1 (scripts/check-ports.php): print the publish flags a bare deploy would use
+# and exit before anything is sourced, validated, built or shipped. deploy.env is deliberately NOT
+# read in this mode — the port manifest is checked against the script's own defaults; operator
+# opt-ins are checked through their env var (e.g. FUNNYPOT_SSH_ON_22=1) by the same tool.
+PRINT_PORTS="${FUNNYPOT_PRINT_PORTS:-0}"
+if [ "$PRINT_PORTS" != "1" ] && [ -f "$SCRIPT_DIR/deploy.env" ]; then
     # shellcheck disable=SC1091
     . "$SCRIPT_DIR/deploy.env"
 fi
@@ -72,6 +77,50 @@ LLM_MAX_CONCURRENT="${FUNNYPOT_LLM_MAX_CONCURRENT:-1}"
 LLM_TIMEOUT_MS="${FUNNYPOT_LLM_TIMEOUT_MS:-13000}"
 LLM_NET="funnypot-net"
 
+# Every host port docker publishes: the HTTP + alt-HTTP + app/panel ports (nginx) plus the TCP
+# protocol-honeypot ports (mail/cache/shell + databases + SCADA — see demo/entrypoint.sh), then the
+# UDP services and the alt-port forwards below. This is a VIEW of demo/ports.json — the one port
+# inventory; `php scripts/check-ports.php` runs this script in print mode and fails on any drift
+# between the two (and against nginx, the entrypoint, the Dockerfile and compose). The EC2 security
+# group is what actually gates reachability: `php scripts/check-ports.php --print sg` lists what it
+# must admit.
+PORTS="21 23 25 79 80 81 88 102 110 143 389 443 445 502 554 591 873 1433 1521 1883 20000 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 3389 4243 4433 4443 5000 5060 5432 5555 5601 5900 5984 5985 6379 7001 7070 7080 7474 7547 7548 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9042 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
+PFLAGS=""
+for p in $PORTS; do PFLAGS="$PFLAGS -p $p:$p"; done
+PFLAGS="$PFLAGS -p 5060:5060/udp"
+# SIP media (RTP) is UDP on the fixed port; publish it so inbound caller audio + DTMF reach the box.
+PFLAGS="$PFLAGS -p ${FUNNYPOT_SIP_RTP_PORT:-10000}:${FUNNYPOT_SIP_RTP_PORT:-10000}/udp"
+# SNMP agent is UDP on 161.
+PFLAGS="$PFLAGS -p 161:161/udp"
+# BACnet/IP is UDP on 47808.
+PFLAGS="$PFLAGS -p 47808:47808/udp"
+# STUN is UDP on 3478 (NAT-discovery decoy rounding out the VoIP footprint).
+PFLAGS="$PFLAGS -p 3478:3478/udp"
+# IPMI (BMC) is UDP on 623; CoAP (IoT) is UDP on 5683.
+PFLAGS="$PFLAGS -p 623:623/udp -p 5683:5683/udp"
+# NTP is UDP on 123 (TCP 1521 Oracle / 5985 WinRM / 9042 Cassandra ride the TCP PORTS list above).
+PFLAGS="$PFLAGS -p 123:123/udp"
+# Extra SIP discovery ports: publish common alt SIP ports to the single 5060 listener (wide-net
+# decoy; plain SIP, not TLS). Mirrors the VNC alt-ports forwarding.
+for sp in ${FUNNYPOT_SIP_ALT_PORTS:-5061 5080}; do PFLAGS="$PFLAGS -p $sp:5060 -p $sp:5060/udp"; done
+# Serve the SSH honeypot on the real port 22 (host 22 -> container's ssh listener on 2222).
+# Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
+# FUNNYPOT_SSH_PORT set to the moved sshd port below.
+if [ "${FUNNYPOT_SSH_ON_22:-0}" = "1" ]; then PFLAGS="$PFLAGS -p 22:2222"; fi
+# Extra VNC scan ports all forward to the ONE container VNC listener on 5900 (a single process
+# serves them — no per-port listener). DNAT rewrites the dest to 5900, so alt-port hits log as
+# 5900. Open these in the security group too, or they are unreachable. Empty to disable.
+for vp in ${FUNNYPOT_VNC_ALT_PORTS:-5901 5902 5800}; do PFLAGS="$PFLAGS -p $vp:5900"; done
+if [ "$PRINT_PORTS" = "1" ]; then
+    echo "$PFLAGS"
+    exit 0
+fi
+
+# Bounded container logs on the host: stdout/stderr (hit JSON lines, listener respawn notices, PHP
+# errors) rotate at 5 x 10 MiB instead of one json-file growing forever. The persisted hit store on
+# the data volume is the record; this log is diagnostics. Applied to both containers.
+LOG_FLAGS="--log-driver json-file --log-opt max-size=10m --log-opt max-file=5"
+
 if [ -z "$HOST" ] || [ -z "$KEY" ]; then
     echo "error: FUNNYPOT_HOST and FUNNYPOT_KEY are not set." >&2
     echo "  cp scripts/deploy.env.example scripts/deploy.env  then edit it (it is gitignored)." >&2
@@ -87,10 +136,6 @@ fi
 # (scripts/move-sshd-port.sh) so the honeypot can take port 22 — otherwise deploy locks out.
 SSH_PORT="${FUNNYPOT_SSH_PORT:-22}"
 SSH_OPTS=(-i "$KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20)
-# Known HTTP + alt-HTTP + app/panel ports (nginx) plus the TCP protocol-honeypot ports (mail/cache/
-# shell + databases + SCADA — see demo/entrypoint.sh). Keep in sync with demo/entrypoint.sh +
-# demo/Dockerfile and open the matching inbound rules in the EC2 security group (the SG gates reachability).
-PORTS="21 23 25 79 80 81 88 102 110 143 389 443 445 502 554 591 873 1433 1521 1883 20000 2082 2083 2086 2087 2095 2096 2181 2222 2375 3000 3128 3306 3310 3389 4243 4433 4443 5000 5060 5432 5555 5601 5900 5984 5985 6379 7001 7070 7080 7474 7547 7548 8000 8001 8008 8009 8065 8069 8080 8081 8082 8083 8086 8088 8090 8161 8180 8181 8200 8443 8500 8834 8843 8880 8888 8983 9000 9042 9080 9090 9100 9200 9443 10000 10443 11211 15672 27017 44818"
 
 # --- deploy only a clean, committed state ------------------------------------------------------
 # The build below packages the working tree, so ANY uncommitted change silently ships to prod. A
@@ -174,32 +219,6 @@ else
 fi
 
 echo "==> [4/4] (re)start container (logs persisted to ~/funnypot-data on the host)"
-PFLAGS=""
-for p in $PORTS; do PFLAGS="$PFLAGS -p $p:$p"; done
-PFLAGS="$PFLAGS -p 5060:5060/udp"
-# SIP media (RTP) is UDP on the fixed port; publish it so inbound caller audio + DTMF reach the box.
-PFLAGS="$PFLAGS -p ${FUNNYPOT_SIP_RTP_PORT:-10000}:${FUNNYPOT_SIP_RTP_PORT:-10000}/udp"
-# SNMP agent is UDP on 161.
-PFLAGS="$PFLAGS -p 161:161/udp"
-# BACnet/IP is UDP on 47808.
-PFLAGS="$PFLAGS -p 47808:47808/udp"
-# STUN is UDP on 3478 (NAT-discovery decoy rounding out the VoIP footprint).
-PFLAGS="$PFLAGS -p 3478:3478/udp"
-# IPMI (BMC) is UDP on 623; CoAP (IoT) is UDP on 5683.
-PFLAGS="$PFLAGS -p 623:623/udp -p 5683:5683/udp"
-# NTP is UDP on 123 (TCP 1521 Oracle / 5985 WinRM / 9042 Cassandra ride the TCP PORTS list above).
-PFLAGS="$PFLAGS -p 123:123/udp"
-# Extra SIP discovery ports: publish common alt SIP ports to the single 5060 listener (wide-net
-# decoy; plain SIP, not TLS). Mirrors the VNC alt-ports forwarding.
-for sp in ${FUNNYPOT_SIP_ALT_PORTS:-5061 5080}; do PFLAGS="$PFLAGS -p $sp:5060 -p $sp:5060/udp"; done
-# Serve the SSH honeypot on the real port 22 (host 22 -> container's ssh listener on 2222).
-# Requires the host's own sshd to have vacated 22 first (scripts/move-sshd-port.sh) and
-# FUNNYPOT_SSH_PORT set to the moved sshd port above.
-if [ "${FUNNYPOT_SSH_ON_22:-0}" = "1" ]; then PFLAGS="$PFLAGS -p 22:2222"; fi
-# Extra VNC scan ports all forward to the ONE container VNC listener on 5900 (a single process
-# serves them — no per-port listener). DNAT rewrites the dest to 5900, so alt-port hits log as
-# 5900. Open these in the security group too, or they are unreachable. Empty to disable.
-for vp in ${FUNNYPOT_VNC_ALT_PORTS:-5901 5902 5800}; do PFLAGS="$PFLAGS -p $vp:5900"; done
 # LLM sidecar: network + run commands (single line, ';'-separated to keep the remote quoting simple).
 # All three vars are empty when LLM_ON=0, so the funnypot run below is byte-identical to before. The
 # memory cap means the kernel OOM-kills the SIDECAR, never the honeypot, if the model overruns.
@@ -212,7 +231,7 @@ if [ "$LLM_ON" = "1" ]; then
     # Operator testing knobs (empty = app defaults 5/15, no allowlist): raise the per-IP velocity gate
     # or exempt a test IP/CIDR so it can generate unlimited fakes without self-pinning to plain-404.
     FUNNYPOT_LLM_FLAGS="$FUNNYPOT_LLM_FLAGS -e FUNNYPOT_LLM_GATE_ALLOW=${FUNNYPOT_LLM_GATE_ALLOW:-} -e FUNNYPOT_LLM_VELOCITY_PER_60S=${FUNNYPOT_LLM_VELOCITY_PER_60S:-30} -e FUNNYPOT_LLM_VELOCITY_PER_10M=${FUNNYPOT_LLM_VELOCITY_PER_10M:-100}"
-    LLM_SETUP="sudo docker network inspect $LLM_NET >/dev/null 2>&1 || sudo docker network create $LLM_NET ; sudo docker rm -f funnypot-llm 2>/dev/null || true ; sudo docker run -d --name funnypot-llm --restart unless-stopped --network $LLM_NET -m $LLM_MEM --memory-swap $LLM_MEM_SWAP -e THREADS=$LLM_THREADS -e PARALLEL=$LLM_PARALLEL -e CTX_SIZE=2048 funnypot-llm"
+    LLM_SETUP="sudo docker network inspect $LLM_NET >/dev/null 2>&1 || sudo docker network create $LLM_NET ; sudo docker rm -f funnypot-llm 2>/dev/null || true ; sudo docker run -d --name funnypot-llm --restart unless-stopped $LOG_FLAGS --network $LLM_NET -m $LLM_MEM --memory-swap $LLM_MEM_SWAP -e THREADS=$LLM_THREADS -e PARALLEL=$LLM_PARALLEL -e CTX_SIZE=2048 funnypot-llm"
 fi
 
 # Fake AI-API chat tier (Ollama/OpenAI/Anthropic). On by default; reuses the sidecar via
@@ -239,7 +258,7 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
         -v /etc/letsencrypt:/etc/letsencrypt:ro \
         --entrypoint php funnypot /app/bin/funnypot identity:prepare
     sudo docker rm -f funnypot 2>/dev/null || true
-    sudo docker run -d --name funnypot --restart unless-stopped $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS $IDENTITY_FLAGS \
+    sudo docker run -d --name funnypot --restart unless-stopped $LOG_FLAGS $FUNNYPOT_NET_FLAG $FUNNYPOT_LLM_FLAGS $FUNNYPOT_AI_FLAGS $IDENTITY_FLAGS \
         -e FUNNYPOT_EPOCH=$(date +%s) \
         -e FUNNYPOT_STYLE=${FUNNYPOT_STYLE:-realistic} \
         -e FUNNYPOT_VNC_STYLE='${FUNNYPOT_VNC_STYLE:-}' \

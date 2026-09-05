@@ -24,6 +24,8 @@ services:
     depends_on:
       funnypot-prepare:
         condition: service_completed_successfully
+    # The reduced local profile of demo/ports.json (its `compose` target): web + the six classic
+    # TCP emulators, no UDP, no forwards. `php scripts/check-ports.php` fails if this list drifts.
     ports:
       # TCP protocol honeypots (redis/ftp/smtp/telnet/memcached/ssh).
       - "21:21"
@@ -58,12 +60,22 @@ services:
       # FUNNYPOT_HONEYTOKEN_KEY: change-me    # enables the tamper-evident bait cookie
       # FUNNYPOT_DB: "off"                     # disable the SQLite store (file-only stats)
       # FUNNYPOT_PERSONA_SEED: my-visible-persona   # optional cosmetic persona override (see docs/IDENTITY.md)
+      # FUNNYPOT_DEV: "1"   # with the source bind-mounts below: revalidate opcache timestamps per request
     restart: unless-stopped
+    # Bounded container logs: stdout/stderr (hit JSON lines, listener respawn notices, PHP errors)
+    # rotate at 5 x 10 MiB instead of one json-file growing forever. The persisted hit store on the
+    # volume is the record; this log is diagnostics.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
       # Persist the hit log + SQLite store + geoip data + the private install identity (.funnypot/)
       # across container recreation. The SAME volume the preflight above prepared.
       - funnypot-storage:/app/demo/storage
-    # For local dev with instant code edits, also bind-mount the source:
+    # For local dev with instant code edits, also bind-mount the source AND set FUNNYPOT_DEV=1 above
+    # (the production image freezes opcache timestamps, so edits are invisible without it):
     #   - ../src:/app/src:ro
     #   - ../resources:/app/resources:ro
     #   - ../demo:/app/demo

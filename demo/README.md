@@ -105,6 +105,60 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_ENGAGEMENT_GLOBAL_ROWS` | `250000` | global event-row ceiling, enforced inline on every write (clamped 1000–5000000) |
 | `FUNNYPOT_ENGAGEMENT_GLOBAL_BYTES_MB` | `256` | global retained-byte ceiling — inline on writes, and the size cap of the retention pass (clamped 1–4096) |
 | `FUNNYPOT_ENGAGEMENT_RETAIN_DAYS` | `30` | age ceiling for engagement rows (clamped 1–30, and never longer than `FUNNYPOT_RETAIN_DAYS` when that is set) |
+| `FUNNYPOT_DEV` | off | `1` = a bind-mounted dev tree: the entrypoint restores per-request opcache timestamp validation (production freezes it — see below). Restart-required |
+| `FUNNYPOT_LISTENER_HEALTHY_S` | `60` | a listener run shorter than this counts toward the respawn backoff streak; one at least this long resets it |
+| `FUNNYPOT_LISTENER_BACKOFF_MAX_S` | `60` | cap on the respawn delay (2, 4, 8, 16, 32, then this) |
+
+## Operating the box: bounds, logs, ports
+
+**The download bait is bounded at nginx, ahead of PHP.** `/__dl/` (the fleet console's "Download
+latest backup" — service worker, manifest and the 50 MiB non-JS fallback) is deliberately exempt from
+the app's per-IP velocity gate, so `demo/funnypot-location.conf` gives it its own envelope: 2
+concurrent transfers per source and 4 in total (at most 4 of the 16 php-fpm workers can ever be held
+by slow readers), 6 starts per minute per source (burst 3), 2 MiB/s per connection, and a 4 MiB
+FastCGI spool cap (past it the worker is paced by the client instead of nginx spooling 50 MiB to
+disk per request). A throttled request gets a short controlled `429` with `Retry-After`, never nginx's
+stock page. The numbers live in that one file (zones in `nginx.conf`) and are pinned by
+`tests/App/Ops/DownloadLimitsConfigTest` — change them there deliberately. Separately, the bait's
+intel rows are capped per actor: 3 per 10 minutes, the rest counted and folded into the next kept row
+as `suppressed=N` (`BaitEventLimiter`; APCu-shared across the pool). Serving never depends on that
+counter.
+
+**Production opcache never stats source files.** The image is immutable, so `demo/opcache.ini` sets
+`opcache.validate_timestamps=0`. For local development with the source bind-mounted (the commented
+recipe in `docker-compose.yml`), set `FUNNYPOT_DEV=1`: the entrypoint writes an override ini restoring
+per-request revalidation before php-fpm starts, and removes it again on any start without the flag.
+
+**Container logs rotate.** Both `deploy.sh` runs and compose use the `json-file` driver at 5 × 10 MiB.
+The persisted hit store on the data volume (`hits.log` + SQLite, retention via `FUNNYPOT_RETAIN_*`) is
+the record; `docker logs` is diagnostics and older stdout/stderr is dropped by design.
+
+**Listener respawn backs off.** A listener that keeps exiting is relaunched after 2, 4, 8, 16, 32 then
+60 s (one compact line per exit), and the streak resets only after a run stayed up for
+`FUNNYPOT_LISTENER_HEALTHY_S`. A permanent bind/config fault therefore logs once a minute, not every
+two seconds forever. Port collisions between nginx and a listener are prevented earlier, by the
+manifest check below — backoff is the last-resort bound, not the detector.
+
+**One port inventory.** `demo/ports.json` is the source of truth for every `(transport, port)`: who
+binds it in the container (nginx, or which listener process), which deploy target publishes it
+(`deploy` = the full production set, `compose` = the reduced local profile), and which host-side
+aliases forward to it (22 → 2222 when `FUNNYPOT_SSH_ON_22=1`, 5800/5901/5902 → 5900, 5061/5080 →
+5060). The nginx `listen`s, entrypoint `spawn`s, Dockerfile `EXPOSE`, `deploy.sh` publish flags and
+compose `ports` are views of it:
+
+```bash
+php scripts/check-ports.php              # validate + drift/collision check (CI runs the same via PortDriftTest)
+php scripts/check-ports.php --format     # rewrite ports.json canonically (sorted, one endpoint per line)
+php scripts/check-ports.php --print sg   # the inbound rules the deploy target needs
+```
+
+Edit `ports.json` first, then the view; a port may have exactly one container owner (88 is the
+Kerberos listener, 5555 the ADB listener — never nginx too, or the two race for the bind at boot and
+the port serves whichever won). The security group cannot be read here: before a deploy, diff
+`--print sg` against the group's inbound rules (`aws ec2 describe-security-groups --group-ids <sg>
+--query 'SecurityGroups[0].IpPermissions'`) and approve any difference explicitly. A wider group is
+allowed; a narrower one leaves a decoy unreachable. Ports above 40000 (44818/tcp EtherNet/IP,
+47808/udp BACnet) need their own rules if the group is a range.
 
 The dashboard polls a delta feed (`/?feed=1&after=<cursor>`) that returns only rows appended since
 the last poll, not the whole tail, and appends them in place; load older pages back through history.
