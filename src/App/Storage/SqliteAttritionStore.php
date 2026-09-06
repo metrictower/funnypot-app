@@ -33,9 +33,6 @@ use Throwable;
  */
 final class SqliteAttritionStore implements AttritionStore
 {
-    public const JOB_REVISION = 'export-manifest/v1';
-    public const RENDERER_REVISION = 'attrition-export/v1';
-
     private ?PDO $db = null;
 
     /** @var callable():int */

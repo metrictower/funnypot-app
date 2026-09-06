@@ -10,7 +10,6 @@ use Funnypot\App\Engagement\EngagementRecorder;
 use Funnypot\App\Engagement\EventKind;
 use Funnypot\App\Engagement\LureId;
 use Funnypot\App\Engagement\Stage;
-use Funnypot\App\Storage\SqliteAttritionStore;
 use Funnypot\App\Storage\TarpitBudget;
 use Funnypot\App\Tarpit\Attrition\AttritionArtifactRenderer;
 use Funnypot\App\Tarpit\Attrition\AttritionHandle;
@@ -36,6 +35,14 @@ use Throwable;
  * Every request is promptly completed and buffered: it never sleeps, streams, waits on a background job,
  * decompresses, or performs a filesystem/URL/socket/subprocess action. Responses are hard-capped (job/
  * manifest JSON ≤ 4 KiB, NDJSON artifact ≤ 32 KiB) and every URL is same-origin relative.
+ *
+ * A server-issued handle recurs verbatim in the job id/relative URLs/ETag rather than through the
+ * served-fingerprint reject-sampler ({@see \Funnypot\App\Tarpit\InertSecret}): a handle is
+ * cryptographically fixed, so it cannot be re-derived to dodge a signature. The renderer's generated
+ * body IS routed through that gate; the ~117-byte opaque base64url handle is not, and could carry a
+ * `9\d{5}` run that the app denylist's bare-CRS heuristic would flag. That is a benign false positive,
+ * not a tell: a scanner cannot distinguish a coincidental digit run inside an opaque token from a rule-id
+ * echo, and the token surface is deliberately not scanned by the served-fingerprint gates.
  */
 final class AttritionController
 {
@@ -175,7 +182,7 @@ final class AttritionController
             $this->codec->storedId($token, AttritionHandle::KIND_ENTRY),
             $jobId,
             $this->codec->storedId($firstManifestToken, AttritionHandle::KIND_MANIFEST),
-            SqliteAttritionStore::JOB_REVISION,
+            AttritionStore::JOB_REVISION,
             $entry->expiresAt,
         );
         if ($this->store->createJob($candidate, $now) === null) {

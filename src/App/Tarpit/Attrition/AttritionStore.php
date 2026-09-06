@@ -13,6 +13,10 @@ namespace Funnypot\App\Tarpit\Attrition;
  */
 interface AttritionStore
 {
+    /** The pinned job + renderer revisions a row commits to; retained for the maximum token/state TTL. */
+    public const JOB_REVISION = 'export-manifest/v1';
+    public const RENDERER_REVISION = 'attrition-export/v1';
+
     /** Idempotently load-or-create the job for one entry; null on cap/expiry/fault. */
     public function createJob(JobCandidate $candidate, int $now): ?JobState;
 
