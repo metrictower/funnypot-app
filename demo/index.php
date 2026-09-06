@@ -510,6 +510,6 @@ if ($config->dockerApiEnabled) {
 // profile (base family + variant token) — never the heartbeat freshness/state — so no attacker-facing
 // byte can vary with heartbeat availability (the B2 invariant). No renderer consumes this yet; it is
 // the typed seam a future core fake-data API (FP-0129) binds to. It never throws into the request path.
-$effectiveServiceProfile = \Funnypot\App\Service\EffectiveServiceProfileReader::fromEnvironment(__DIR__)->profile();
+$effectiveServiceProfile = \Funnypot\App\Service\EffectiveServiceProfileReader::profileFromEnvironment(__DIR__);
 
 (new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter))->dispatch($context, $clientIp, $tokenVerdict);

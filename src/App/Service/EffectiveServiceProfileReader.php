@@ -26,6 +26,23 @@ final class EffectiveServiceProfileReader
         return new self(new ServiceStatusReader($paths->statusFile()));
     }
 
+    /**
+     * The request-path entry point: resolve from the environment and read the current profile, never
+     * throwing. A malformed FUNNYPOT_DB / runtime / status env can make {@see fromEnvironment()} itself
+     * throw before {@see profile()} can guard it, which at the front controller would be an
+     * attacker-facing 500 tell; that too degrades to the family-neutral profile.
+     *
+     * @param callable(string):(string|false)|null $env
+     */
+    public static function profileFromEnvironment(string $demoDir, ?callable $env = null): EffectiveServiceProfile
+    {
+        try {
+            return self::fromEnvironment($demoDir, $env)->profile();
+        } catch (\Throwable $e) {
+            return ServiceStatusReader::familyNeutralProfile();
+        }
+    }
+
     public function profile(): EffectiveServiceProfile
     {
         try {
