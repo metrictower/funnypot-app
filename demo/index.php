@@ -44,12 +44,18 @@ use Funnypot\App\Identity\HttpIdentity;
 use Funnypot\App\Identity\IdentityBootstrapException;
 use Funnypot\App\Identity\IdentityPaths;
 use Funnypot\App\Shell\ConsoleSessionStore;
+use Funnypot\App\Http\AttritionController;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Http\SleepDecoy;
+use Funnypot\App\Storage\SqliteAttritionStore;
+use Funnypot\App\Tarpit\Attrition\AttritionArtifactRenderer;
+use Funnypot\App\Tarpit\Attrition\AttritionEntryIssuer;
+use Funnypot\App\Tarpit\Attrition\AttritionLimits;
+use Funnypot\App\Tarpit\Attrition\AttritionTokenCodec;
 use Funnypot\App\Llm\CircuitBreaker;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmFakeResponder;
@@ -392,6 +398,7 @@ $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets',
 // ONLY per-IP guard on the gate-exempt route; the caps are the anti-self-DoS backstop, not robots.txt.
 $labyrinth = null;
 $polluter = null;
+$attrition = null;
 if ($config->tarpitEnabled) {
     $tarpitBudget = new TarpitBudget(
         $config->tarpitDbPath,
@@ -416,7 +423,30 @@ if ($config->tarpitEnabled) {
     $tarpitPacingSw = $config->tarpitLatencyMs > 0
         ? (string) @file_get_contents(dirname(__DIR__) . '/src/App/Tarpit/aa-sw.js')
         : '';
-    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder);
+    // FP-0272 bounded async-export attrition journey. Independent opt-in that ALSO rides the tarpit
+    // master switch: it reuses the SAME $tarpitBudget (one slot pool + ledger across the whole tarpit
+    // surface) and needs the additive attrition HTTP key. A missing key (an old bundle not yet
+    // re-prepared) or a migration failure leaves the issuer + controller null and logs a fixed code, so
+    // the reserved /admin/export/* routes fall through to the honeypot — never a partial mount, never a
+    // fallback key/store. Its own attrition.sqlite; FP-0308 observes it best-effort like the other tarpits.
+    $attritionIssuer = null;
+    if ($config->attritionEnabled) {
+        $attritionKey = $identity->attritionJourneyKey();
+        if ($attritionKey === null) {
+            error_log('funnypot: attrition enabled but the HTTP identity bundle predates the attrition key; feature off (code=attrition-key-missing)');
+        } else {
+            $attritionLimits = AttritionLimits::fromConfig($config);
+            $attritionStore = new SqliteAttritionStore($config->attritionDbPath, $attritionLimits);
+            if ($attritionStore->ready()) {
+                $attritionCodec = new AttritionTokenCodec($attritionKey);
+                $attritionIssuer = new AttritionEntryIssuer($attritionCodec, $attritionLimits->ttlS, null, $engagementRecorder);
+                $attrition = new AttritionController($attritionStore, $attritionCodec, new AttritionArtifactRenderer(), $tarpitBudget, $personaSeed, null, $engagementRecorder);
+            } else {
+                error_log('funnypot: attrition state migration failed; feature off (code=attrition-migration-failed)');
+            }
+        }
+    }
+    $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder, $attritionIssuer);
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
     // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
     $polluter = new PolluterController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
@@ -490,4 +520,4 @@ if ($config->dockerApiEnabled) {
     );
 }
 
-(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter, $attrition))->dispatch($context, $clientIp, $tokenVerdict);

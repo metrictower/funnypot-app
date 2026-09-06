@@ -29,6 +29,7 @@ final class Router
         private ?DockerApiRouter $docker = null,
         private ?LabyrinthController $labyrinth = null,
         private ?PolluterController $polluter = null,
+        private ?AttritionController $attrition = null,
     ) {
     }
 
@@ -78,6 +79,15 @@ final class Router
         // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
         if ($this->docker !== null && $this->docker->matches($path)) {
             $this->docker->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Bounded async-export attrition journey (FP-0272). Method-agnostic and mounted ahead of the
+        // labyrinth/polluter so a wrong method on an owned /admin/export/* path 404s here rather than
+        // falling into a different emulator. Null unless both the tarpit and attrition switches are on;
+        // then the reserved paths fall through to the honeypot like any probe. Guarded by TarpitBudget first.
+        if ($this->attrition !== null && $this->attrition->matches($path)) {
+            $this->attrition->handle($ctx, $clientIp);
 
             return;
         }
@@ -198,6 +208,15 @@ final class Router
         // (recon) and POST (container create/start) on the Docker path shape, so no method guard here.
         if ($this->docker !== null && $this->docker->matches($path)) {
             $this->docker->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Bounded async-export attrition journey (FP-0272). Method-agnostic and mounted ahead of the
+        // labyrinth/polluter so a wrong method on an owned /admin/export/* path 404s here rather than
+        // falling into a different emulator. Null unless both the tarpit and attrition switches are on;
+        // then the reserved paths fall through to the honeypot like any probe. Guarded by TarpitBudget first.
+        if ($this->attrition !== null && $this->attrition->matches($path)) {
+            $this->attrition->handle($ctx, $clientIp);
 
             return;
         }

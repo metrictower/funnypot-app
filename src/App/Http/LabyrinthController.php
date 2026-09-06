@@ -12,6 +12,7 @@ use Funnypot\App\Engagement\LureId;
 use Funnypot\App\Engagement\Stage;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Storage\TarpitBudget;
+use Funnypot\App\Tarpit\Attrition\AttritionEntryIssuer;
 use Funnypot\App\Tarpit\InertSecret;
 use Funnypot\App\Tarpit\LlmOnlyLink;
 use Funnypot\App\Tarpit\SeededStream;
@@ -112,6 +113,7 @@ final class LabyrinthController
         private int $latencyMs = 0,
         private string $pacingScript = '',
         private ?EngagementRecorder $engagement = null,
+        private ?AttritionEntryIssuer $attritionIssuer = null,
     ) {
         $this->stream = $stream ?? new SeededStream();
         $this->emitter = $emitter ?? static function (int $status, array $headers, string $body): void {
@@ -185,8 +187,16 @@ final class LabyrinthController
         $this->budget->applyLatency();
         $bytes = 0;
         $route = $this->parse($ctx->path);
+        // FP-0272: only an EXACT canonical interior page (page-NNNNNN, N>1, no shard/record/query/body)
+        // that has already won the guard above may carry the attrition entry proof. The strict predicate
+        // reads only the request shape — never scanner/tool attribution, UA, IP reputation, or geography;
+        // the peer is passed to the issuer solely to derive its opaque quota subject.
+        $attritionStep = null;
+        if ($this->attritionIssuer !== null && ($canonical = $this->attritionEligibleRoute($ctx)) !== null) {
+            $attritionStep = $this->attritionIssuer->entryInstruction($ctx, $canonical, $clientIp);
+        }
         try {
-            $html = $this->render($route);
+            $html = $this->render($route, $attritionStep);
             // Defensive byte-cap backstop. The FIXED rows-per-page is the real O(page) bound; this only
             // ever trims a pathological page and never grows with depth.
             $cap = max(1, $this->bytesPerRespMb) * 1024 * 1024;
@@ -303,7 +313,7 @@ final class LabyrinthController
     // --- rendering (buffered, FIXED bound per page) ------------------------------------------------
 
     /** @param array{kind:string,page:int,shard:string,record:string,label:string,depth:int} $route */
-    private function render(array $route): string
+    private function render(array $route, ?string $attritionStep = null): string
     {
         $company = $this->personaField('company.name', 'Corevance');
         $host = $this->personaField('host.name', 'app-prod-01');
@@ -312,7 +322,27 @@ final class LabyrinthController
             return $this->recordPage($company, $host, $route);
         }
 
-        return $this->pageOfRows($company, $host, $route);
+        return $this->pageOfRows($company, $host, $route, $attritionStep);
+    }
+
+    /**
+     * The exact canonical activation route (FP-0272 §4), or null. Only an unadorned GET of
+     * `/admin/audit-archive/page-NNNNNN` with a six-digit page > 1, an empty query, and no body is
+     * eligible; a bare entry, page 1, a shard/record, an alias, extra segments, a query, or a body all
+     * return null. Reads ONLY the request shape — no attribution, UA, reputation, or geography.
+     */
+    private function attritionEligibleRoute(RequestContext $ctx): ?string
+    {
+        if ($ctx->method !== 'GET' || $ctx->query !== '' || $ctx->rawBody !== null) {
+            return null;
+        }
+        $path = $this->pathOf($ctx->path);
+        if (preg_match('#\A' . preg_quote(self::ENTRY_BASE, '#') . '/page-([0-9]{' . self::PAGE_WIDTH . '})\z#', $path, $m) !== 1) {
+            return null;
+        }
+        $page = (int) $m[1];
+
+        return ($page >= 2 && $page <= self::MAX_PAGE) ? $path : null;
     }
 
     /**
@@ -322,7 +352,7 @@ final class LabyrinthController
      *
      * @param array{kind:string,page:int,shard:string,record:string,label:string,depth:int} $route
      */
-    private function pageOfRows(string $company, string $host, array $route): string
+    private function pageOfRows(string $company, string $host, array $route, ?string $attritionStep = null): string
     {
         $page = $route['page'];
         $shard = $route['shard'];
@@ -365,7 +395,10 @@ final class LabyrinthController
                 'The correlated application log for this window is at the path (base64):',
                 PolluterController::LOG_PATH
             )
-            . LlmOnlyLink::commentSplit($base . '/page-' . $nextTok);
+            . LlmOnlyLink::commentSplit($base . '/page-' . $nextTok)
+            // FP-0272: on an exact canonical interior page, the fixed-width LLM-only base64 POST
+            // instruction that queues the fake audit export. Empty on any non-eligible page.
+            . ($attritionStep ?? '');
 
         $body = '<h1>' . $this->esc($company) . ' &middot; Audit Archive</h1>'
             . '<p class="lab-meta">host <code>' . $this->esc($host) . '</code> &middot; shard <code>'
