@@ -14,6 +14,7 @@ use Funnypot\App\Render\Skins\GrafanaSkin;
 use Funnypot\Core\Support\Chrome\PhpMyAdminSkin;
 use Funnypot\Core\Support\Chrome\WordpressSkin;
 use Funnypot\App\Render\SkinSet;
+use Funnypot\App\ThreatIntel\ScannerAttributor;
 use Funnypot\Core\Support\VisualPersona;
 use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
@@ -316,6 +317,25 @@ final class FingerprintSafetyTest extends TestCase
     {
         $hits = self::scan('blocked by rule 942100 during the scan');
         self::assertNotSame([], $hits, 'expected the bare CRS rule id 942100 to be flagged');
+    }
+
+    /**
+     * The scanner-attribution pack's `tool` labels are the only pack content ever emitted (to the log /
+     * dashboard `tool` column). A label must never BE a detector signature — a future corpus row whose
+     * label read as e.g. `mod-security-scan` or carried a bare `9xxxxx` run would, once shown on the
+     * dashboard, look like a canned/upstream string. Every distinct label the pack can emit is scanned
+     * against the app denylist (leak-IN literals + patterns AND the project's own leak-OUT vocabulary).
+     * The needles themselves are never scanned: they legitimately carry scanner vocabulary and are only
+     * ever compared against inbound request bytes, never served.
+     */
+    public function test_scanner_attribution_labels_carry_no_denylisted_signature(): void
+    {
+        $labels = (new ScannerAttributor())->toolLabels();
+        self::assertNotEmpty($labels, 'the pack must expose its emittable labels');
+        foreach ($labels as $label) {
+            self::assertSame([], self::scan($label), "scanner-attribution label '{$label}' is itself a detector signature");
+            self::assertSame([], self::scanOwnVocabulary($label), "scanner-attribution label '{$label}' leaks project vocabulary");
+        }
     }
 
     /** @return array<string,array{0:string}> role => provider row (FP-0036 fake-filesystem engine). */

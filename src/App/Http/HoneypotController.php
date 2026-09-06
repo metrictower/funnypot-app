@@ -12,6 +12,7 @@ use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\App\ThreatIntel\ReportComment;
+use Funnypot\App\ThreatIntel\ScannerAttributor;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\Honeypot;
 use Funnypot\Core\Http\ResponseEmitter;
@@ -41,6 +42,7 @@ final class HoneypotController
         private ?AttackClassifier $attackClassifier = null,
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
+        private ?ScannerAttributor $scannerAttributor = null,
     ) {
     }
 
@@ -328,7 +330,13 @@ final class HoneypotController
             }
         }
 
-        $this->store->append([
+        // Scanner attribution (advisory, passive): name the tool behind the probe from the fixed canary
+        // tokens it emits, for the existing `tool` column only. Reads the request, emits nothing, and
+        // runs after the response is already chosen — it never influences what is served. Null when no
+        // tell fires (the honest empty default); only the bounded tool name is persisted, never a version.
+        $attr = $this->scannerAttributor?->attribute($context);
+
+        $entry = [
             'ts' => gmdate('c'),
             'ip' => $clientIp,
             'method' => $context->method,
@@ -345,7 +353,11 @@ final class HoneypotController
             'honeytoken' => $tokenVerdict !== 'off' ? $tokenVerdict : null,
             'geo' => $this->geo->lookup($clientIp),
             'known_attacker' => $this->known($clientIp),
-        ]);
+        ];
+        if ($attr !== null) {
+            $entry['tool'] = $attr->tool;
+        }
+        $this->store->append($entry);
 
         // Queue an AbuseIPDB report for the attacker (a fast local write; the drain worker sends it):
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.

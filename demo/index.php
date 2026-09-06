@@ -76,6 +76,7 @@ use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
 use Funnypot\App\ThreatIntel\OperatorBlocklist;
+use Funnypot\App\ThreatIntel\ScannerAttributor;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\Honeytoken;
 use Funnypot\Core\RequestContext;
@@ -338,7 +339,7 @@ if ($config->sleepDecoy) {
 }
 // The engine Config factory carries the identity's private render salt + visible persona material, so
 // the template tier resolves the SAME PersonaIdentity the app pages show (and the same X-Powered-By).
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, new ScannerAttributor());
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
