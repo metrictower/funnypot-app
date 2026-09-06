@@ -19,7 +19,7 @@ second try/catch so a late fault can never surface as a 500).
 | `ts` | INTEGER UTC epoch from the injected app clock (never the request) |
 | `episode_id` | install-local HMAC id, 128 bits |
 | `identity_basis` / `identity_confidence` | closed vocabularies (below) |
-| `lure_id` | code-owned definition id from `LureId` (labyrinth, polluter_config/log/hostile/shadow); nullable; never identity |
+| `lure_id` | code-owned definition id from `LureId` (labyrinth, polluter_config/log/hostile/shadow, attrition_export); nullable; never identity |
 | `artifact_id` | HMAC id of a *verified* issued object; nullable; links issue/fetch/reuse events, never identity |
 | `stage` | `discover` → `enumerate` → `auth` → `access` → `collect` → `execute_attempt` → `persist_attempt` → `verify` → `exit` |
 | `event_kind` | `lure_issued`, `lure_followed`, `artifact_issued`, `artifact_fetched`, `artifact_reused`, `job_polled`, `tool_turn`, `stage_advanced` |
@@ -35,7 +35,13 @@ retained hit log and are never duplicated here.
 
 Producer stage mapping: labyrinth bare entry (page 1, no shard) = `discover`; any deeper page, shard or
 record = `enumerate`; every polluter export = `collect`. Neither makes an LLM call, so their LLM usage is
-an observed zero. Later stages are reserved for future issued-lure seams.
+an observed zero. The bounded async-export attrition journey (FP-0272, `attrition_export`) maps issuance
+of the entry proof = `lure_issued`/`enumerate`; the idempotent create = `lure_followed`/`collect`; polls
+1–7 = `job_polled`/`collect` and polls 8–9 = `job_polled`/`verify`; a committed manifest generation =
+`artifact_issued`/`verify`; and the first vs repeated artifact fetch = `artifact_fetched`/`artifact_reused`
+at `verify`. Its `artifact_id` is the journey's own install-local relationship id (never actor identity),
+and its LLM usage is `NULL` (unavailable — the renderer makes no call), not an observed zero. Later stages
+are reserved for future issued-lure seams.
 
 ## Identity is evidence, not attribution
 

@@ -129,6 +129,27 @@ sleeping at once — a request that can't win a slot (or is over its hourly budg
 never delayed. The slept time is charged to the wall ledger, so an IP's total server latency is itself
 budget-bounded, and a store fault adds no latency (never a 500).
 
+A **bounded async-export attrition journey** (`src/App/Http/AttritionController.php`, FP-0272) rides the
+same foundation for autonomous agents: a fake asynchronous audit export followed by a three-generation
+`MANIFEST.sha256` re-verification loop that burns an agent's polls and checksum turns while **every**
+request returns promptly and buffered — no background job, long-poll, streaming delay, compression, or
+filesystem access. It is a **second, independent opt-in** (`FUNNYPOT_ATTRITION=0`) that also needs the
+tarpit master switch; with either off, the reserved routes fall through to the honeypot. Activation is
+**demonstrated navigation, not attribution**: only an exact canonical labyrinth interior page
+(`/admin/audit-archive/page-NNNNNN`, `N>1`) that already won the budget guard carries a fixed-width,
+LLM-only base64 `POST` instruction bearing a signed entry handle (`AttritionEntryIssuer` +
+`AttritionTokenCodec`); scanner/tool/UA/IP/reputation/`known_attacker` never choose a different response,
+and a direct guess of an export endpoint still lacks the handle. The handler owns exactly
+`POST /admin/export/jobs/{entry}`, `GET /admin/export/jobs/{job}`, `GET /admin/export/manifests/{manifest}`
+and `GET /admin/export/artifacts/{artifact}`; every owned request calls `TarpitBudget::guard()` first,
+charges bytes/wall-ms/one page, and releases the slot in a `finally`. Handles are 117-byte, kind-separated,
+domain-separated HMACs under FP-0313's dedicated `attrition-journey/v1` HTTP key (never persona/analytics
+material); a forged/expired/wrong-kind/oversized handle returns the exact ordinary 404 and allocates no
+state. Responses are hard-capped (job/manifest JSON ≤ 4 KiB, NDJSON artifact ≤ 32 KiB) and state lives in
+its own fail-fast `attrition.sqlite` with `BEGIN IMMEDIATE` atomic caps (default 32 jobs / 64 generations
+per journey, 50,000 rows, 64 MiB, a six-hour TTL) — the manifest declares one snapshot while the artifact
+serves the next, so generations 0 and 1 deliberately mismatch and generation 2 is frozen and matches.
+
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
 vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a probe carrying a
