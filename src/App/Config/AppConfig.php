@@ -218,6 +218,22 @@ final class AppConfig
         public int $engagementGlobalRows = 250000,
         public int $engagementGlobalBytesMb = 256,
         public int $engagementRetainDays = 30,
+        // Bounded async-export attrition journey (FP-0272). Independent opt-in that ALSO needs the
+        // tarpit master switch; when either is off the reserved /admin/export/* routes fall through to
+        // the honeypot. Its own attrition.sqlite (env-only path, like tarpitDbPath). Every ceiling is
+        // clamped both ways; AttritionLimits re-clamps behind these and owns the code-only hard caps.
+        public bool $attritionEnabled = false,
+        public string $attritionDbPath = '',
+        /** Token/state maximum lifetime in seconds, clamped 3600–21600 (the six-hour ceiling). */
+        public int $attritionTtl = 21600,
+        /** Defensive per-journey job ceiling (phase 1 mints one), clamped 1–32. */
+        public int $attritionMaxJobs = 32,
+        /** Per-journey artifact-generation rows, clamped 3–64. */
+        public int $attritionMaxArtifacts = 64,
+        /** Global logical data rows across the store, clamped 100–50000. */
+        public int $attritionGlobalRows = 50000,
+        /** Global logical retained-state bytes (MiB), clamped 1–64. */
+        public int $attritionGlobalStateMb = 64,
     ) {
     }
 
@@ -435,6 +451,15 @@ final class AppConfig
             engagementGlobalRows: max(1000, min(5000000, (int) $str('FUNNYPOT_ENGAGEMENT_GLOBAL_ROWS', '250000'))),
             engagementGlobalBytesMb: max(1, min(4096, (int) $str('FUNNYPOT_ENGAGEMENT_GLOBAL_BYTES_MB', '256'))),
             engagementRetainDays: max(1, min(30, (int) $str('FUNNYPOT_ENGAGEMENT_RETAIN_DAYS', '30'))),
+            // Attrition journey (FP-0272): opt-in flag + env-only db path; every ceiling clamped
+            // floor+ceiling so a bad env value can neither disable a cap nor unbound the store.
+            attritionEnabled: in_array(strtolower((string) $env('FUNNYPOT_ATTRITION')), ['1', 'on', 'true', 'yes'], true),
+            attritionDbPath: $str('FUNNYPOT_ATTRITION_DB', $store . '/attrition.sqlite'),
+            attritionTtl: max(3600, min(21600, (int) $str('FUNNYPOT_ATTRITION_TTL_S', '21600'))),
+            attritionMaxJobs: max(1, min(32, (int) $str('FUNNYPOT_ATTRITION_MAX_JOBS', '32'))),
+            attritionMaxArtifacts: max(3, min(64, (int) $str('FUNNYPOT_ATTRITION_MAX_ARTIFACTS', '64'))),
+            attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
+            attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
         );
     }
 }
