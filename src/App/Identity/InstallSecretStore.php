@@ -180,6 +180,11 @@ final class InstallSecretStore
      * The two private components beneath the trusted storage mount, created 0700 when absent and
      * validated (never repaired) when present. Also called by the preparer on the explicit-master
      * path, which writes a manifest and TLS material here without ever creating a master file.
+     *
+     * The shared .funnypot parent (privateRoot) is a namespace other subsystems also nest under; it
+     * may carry the execute bit so www-data can traverse to its own group-shared subtree, but never
+     * group/other read or write. The identity subtree beneath it (persistentRoot) stays fully private
+     * with no group/other bit at all.
      */
     public function ensurePrivateDirectories(): void
     {
@@ -188,7 +193,11 @@ final class InstallSecretStore
         if ($st === false) {
             throw IdentityBootstrapException::withCode('storage-root-missing', IdentityBootstrapException::REMEDY_STORAGE);
         }
-        foreach ([$this->paths->privateRoot(), $this->paths->persistentRoot()] as $dir) {
+        $dirs = [
+            [$this->paths->privateRoot(), 0066],
+            [$this->paths->persistentRoot(), 0077],
+        ];
+        foreach ($dirs as [$dir, $forbidden]) {
             $st = $this->ops->lstat($dir);
             if ($st === false) {
                 if (!$this->ops->mkdir($dir, 0700) || !$this->ops->chmod($dir, 0700)) {
@@ -207,7 +216,7 @@ final class InstallSecretStore
             $mode = (int) $st['mode'];
             if (($mode & self::S_IFMT) !== self::S_IFDIR
                 || (int) $st['uid'] !== $this->ops->euid()
-                || ($mode & 0077) !== 0) {
+                || ($mode & $forbidden) !== 0) {
                 throw IdentityBootstrapException::withCode('private-dir-unsafe', IdentityBootstrapException::REMEDY_STORAGE);
             }
         }

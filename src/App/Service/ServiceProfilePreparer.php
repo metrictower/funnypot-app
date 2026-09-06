@@ -278,16 +278,29 @@ final class ServiceProfilePreparer
 
     private function ensureDirs(): void
     {
-        $this->ensureDir($this->paths->privateRoot(), 0700);
+        // The shared .funnypot parent is root-owned and traverse-only (0711): www-data must reach the
+        // group-shared desired store beneath it, but never read or write the parent itself. The
+        // root-only persistent tree and identity's own subtree keep no group/other read/write bit.
+        $this->ensureDir($this->paths->privateRoot(), 0711);
         $this->ensureDir($this->paths->persistentDir(), 0700);
-        $this->ensureDir($this->paths->desiredStoreDir(), 02770);
+        // The setgid group-owner makes the kernel place www-data on the -wal/-shm sidecars at
+        // creation, so a root open can never leave www-data locked out of a root:root -shm.
+        $this->ensureDir($this->paths->desiredStoreDir(), 02770, 'www-data');
     }
 
-    private function ensureDir(string $dir, int $mode): void
+    private function ensureDir(string $dir, int $mode, ?string $group = null): void
     {
         if ($this->ops->lstat($dir) === false) {
             $this->ops->mkdir($dir, $mode);
         }
+        if ($group !== null && $this->ops->euid() === 0) {
+            $g = $this->ops->groupByName($group);
+            if ($g === null || !isset($g['gid'])) {
+                throw new RuntimeException('preparer: required group ' . $group . ' is missing');
+            }
+            $this->ops->chgrp($dir, (int) $g['gid']);
+        }
+        // chmod last so the setgid bit survives the chgrp.
         $this->ops->chmod($dir, $mode);
     }
 

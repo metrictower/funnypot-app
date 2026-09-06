@@ -11,7 +11,8 @@ namespace Funnypot\App\Service;
  * as class constants so a downstream ticket can record the exact production default and this class can
  * prove `forStorage('/app/demo/storage')->persistentManifest() === PERSISTENT_MANIFEST`.
  *
- * Two trees, different owners:
+ * Two trees, different owners, beneath one shared parent:
+ *   <storage>/.funnypot/                                  0711 root:root (traverse-only)
  *   Persistent, root-only (survives container recreate, beneath the storage volume):
  *     <storage>/.funnypot/services/                       0700 root:root
  *       runtime.sqlite                                    0600 root:root  (effective/LKG authority)
