@@ -183,6 +183,29 @@ final class AttritionJourneyTest extends TestCase
         self::assertSame($declaredHashes[2], $servedHashes[2], 'generation 2 matches');
     }
 
+    public function test_two_jobs_from_one_peer_in_one_bucket_both_reach_the_manifest(): void
+    {
+        // A peer earns ONE subject + issue bucket for the 15-minute window, so two canonical interior
+        // pages requested from the same IP mint two distinct jobs in ONE journey. Both must be able to
+        // commit their generation-0 manifest — before generationId became job-unique, the second job's
+        // commit collided with the first on the generation_id PRIMARY KEY and shed a 404.
+        $codec = $this->codec();
+        $entryA = $codec->issueEntry('/admin/audit-archive/page-000002', self::PEER, self::NOW, 21600);
+        $entryB = $codec->issueEntry('/admin/audit-archive/page-000003', self::PEER, self::NOW, 21600);
+        self::assertNotSame($entryA, $entryB, 'distinct routes mint distinct entry handles for the same peer');
+
+        foreach (['A' => $entryA, 'B' => $entryB] as $tag => $entry) {
+            $jobToken = json_decode(rtrim($this->req('POST', AttritionController::JOBS_PREFIX . $entry)['body'], "\n"), true)['id'];
+            for ($p = 0; $p < 9; $p++) {
+                $ready = json_decode(rtrim($this->req('GET', AttritionController::JOBS_PREFIX . $jobToken)['body'], "\n"), true);
+            }
+            $m = $this->req('GET', $ready['manifest_url']);
+            self::assertSame(200, $m['status'], "job {$tag}: generation-0 manifest must commit (job-unique generation_id)");
+            self::assertSame(1, preg_match('~^# artifact: (/admin/export/artifacts/\S+)$~m', $m['body'], $am), "job {$tag}: manifest carries an artifact URL");
+            self::assertSame(200, $this->req('GET', $am[1])['status'], "job {$tag}: generation-0 artifact fetch succeeds");
+        }
+    }
+
     public function test_manifest_and_artifact_revisits_are_byte_identical(): void
     {
         $entry = $this->codec()->issueEntry(self::ROUTE, self::PEER, self::NOW, 21600);

@@ -156,10 +156,17 @@ final class AttritionTokenCodec
         return bin2hex(substr(hash_hmac('sha256', $domain . "\0" . $token, $this->key, true), 0, 16));
     }
 
-    /** The 32-hex generation-row id, keyed over the subject + the generation index. */
+    /**
+     * The 32-hex generation-row (PRIMARY KEY) surrogate. It MUST be unique per (job, generation), not
+     * just per (subject, generation): a peer earns one subject + issue bucket for the whole 15-minute
+     * window, so two canonical pages requested by the same peer mint two distinct jobs in one journey
+     * that share subject and issued_at. Keying on the manifest handle's nonce — which inherits the
+     * job/route lineage the same way manifest_id/artifact_id do — makes the id job-unique, so a second
+     * job's generation commit does not collide with the first's on the generation_id PRIMARY KEY.
+     */
     public function generationId(AttritionHandle $h, int $generation): string
     {
-        return bin2hex($this->derive16(self::STATE_GENERATION_DOMAIN, $h->subject, (string) $generation));
+        return bin2hex($this->derive16(self::STATE_GENERATION_DOMAIN, $h->subject, $h->nonce, (string) $generation));
     }
 
     private function encode(string $kind, int $issued, int $expires, string $subject, string $nonce): string

@@ -217,4 +217,20 @@ final class AttritionTokenCodecTest extends TestCase
         self::assertSame($genId, $codec->generationId($e, 0));
         self::assertNotSame($genId, $codec->generationId($e, 1));
     }
+
+    public function test_generation_id_is_job_unique_within_one_journey(): void
+    {
+        // Two canonical pages from the SAME peer within one 15-minute bucket share subject + issued_at
+        // (one journey) but are two distinct jobs. Their generation-0 manifest handles must yield
+        // DIFFERENT generation ids, or the second job's generation commit collides on the PRIMARY KEY.
+        $codec = $this->codec();
+        $a = $codec->verifyExpectedKind($codec->issueEntry('/admin/audit-archive/page-000002', '203.0.113.9', self::NOW, 21600), 'e', self::NOW);
+        $b = $codec->verifyExpectedKind($codec->issueEntry('/admin/audit-archive/page-000003', '203.0.113.9', self::NOW, 21600), 'e', self::NOW);
+        self::assertSame($a->subject, $b->subject, 'same peer + bucket => same subject (one journey)');
+        self::assertSame($codec->journeyId($a), $codec->journeyId($b), 'both jobs live in one journey');
+
+        $mA = $codec->verifyExpectedKind($codec->deriveFirstManifest($codec->verifyExpectedKind($codec->deriveJob($a), 'j', self::NOW)), 'm', self::NOW);
+        $mB = $codec->verifyExpectedKind($codec->deriveFirstManifest($codec->verifyExpectedKind($codec->deriveJob($b), 'j', self::NOW)), 'm', self::NOW);
+        self::assertNotSame($codec->generationId($mA, 0), $codec->generationId($mB, 0), 'generation-0 id must differ per job');
+    }
 }
