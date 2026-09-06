@@ -74,6 +74,10 @@ use Funnypot\Protocol\Oracle\OracleConfig;
 use Funnypot\Protocol\Oracle\OracleServer;
 use Funnypot\Protocol\Tr069\Tr069Config;
 use Funnypot\Protocol\Tr069\Tr069Server;
+use Funnypot\App\Identity\RedisIdentity;
+use Funnypot\Protocol\Redis\RedisConfig;
+use Funnypot\Protocol\Redis\RedisServer;
+use Funnypot\Protocol\Redis\RedisSafeEventProjector;
 
 $protocol = $argv[1] ?? '';
 $bind = $argv[2] ?? '';
@@ -311,6 +315,19 @@ if ($protocol === 'cwmp' || $protocol === 'tr069') {
     exit(0);
 }
 
+// Redis (6379): interactive in-memory Redis 6.2.24 honeypot. Realistic style engages a believable,
+// deliberately misconfigured Redis — enumerate/mutate a bounded per-session decoy keyspace, RESP2/RESP3,
+// and the exposed-Redis exploit playbook (CONFIG SET dir/dbfilename + a staged cron/ssh value +
+// SAVE/BGSAVE, REPLICAOF, MODULE LOAD) captured as intent while it writes, dials and loads nothing.
+// isMalformed() is store-aware, so a stored style override controls selection even when the environment
+// says realistic; malformed Redis falls through to the shared bounded lure below, behind the same
+// privacy boundary (see the RedisSafeEventProjector).
+if ($protocol === 'redis' && !$config->isMalformed()) {
+    $redisIdentity = $loadIdentity([RedisIdentity::class, 'load']);
+    (new RedisServer(RedisConfig::fromIdentity($redisIdentity), $log, $operatorBlock))->run($bind);
+    exit(0);
+}
+
 $shell = $shellIdentity();
 $set = ProtocolTemplateSet::fromPackage($shell->personaSeed(), $shell->filesystemKey());
 $emulator = $set->emulator($protocol);
@@ -319,4 +336,13 @@ if ($emulator === null) {
     exit(2);
 }
 
-(new Listener($emulator, $protocol, $log, $operatorBlock))->run($bind);
+// Malformed Redis reaches the generic path: inject the safe-event projector so its connect and OSC-52
+// clipboard events reduce to bounded class/length/keyed-fingerprint telemetry (non-reportable) and no
+// raw command/clipboard byte is ever persisted or externally reported. Every other protocol is unchanged.
+$eventProjector = null;
+if ($protocol === 'redis') {
+    $redisIdentity = $loadIdentity([RedisIdentity::class, 'load']);
+    $eventProjector = [new RedisSafeEventProjector(RedisConfig::fromIdentity($redisIdentity)), 'project'];
+}
+
+(new Listener($emulator, $protocol, $log, $operatorBlock, $eventProjector))->run($bind);

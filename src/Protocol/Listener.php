@@ -24,12 +24,19 @@ final class Listener
     private const FRAME_INTERVAL = 0.12;   // taunt animation: seconds between streamed frames
     private const FRAME_TIMEOUT_US = 120000;
 
-    /** @param callable(array<string,mixed>):void $logger */
+    /**
+     * @param callable(array<string,mixed>):void          $logger
+     * @param (callable(array<string,mixed>):(array<string,mixed>|null))|null $eventProjector optional
+     *        per-event transform applied before logging (returns the event to log, or null to drop
+     *        it). Default null preserves every protocol's raw event exactly; the malformed-Redis path
+     *        injects one so raw clipboard/command bytes are reduced to safe class/length/fingerprint.
+     */
     public function __construct(
         private ProtocolEmulator $emulator,
         private string $protocol,
         private $logger,
-        private ?\Funnypot\App\ThreatIntel\OperatorBlocklist $block = null
+        private ?\Funnypot\App\ThreatIntel\OperatorBlocklist $block = null,
+        private $eventProjector = null
     ) {
     }
 
@@ -231,7 +238,7 @@ final class Listener
 
     private function log(string $event, string $ip, int $port, string $cmd): void
     {
-        ($this->logger)([
+        $entry = [
             'ts' => gmdate('c'),
             'ip' => $ip,
             'method' => strtoupper($this->protocol),
@@ -244,7 +251,17 @@ final class Listener
             'served' => $event === 'command',
             // FP-0247 (Fix A): TCP accept ⇒ source verified by the three-way handshake, so reportable.
             'reportable' => true,
-        ]);
+        ];
+        // An injected projector (malformed Redis) reshapes the event to the safe telemetry boundary
+        // before it is logged; a null return drops it. Every other protocol keeps its raw event.
+        if ($this->eventProjector !== null) {
+            $projected = ($this->eventProjector)($entry);
+            if ($projected === null) {
+                return;
+            }
+            $entry = $projected;
+        }
+        ($this->logger)($entry);
     }
 
     private static function ipOf(string $peer): string
