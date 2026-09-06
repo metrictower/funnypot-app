@@ -46,7 +46,7 @@ final class ServiceStatusPublisher implements ServiceHeartbeatWriter
     {
         ksort($processHealth);
         $this->sequence++;
-        $payload = [
+        $doc = [
             'schema' => self::SCHEMA,
             'writer_boot_id' => $this->bootId,
             'sequence' => $this->sequence,
@@ -55,11 +55,8 @@ final class ServiceStatusPublisher implements ServiceHeartbeatWriter
             'status_revision' => $statusRevision,
             'state' => $state,
             'acceptance_mode' => $acceptanceMode,
-            'process_health' => (object) $processHealth,
+            'process_health' => $processHealth,
         ];
-        $doc = $payload;
-        // process_health serialized as an object even when empty; CanonicalJson wants an assoc array.
-        $doc['process_health'] = $processHealth;
         $envelopeHash = CanonicalJson::digest(self::HASH_DOMAIN, $doc);
         $doc['envelope_hash'] = $envelopeHash;
         $bytes = CanonicalJson::encode($doc);
