@@ -84,9 +84,9 @@ final class SipServer
      * bytes_in, colocated in the SAME bucket map + LRU eviction as F4's packet-count throttle (above):
      * `$udpResponseBuckets[$ip]` gains an extra `credit` float, written only by creditUdpIngress() /
      * udpEgressWouldAllow() / udpEgressDebit() below. The shared trait never reads or writes `credit`,
-     * only seeds/reads `tokens`/`last`, so this composes cleanly with the trait's own writes — whichever
-     * guard's bookkeeping touches an IP first, the other's field starts absent and is lazily added. TCP
-     * is return-routable and stays unmetered, same as F4.
+     * only seeds/reads `tokens`/`last`/`last_granted_at`, so this composes cleanly with the trait's own
+     * writes — whichever guard's bookkeeping touches an IP first, the other's field starts absent and is
+     * lazily added. TCP is return-routable and stays unmetered, same as F4.
      *
      * $egressCapState is the rollup state for UDP replies withheld by this guard, per apparent source:
      * running suppressed-drop count, when the current run started, and when a rollup was last emitted —

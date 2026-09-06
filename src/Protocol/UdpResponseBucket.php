@@ -36,24 +36,33 @@ namespace Funnypot\Protocol;
  * 20-burst. A uniform 2.0 seed also keeps this trait identical across all 7 composing classes: no
  * per-server divergence to fingerprint or maintain.
  *
+ * Two timestamps, deliberately split: `last` is the token-accrual anchor and advances on EVERY call
+ * (granted or refused) so refill never double-counts the same elapsed interval; `last_granted_at` is
+ * the LRU eviction key and advances ONLY after a reply is actually granted. Refusing a reply sends and
+ * accrues nothing, so an apparent source that is only ever refused cannot keep touching its own drained
+ * entry to pin it in the bounded map ahead of a source that is genuinely being served. A never-granted
+ * entry stays at 0.0 and is the first eviction candidate.
+ *
  * SIP composes this trait but extends its bucket entries with an extra `credit` byte-budget field
  * (FP-0248 §2b, the SIP-only cumulative egress-ratio guard) — see `SipServer::creditUdpIngress()` /
- * `udpEgressWouldAllow()` / `udpEgressDebit()`. This trait seeds and reads only `tokens`/`last`, never
- * touches `credit`, and never overwrites an existing entry — so SIP's extended shape is preserved
- * whichever guard's bookkeeping runs first for a given source.
+ * `udpEgressWouldAllow()` / `udpEgressDebit()`. This trait seeds and reads only `tokens`/`last`/
+ * `last_granted_at`, never touches `credit`, and never overwrites an existing entry — so SIP's extended
+ * shape is preserved whichever guard's bookkeeping runs first for a given source.
  */
 trait UdpResponseBucket
 {
     /**
-     * @var array<string, array{tokens: float, last: float}>
+     * @var array<string, array{tokens: float, last: float, last_granted_at: float}>
      */
     private array $udpResponseBuckets = [];
 
     /**
      * Ensures a bucket entry exists for $ip, seeded DEPLETED (`self::UDP_RESP_SEED` tokens, never the
      * full `UDP_RESP_BURST`) at timestamp $now — see the trait doc block for why. Evicts the least-
-     * recently-refilled entry first when the map is already at `UDP_BUCKET_MAX_IPS` capacity. A no-op
-     * when an entry already exists (including one with SIP's extra `credit` field — never overwritten).
+     * recently-GRANTED entry first when the map is already at `UDP_BUCKET_MAX_IPS` capacity (a source
+     * only ever refused stays at `last_granted_at=0.0` and is evicted ahead of any served source). A
+     * no-op when an entry already exists (including one with SIP's extra `credit` field — never
+     * overwritten).
      */
     private function udpResponseBucketEnsure(string $ip, float $now): void
     {
@@ -61,13 +70,13 @@ trait UdpResponseBucket
             return;
         }
 
-        // Bound the map: when full, drop the least-recently-refilled entry before adding one.
+        // Bound the map: when full, drop the least-recently-granted entry before adding one.
         if (count($this->udpResponseBuckets) >= self::UDP_BUCKET_MAX_IPS) {
             $oldestKey = null;
             $oldestAt = INF;
             foreach ($this->udpResponseBuckets as $k => $b) {
-                if ($b['last'] < $oldestAt) {
-                    $oldestAt = $b['last'];
+                if ($b['last_granted_at'] < $oldestAt) {
+                    $oldestAt = $b['last_granted_at'];
                     $oldestKey = $k;
                 }
             }
@@ -75,7 +84,7 @@ trait UdpResponseBucket
                 unset($this->udpResponseBuckets[$oldestKey]);
             }
         }
-        $this->udpResponseBuckets[$ip] = ['tokens' => self::UDP_RESP_SEED, 'last' => $now];
+        $this->udpResponseBuckets[$ip] = ['tokens' => self::UDP_RESP_SEED, 'last' => $now, 'last_granted_at' => 0.0];
     }
 
     /**
@@ -83,6 +92,8 @@ trait UdpResponseBucket
      * drained its bucket, so the reply is dropped rather than reflected. Refuses without consuming a
      * token (only a granted call debits), so a refusal never burns budget another guard is relying on
      * (FP-0248 §2b check-then-debit ordering, e.g. SIP's byte-budget guard checking this second).
+     * A refusal advances only the accrual anchor `last`, never `last_granted_at`, so drained sources
+     * cannot pin themselves in the LRU map.
      */
     private function udpResponseAllowed(string $ip): bool
     {
@@ -98,6 +109,7 @@ trait UdpResponseBucket
             return false;
         }
         $bucket['tokens'] -= 1.0;
+        $bucket['last_granted_at'] = $now;
 
         return true;
     }
