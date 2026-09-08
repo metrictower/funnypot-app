@@ -6,6 +6,8 @@ namespace Funnypot\Tests\App\Sandbox;
 
 use Funnypot\App\Runtime\RuntimePolicy;
 use Funnypot\App\Identity\IdentityFileOps;
+use Funnypot\App\Identity\IdentityPreparationResult;
+use Funnypot\App\Identity\PreparedIdentitySource;
 use Funnypot\App\Sandbox\Projection\ProjectionEntryRegistry;
 use Funnypot\App\Sandbox\Projection\SandboxProjection;
 use Funnypot\App\Sandbox\Projection\SandboxProjectionException;
@@ -59,6 +61,44 @@ final class SandboxProjectionProducerTest extends TestCase
         }
     }
 
+    public function testProducerRejectsIdentityEnvelopeMismatch(): void
+    {
+        $identity = PreparedIdentityFixture::prepare($this->dir)['result'];
+        $source = $identity->httpBundle;
+        $envelope = $source->envelope;
+        $envelope['public_persona_hash'] = 'fpph1_' . str_repeat('0', 64);
+        $changed = self::replaceSource($identity, PreparedIdentitySource::HTTP, new PreparedIdentitySource(
+            $source->sourceClass, $source->handle, $source->attestation, $source->byteLength, $source->sha256, $envelope,
+        ));
+        try {
+            $this->expectException(SandboxProjectionException::class);
+            $this->expectExceptionMessage('projection-envelope-mismatch');
+            (new SandboxProjectionProducer(ProjectionEntryRegistry::v1(), RuntimePolicy::fromPackage()))
+                ->produce(str_repeat('2', 32), $changed, self::effective());
+        } finally {
+            $identity->close();
+        }
+    }
+
+    public function testProducerRejectsTlsFingerprintMismatch(): void
+    {
+        $identity = PreparedIdentityFixture::prepare($this->dir)['result'];
+        $source = $identity->tlsCertificate;
+        $envelope = $source->envelope;
+        $envelope['fingerprint_sha256'] = str_repeat('0', 64);
+        $changed = self::replaceSource($identity, PreparedIdentitySource::TLS_CERTIFICATE, new PreparedIdentitySource(
+            $source->sourceClass, $source->handle, $source->attestation, $source->byteLength, $source->sha256, $envelope,
+        ));
+        try {
+            $this->expectException(SandboxProjectionException::class);
+            $this->expectExceptionMessage('projection-tls-fingerprint-mismatch');
+            (new SandboxProjectionProducer(ProjectionEntryRegistry::v1(), RuntimePolicy::fromPackage()))
+                ->produce(str_repeat('2', 32), $changed, self::effective());
+        } finally {
+            $identity->close();
+        }
+    }
+
     /** @dataProvider attestationFields */
     public function testProducerRejectsEveryChangedAttestationField(string $field): void
     {
@@ -85,6 +125,19 @@ final class SandboxProjectionProducerTest extends TestCase
             str_repeat('c', 64), str_repeat('d', 64),
             ['mode' => 'named', 'bundle' => 'web-only', 'base_family' => 'linux', 'variant_id' => 'spv1_' . str_repeat('e', 32)],
             [], [], [],
+        );
+    }
+
+    private static function replaceSource(IdentityPreparationResult $identity, string $class, PreparedIdentitySource $source): IdentityPreparationResult
+    {
+        return new IdentityPreparationResult(
+            $identity->sourceClass, $identity->personaSource, $identity->publicPersonaHash, $identity->keysetCommitment,
+            $identity->tls, $identity->httpGroupApplied, $identity->warnings,
+            $class === PreparedIdentitySource::HTTP ? $source : $identity->httpBundle,
+            $identity->shellBundle, $identity->sipBundle, $identity->redisBundle,
+            $class === PreparedIdentitySource::TLS_CERTIFICATE ? $source : $identity->tlsCertificate,
+            $identity->tlsPrivateKey, $identity->adminTlsCertificate, $identity->adminTlsPrivateKey,
+            $identity->postExploitBundle,
         );
     }
 }
