@@ -43,6 +43,13 @@ final class EarlyIngressBootstrapTest extends TestCase
             self::assertContains('raw-capture.sqlite', $files);
             self::assertContains('hits.log', $files);
             self::assertStringContainsString('192.0.2.13', $stderr, 'accepted request diagnostic sink is exercised');
+            self::assertGreaterThan(0, $result['sink_rows']['hits']);
+            self::assertGreaterThan(0, $result['sink_rows']['raw_requests']);
+            self::assertLessThanOrEqual(400, $result['max_hit_path']);
+            if ($status === 200) {
+                self::assertGreaterThan(0, $result['sink_rows']['abuse_queue']);
+                self::assertGreaterThan(0, $result['sink_rows']['ti_queue']);
+            }
         }
     }
 
@@ -69,8 +76,10 @@ final class EarlyIngressBootstrapTest extends TestCase
             'FUNNYPOT_TARPIT_DB' => $data . '/tarpit.sqlite',
             'FUNNYPOT_VULNS' => $data . '/vulns.json', 'FUNNYPOT_CAPTURE_RAW' => '1',
             'FUNNYPOT_LLM' => '0', 'FUNNYPOT_AI_API' => '0', 'FUNNYPOT_TARPIT' => '0',
-            'FUNNYPOT_SLEEP_DECOY' => '0', 'FUNNYPOT_ABUSEIPDB_REPORT' => '0',
-            'FUNNYPOT_THREAT_INTEL_REPORT' => '0', 'FUNNYPOT_SELF_IPS' => '192.0.2.13',
+            'FUNNYPOT_SLEEP_DECOY' => '0', 'FUNNYPOT_ABUSEIPDB_REPORT' => '1',
+            'FUNNYPOT_ABUSEIPDB_KEY' => 'ingress-fixture-not-a-credential',
+            'FUNNYPOT_THREATINTEL_REPORT' => '1', 'FUNNYPOT_THREATINTEL_KEY' => 'ingress-fixture-not-a-credential',
+            'FUNNYPOT_THREATINTEL_URL' => 'http://127.0.0.1:1', 'FUNNYPOT_SELF_IPS' => '127.0.0.1',
         ];
         $proc = null;
         $pipes = [];
@@ -100,6 +109,22 @@ final class EarlyIngressBootstrapTest extends TestCase
             $stderr .= stream_get_contents($pipes[2]);
             $result = json_decode($stdout, true);
             self::assertIsArray($result, $stderr . substr($stdout, 0, 512));
+            $result['sink_rows'] = [];
+            foreach (['funnypot.sqlite' => ['hits'], 'raw-capture.sqlite' => ['raw_requests'],
+                'intel.sqlite' => ['abuse_queue', 'ti_queue']] as $file => $tables) {
+                if (is_file($data . '/' . $file)) {
+                    $db = new \PDO('sqlite:' . $data . '/' . $file);
+                    foreach ($tables as $table) {
+                        if ($db->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='" . $table . "'")->fetchColumn()) {
+                            $result['sink_rows'][$table] = (int) $db->query('SELECT COUNT(*) FROM ' . $table)->fetchColumn();
+                        }
+                    }
+                    if ($file === 'funnypot.sqlite') {
+                        $result['max_hit_path'] = (int) $db->query('SELECT MAX(length(path)) FROM hits')->fetchColumn();
+                    }
+                    $db = null;
+                }
+            }
             $files = [];
             foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($data, \FilesystemIterator::SKIP_DOTS)) as $file) {
                 $files[] = substr($file->getPathname(), strlen($data) + 1);

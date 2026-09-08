@@ -52,9 +52,10 @@ final class InputCeilingConfigTest extends TestCase
         $producer = $this->read('src/App/Identity/IdentityPreparer.php');
         self::assertStringContainsString('include /etc/nginx/funnypot-location.conf;', $producer, 'rendered admin TLS vhost');
         $shared = $this->read('demo/funnypot-location.conf');
-        self::assertStringContainsString("if (\$funnypot_target_overlong) {\n    return 414;\n}", $shared);
+        self::assertStringContainsString("if (\$funnypot_target_overlong) {\n    return 418;\n}", $shared);
         self::assertLessThan(strpos($shared, 'location @'), strpos($shared, 'if ($funnypot_target_overlong)'));
-        self::assertStringContainsString('error_page 414 = @funnypot_target_rejected;', $shared);
+        self::assertStringContainsString('error_page 418 = @funnypot_target_rejected;', $shared);
+        self::assertDoesNotMatchRegularExpression('/error_page[^;]*\b414\b/', $shared, 'gross parser errors may have an empty URI and cannot enter a named redirect');
         foreach (['client_header_buffer_size 1k;', 'large_client_header_buffers 4 8k;',
             'client_header_timeout 5s;', 'client_max_body_size 1m;', 'error_log /dev/null emerg;'] as $directive) {
             self::assertSame(1, substr_count($shared, $directive));

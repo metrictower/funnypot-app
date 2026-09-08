@@ -548,6 +548,9 @@ diagnostics remain available. This does not add route-specific body timeouts or 
 windows in the currently installed core v0.6.3. Core v0.7.0 adoption and app classifier migration are
 separate, gated work. Production image/raw-socket/no-leak acceptance must pass before deployment;
 source parity tests are not evidence that the image has passed that gate.
+The operator-only [input-ceiling acceptance job](tests/acceptance/ingress/README.md) records the
+production nginx version, real FPM/ACME boundaries, timeout behavior and independent sink controls
+inside a resource-bounded, network-isolated container; it is manually dispatched, not a local test.
 
 funnypot is built so it can only ever mislead an attacker, never help one.
 
