@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Tarpit;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
+use Funnypot\App\Tarpit\InertSecret;
 use Funnypot\App\Tarpit\LlmOnlyLink;
 use Funnypot\Core\RequestContext;
 use Geo;
@@ -243,6 +244,31 @@ final class LabyrinthNavTest extends TestCase
 
         $this->get($lab, '/admin/audit-archive/page-000001', '192.0.2.77');
         self::assertSame(404, $cap->status, 'a budget-store fault ⇒ no labyrinth, a bounded 404 (fail-closed)');
+    }
+
+    public function test_real_secret_exhaustion_during_render_returns_404_and_releases_the_slot(): void
+    {
+        $budgetPath = $this->path('exhaustion-budget');
+        [$lab, $cap] = $this->make(['maxConcurrent' => 1], budgetPath: $budgetPath);
+        $observer = new TarpitBudget($budgetPath, true, 1, 1, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15);
+        $property = new \ReflectionProperty(InertSecret::class, 'denylist');
+        $property->setAccessible(true);
+        $before = $property->getValue();
+        try {
+            $property->setValue(null, ['literals' => [], 'patterns' => ['.'], 'ownVocabularyPattern' => '']);
+            $this->get($lab, '/admin/audit-archive/page-000001');
+            self::assertSame(404, $cap->status);
+            self::assertStringContainsString('404 Not Found', $cap->body);
+            self::assertLessThan(1024, strlen($cap->body));
+            self::assertStringNotContainsString('Audit Archive', $cap->body);
+            self::assertStringNotContainsString('inert-secret-clean-exhausted', $cap->body);
+            self::assertSame(0, $observer->inflightCount());
+        } finally {
+            $property->setValue(null, $before);
+        }
+        $this->get($lab, '/admin/audit-archive/page-000001');
+        self::assertSame(200, $cap->status, 'normal rendering resumes with the slot free and cache restored');
+        self::assertSame(0, $observer->inflightCount());
     }
 
     // --- no plain crawler-followable link anywhere (spec §4 / invariant 4) -------------------------

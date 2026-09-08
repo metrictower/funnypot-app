@@ -8,6 +8,7 @@ use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Storage\SqliteHitStore;
 use Funnypot\App\Storage\TarpitBudget;
+use Funnypot\App\Tarpit\InertSecret;
 use Funnypot\App\Tarpit\LogRabbitHole;
 use Funnypot\Core\RequestContext;
 use Geo;
@@ -61,12 +62,12 @@ final class PolluterControllerTest extends TestCase
      * @param array<string,int> $over budget overrides
      * @return array{0:PolluterController,1:TarpitBudget,2:SqliteHitStore}
      */
-    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $capMb = 8, ?\Closure $bufferedBuilder = null): array
+    private function make(array $over = [], bool $enabled = true, ?string $budgetPath = null, int $capMb = 8, ?\Closure $bufferedBuilder = null, ?\Closure $sink = null): array
     {
-        $factory = function (): StreamEmitter {
+        $factory = function () use ($sink): StreamEmitter {
             // A no-op sink: begin() records status/headers without calling real header(); chunk()
             // accumulates captured() without printing. So the test reads the whole response back.
-            return $this->last = new StreamEmitter(static function (string $b): void {
+            return $this->last = new StreamEmitter($sink ?? static function (string $b): void {
             }, 0);
         };
         $budget = new TarpitBudget(
@@ -328,6 +329,70 @@ final class PolluterControllerTest extends TestCase
         $this->get($c, PolluterController::SHADOW_PATH, [], '192.0.2.89');
         self::assertSame(404, $this->status(), 'same for the shadow buffered path');
         self::assertStringContainsString('404 Not Found', $this->body());
+    }
+
+    public function test_real_secret_exhaustion_before_begin_returns_404_and_releases_the_slot(): void
+    {
+        $calls = 0;
+        $builder = static function () use (&$calls): string {
+            return InertSecret::derive('private-key-sentinel', static function () use (&$calls): string {
+                $calls++;
+
+                return 'private-candidate-sentinel';
+            });
+        };
+        [$c, $budget] = $this->make(['maxConcurrent' => 1], capMb: 1, bufferedBuilder: $builder);
+        $property = new \ReflectionProperty(InertSecret::class, 'denylist');
+        $property->setAccessible(true);
+        $before = $property->getValue();
+        try {
+            $property->setValue(null, ['literals' => [], 'patterns' => ['.'], 'ownVocabularyPattern' => '']);
+            foreach ([PolluterController::HOSTILE_PATH, PolluterController::SHADOW_PATH] as $path) {
+                $calls = 0;
+                $this->get($c, $path);
+                self::assertSame(64, $calls, 'real primary exhaustion, not an unrelated builder failure');
+                self::assertSame(404, $this->status());
+                self::assertStringContainsString('404 Not Found', $this->body());
+                self::assertLessThan(1024, strlen($this->body()));
+                self::assertStringNotContainsString('sentinel', $this->body());
+                self::assertStringNotContainsString('inert-secret-clean-exhausted', $this->body());
+                self::assertSame(0, $budget->inflightCount());
+            }
+        } finally {
+            $property->setValue(null, $before);
+        }
+        $this->get($c, PolluterController::CONFIG_PATH);
+        self::assertSame(200, $this->status(), 'a normal request succeeds after restored test state');
+        self::assertSame(0, $budget->inflightCount());
+    }
+
+    public function test_real_secret_exhaustion_after_first_chunk_truncates_without_replacing_the_response(): void
+    {
+        $property = new \ReflectionProperty(InertSecret::class, 'denylist');
+        $property->setAccessible(true);
+        $before = $property->getValue();
+        foreach ([PolluterController::CONFIG_PATH, PolluterController::LOG_PATH] as $path) {
+            $chunks = [];
+            $sink = static function (string $bytes) use ($property, &$chunks): void {
+                $chunks[] = $bytes;
+                // The first real chunk is already on its way out; force later generation to fail.
+                $property->setValue(null, ['literals' => [], 'patterns' => ['.'], 'ownVocabularyPattern' => '']);
+            };
+            [$c, $budget] = $this->make(['maxConcurrent' => 1], capMb: 1, sink: $sink);
+            try {
+                $this->get($c, $path);
+                self::assertSame(200, $this->status(), 'headers already began, so do not replace them with a 404');
+                self::assertCount(1, $chunks, 'the exhausted next generator must stop before a second chunk');
+                self::assertNotSame('', $this->body(), 'the assertion observes a genuinely begun body');
+                self::assertSame($chunks[0], $this->body());
+                self::assertLessThan(1024 * 1024, strlen($this->body()));
+                self::assertStringNotContainsString('404 Not Found', $this->body());
+                self::assertStringNotContainsString('inert-secret-clean-exhausted', $this->body());
+                self::assertSame(0, $budget->inflightCount());
+            } finally {
+                $property->setValue(null, $before);
+            }
+        }
     }
 
     // --- the slot is released after every hit ------------------------------------------------------
