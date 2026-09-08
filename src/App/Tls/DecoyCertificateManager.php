@@ -179,8 +179,9 @@ final class DecoyCertificateManager
     /** @return array{0:OpenedSource,1:OpenedSource} */
     private function openGenerated(): array
     {
-        $anchor = $this->paths->storageRoot();
-        $base = ['.funnypot', 'identity', 'tls'];
+        $anchor = $this->paths->privateRoot();
+        $this->opener->requireDirectory($anchor, 'tls-generated', SourceOpener::MODE_TRAVERSE_ONLY);
+        $base = ['identity', 'tls'];
         $cert = $this->opener->openDirect($anchor, [...$base, 'cert.pem'], 'tls-generated', self::MAX_PEM_BYTES, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
         $key = $this->opener->openDirect($anchor, [...$base, 'key.pem'], 'tls-generated', self::MAX_PEM_BYTES, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
 
@@ -190,7 +191,8 @@ final class DecoyCertificateManager
     /** @return array<string,mixed> */
     private function readProvenance(): array
     {
-        $src = $this->opener->openDirect($this->paths->storageRoot(), ['.funnypot', 'identity', 'tls', 'provenance.json'], 'tls-provenance', 4096, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
+        $this->opener->requireDirectory($this->paths->privateRoot(), 'tls-provenance', SourceOpener::MODE_TRAVERSE_ONLY);
+        $src = $this->opener->openDirect($this->paths->privateRoot(), ['identity', 'tls', 'provenance.json'], 'tls-provenance', 4096, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
         $this->ops->close($src->handle);
         $doc = json_decode($src->bytes, true, 4);
         if (!is_array($doc) || ($doc['schema'] ?? null) !== self::PROVENANCE_SCHEMA) {

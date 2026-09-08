@@ -224,15 +224,18 @@ final class ServiceExposureManifest
         $file = basename($path);
         $servicesDir = dirname($path);
         $funnypotDir = dirname($servicesDir);
-        $storageRoot = dirname($funnypotDir);
         if ($file === '' || basename($servicesDir) !== 'services' || basename($funnypotDir) !== '.funnypot') {
             throw new RuntimeException('exposure manifest: path is not under .funnypot/services');
         }
         $opener = new SourceOpener($ops);
         try {
+            // The shared .funnypot parent is intentionally 0711 so www-data can reach its separate
+            // desired-profile subtree. Validate that parent against the no-write rule, then anchor
+            // the downstream direct read there so services/ and the manifest retain the private rule.
+            $opener->requireDirectory($funnypotDir, 'exposure-manifest', SourceOpener::MODE_TRAVERSE_ONLY);
             $src = $opener->openDirect(
-                $storageRoot,
-                ['.funnypot', 'services', $file],
+                $funnypotDir,
+                ['services', $file],
                 'exposure-manifest',
                 self::MAX_BYTES,
                 SourceOpener::MODE_PRIVATE,
