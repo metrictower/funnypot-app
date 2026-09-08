@@ -504,17 +504,21 @@ final class SandboxProjectionStoreTest extends TestCase
     public function testFakeRootOwnershipFailureThroughStorePreservesPriorAndClosesSources(string $fault): void
     {
         $effective = static fn () => SandboxProjectionProducerTest::effective();
-        self::assertSame('selected-new', $this->store->publish(
-            fn () => PreparedIdentityFixture::prepare($this->dir)['result'], $effective,
+        // Simulate root consistently for BOTH publications; never depend on the real host euid.
+        $ops = new FakeRootOwnershipFaultOps('');
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        self::assertSame('selected-new', $store->publish(
+            fn () => self::asRootIdentity(PreparedIdentityFixture::prepare($this->dir, tag: 'a')['result']), $effective,
         )->code);
+        self::assertSame('recovered-selected', $store->recover()->code);
         $selector = (string) file_get_contents($this->dir . '/sandbox/current.json');
         $generationCount = count(glob($this->dir . '/sandbox/generations/[0-9a-f]*', GLOB_ONLYDIR));
-        $ops = new FakeRootOwnershipFaultOps($fault);
-        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $ops->fault = $fault;
+        mkdir($this->dir . '/changed', 0700);
         $identity = null;
 
         $result = $store->publish(function () use (&$identity) {
-            $identity = self::asRootIdentity(PreparedIdentityFixture::prepare($this->dir)['result']);
+            $identity = self::asRootIdentity(PreparedIdentityFixture::prepare($this->dir . '/changed', tag: 'b')['result']);
             return $identity;
         }, $effective);
 
@@ -524,6 +528,7 @@ final class SandboxProjectionStoreTest extends TestCase
         self::assertSame($generationCount, count(glob($this->dir . '/sandbox/generations/[0-9a-f]*', GLOB_ONLYDIR)));
         self::assertNotNull($identity);
         foreach ($identity->sources() as $source) { self::assertFalse(is_resource($source->handle)); }
+        self::assertSame('recovered-selected', $store->recover()->code);
     }
 
     public static function rootOwnershipFaults(): iterable
@@ -1125,61 +1130,50 @@ final class FakeRootOwnershipFaultOps extends SandboxFileOps
     public int $faultCalls = 0;
     /** @var array<string,int> */
     private array $owners = [];
-    /** @var array<int,string> */
-    private array $handles = [];
+    /** @var array<string,int> */
+    private array $groups = [];
 
-    public function __construct(private string $fault) {}
+    public function __construct(public string $fault) {}
 
     public function euid(): int { return 0; }
 
     public function lstat(string $path): array|false
     {
         $st = parent::lstat($path);
-        return is_array($st) ? $this->rootMetadata($st, $path) : false;
-    }
-
-    public function openRead(string $path)
-    {
-        $h = parent::openRead($path);
-        if (is_resource($h)) { $this->handles[(int) $h] = $path; }
-        return $h;
+        return is_array($st) ? $this->rootMetadata($st) : false;
     }
 
     public function fstat($h): array|false
     {
         $st = parent::fstat($h);
-        if (!is_array($st)) { return false; }
-        $path = $this->handles[(int) $h] ?? null;
-        if ($path === null) { $st['uid'] = 0; return $st; }
-        return $this->rootMetadata($st, $path);
-    }
-
-    public function close($h): void
-    {
-        unset($this->handles[(int) $h]);
-        parent::close($h);
+        return is_array($st) ? $this->rootMetadata($st) : false;
     }
 
     public function chown(string $path, int $uid): bool
     {
         if ($this->fault === 'chown') { ++$this->faultCalls; return false; }
-        $this->owners[$path] = $uid;
+        $st = parent::lstat($path);
+        if (!is_array($st)) { return false; }
+        $this->owners[$st['dev'] . ':' . $st['ino']] = $uid;
         return true;
     }
 
     public function chgrp(string $path, int $gid): bool
     {
         if ($this->fault === 'chgrp') { ++$this->faultCalls; return false; }
+        $st = parent::lstat($path);
+        if (!is_array($st)) { return false; }
+        $this->groups[$st['dev'] . ':' . $st['ino']] = $gid;
         return true;
     }
 
     /** @param array<string,int> $st @return array<string,int> */
-    private function rootMetadata(array $st, string $path): array
+    private function rootMetadata(array $st): array
     {
-        $st['uid'] = $this->owners[$path] ?? 0;
-        foreach (['edge' => 10001, 'protocols' => 10002, 'post-exploit-state' => 10005, 'web' => 10007] as $role => $gid) {
-            if (str_contains($path, '/views/' . $role)) { $st['gid'] = $gid; break; }
-        }
+        // Inode-bound fake ownership survives candidate rename and applies to open handles too.
+        $key = $st['dev'] . ':' . $st['ino'];
+        $st['uid'] = $this->owners[$key] ?? 0;
+        $st['gid'] = $this->groups[$key] ?? $st['gid'];
         return $st;
     }
 }

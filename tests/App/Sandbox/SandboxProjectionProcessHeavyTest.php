@@ -28,7 +28,7 @@ final class SandboxProjectionProcessHeavyTest extends TestCase
             'FUNNYPOT_INSTALL_SECRET' => InstallSecretStore::serialize(hash('sha256', 'sandbox-heavy-fixture', true)),
             'FUNNYPOT_PERSONA_SEED' => 'sandbox-heavy-persona-fixture',
         ];
-        [$rc, , $err] = $this->run([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', 'bin/funnypot', 'bootstrap:prepare', '--target=deploy', '--publish=exact']);
+        [$rc, , $err] = $this->runCommand([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', 'bin/funnypot', 'bootstrap:prepare', '--target=deploy', '--publish=exact']);
         self::assertSame(0, $rc, $err);
     }
 
@@ -77,7 +77,7 @@ final class SandboxProjectionProcessHeavyTest extends TestCase
     public function testBuiltGenerationUidAccessMatrixFromInsideEachBindSubtree(): void
     {
         if (posix_geteuid() !== 0) { self::markTestSkipped('root-only built-container UID matrix'); }
-        [$rc, , $err] = $this->run([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', 'bin/funnypot', 'sandbox:materialize-views']);
+        [$rc, , $err] = $this->runCommand([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', 'bin/funnypot', 'sandbox:materialize-views']);
         self::assertSame(0, $rc, $err);
         $selector = json_decode((string) file_get_contents($this->dir . '/sandbox/current.json'), true);
         $views = $this->dir . '/sandbox/generations/' . $selector['generation'] . '/views';
@@ -89,10 +89,10 @@ final class SandboxProjectionProcessHeavyTest extends TestCase
         ];
         $probe = '[$u,$g,$p]=array_slice($argv,1);posix_setgid((int)$g);posix_setuid((int)$u);exit(is_string(@file_get_contents($p))?0:1);';
         foreach ($cases as [$owner, $uid, $gid, $file]) {
-            [$ownRc] = $this->run([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', '-r', $probe, (string) $uid, (string) $gid, $file], $views . '/' . $owner);
+            [$ownRc] = $this->runCommand([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', '-r', $probe, (string) $uid, (string) $gid, $file], $views . '/' . $owner);
             self::assertSame(0, $ownRc, $owner . ' must read its private view');
         }
-        [$foreignRc] = $this->run([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', '-r', $probe, '10007', '10007', 'identity/shell.json'], $views . '/protocols');
+        [$foreignRc] = $this->runCommand([PHP_BINARY, '-d', 'memory_limit=1G', '-d', 'max_execution_time=120', '-r', $probe, '10007', '10007', 'identity/shell.json'], $views . '/protocols');
         self::assertSame(1, $foreignRc, 'web cannot read the protocols bind subtree');
     }
 
@@ -132,7 +132,7 @@ final class SandboxProjectionProcessHeavyTest extends TestCase
     }
 
     /** @return array{int,string,string} */
-    private function run(array $command, ?string $cwd = null): array
+    private function runCommand(array $command, ?string $cwd = null): array
     {
         $pipes = [];
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd ?? dirname(__DIR__, 3), $this->env);

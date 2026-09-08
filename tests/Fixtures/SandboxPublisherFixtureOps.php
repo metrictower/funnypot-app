@@ -14,15 +14,14 @@ final class SandboxPublisherFixtureOps extends SandboxFileOps
     {
     }
 
-    public function flock($h, int $op): bool
+    /** Called from Store's preparation callback, after acquisition has completed. */
+    public function afterAcquire(): void
     {
-        $ok = parent::flock($h, $op);
-        if ($ok && !$this->held && ($op & LOCK_EX) === LOCK_EX) {
+        if (!$this->held) {
             $this->held = true;
             if ($this->marker !== '') { file_put_contents($this->marker, "held\n"); }
             if ($this->holdMs > 0) { usleep($this->holdMs * 1000); }
         }
-        return $ok;
     }
 
     public function rename(string $from, string $to): bool

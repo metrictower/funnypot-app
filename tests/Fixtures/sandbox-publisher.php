@@ -39,7 +39,11 @@ if (getenv('FP_SANDBOX_TEST_ACTION') === 'recover') {
     $result = $store->recover();
 } else {
     $result = $store->publish(
-        static fn () => IdentityPreparer::fromEnvironment($root . '/demo', $env)->prepare(),
+        static function () use ($root, $env, $ops) {
+            // A long HOLD is legal; it must not consume the two-second acquisition budget.
+            $ops->afterAcquire();
+            return IdentityPreparer::fromEnvironment($root . '/demo', $env)->prepare();
+        },
         $loadEffective,
     );
 }
