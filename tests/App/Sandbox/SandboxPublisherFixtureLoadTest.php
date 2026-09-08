@@ -12,6 +12,8 @@ final class SandboxPublisherFixtureLoadTest extends TestCase
 {
     public function testPublisherOperationsClassLoadsBeforeTheExecutableFixtureUsesIt(): void
     {
+        define('FUNNYPOT_SANDBOX_PUBLISHER_LOAD_ONLY', true);
+        require dirname(__DIR__, 2) . '/Fixtures/sandbox-publisher.php';
         self::assertTrue(class_exists(SandboxPublisherFixtureOps::class));
         self::assertInstanceOf(SandboxFileOps::class, new SandboxPublisherFixtureOps());
     }

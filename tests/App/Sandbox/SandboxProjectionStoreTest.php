@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Sandbox;
 
+use Funnypot\App\Identity\IdentityPreparationResult;
+use Funnypot\App\Identity\PreparedIdentitySource;
+use Funnypot\App\Identity\SourceOpenAttestation;
 use Funnypot\App\Runtime\RuntimePolicy;
 use Funnypot\App\Sandbox\Projection\CandidateGenerationFactory;
 use Funnypot\App\Sandbox\Projection\ProjectionEntryRegistry;
@@ -334,6 +337,24 @@ final class SandboxProjectionStoreTest extends TestCase
         foreach ($identity->sources() as $source) { self::assertFalse(is_resource($source->handle)); }
     }
 
+    public function testShortSourceReadRefusesBeforeSelectionAndClosesEverySourceHandle(): void
+    {
+        $ops = new ShortSourceReadOps();
+        $factory = new CountingGenerationFactory($ops);
+        $store = $this->newStore($ops, $factory);
+        $identity = null;
+        $result = $store->publish(function () use (&$identity) {
+            $identity = PreparedIdentityFixture::prepare($this->dir)['result'];
+            return $identity;
+        }, static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('nothing-selected', $result->code);
+        self::assertSame(1, $ops->shortReads);
+        self::assertSame(1, $factory->calls);
+        self::assertFileDoesNotExist($this->dir . '/sandbox/current.json');
+        self::assertNotNull($identity);
+        foreach ($identity->sources() as $source) { self::assertFalse(is_resource($source->handle)); }
+    }
+
     public function testPositiveShortWritesAreRetriedUntilTheExactSelectorIsDurable(): void
     {
         $ops = new ShortWriteOps();
@@ -412,6 +433,24 @@ final class SandboxProjectionStoreTest extends TestCase
         self::assertSame('recovered-selected', $store->recover()->code);
     }
 
+    public function testCorruptPostCommitReadbackIsUncertainAndRecoveryNeverFallsBackToPrevious(): void
+    {
+        $currentPath = $this->dir . '/sandbox/current.json';
+        $ops = new PostCommitReadbackCorruptionOps($currentPath);
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $effective = static fn () => SandboxProjectionProducerTest::effective();
+        self::assertSame('selected-new', $store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], $effective)->code);
+        $prior = (string) file_get_contents($currentPath);
+        $changed = $this->dir . '/corrupt-readback-change'; mkdir($changed, 0700);
+        $ops->arm = true;
+        $result = $store->publish(fn () => PreparedIdentityFixture::prepare($changed, tag: 'b')['result'], $effective);
+        self::assertSame('publication-uncertain', $result->code);
+        self::assertSame(1, $ops->corruptions);
+        self::assertSame($prior, (string) file_get_contents($this->dir . '/sandbox/previous.json'));
+        self::assertNotSame($prior, (string) file_get_contents($currentPath));
+        self::assertSame('invalid-selector', $store->recover()->code);
+    }
+
     public function testEffectiveAuthorityChangeAtCasLeavesCandidateUnselected(): void
     {
         $calls = 0;
@@ -439,6 +478,58 @@ final class SandboxProjectionStoreTest extends TestCase
         $previous = json_decode((string) file_get_contents($this->dir . '/sandbox/previous.json'), true);
         self::assertSame($first->generation, $current['generation']);
         self::assertSame($second->generation, $previous['generation']);
+    }
+
+    public function testRollbackAgainstDifferentCurrentEffectiveTuplePreservesExactSelectors(): void
+    {
+        $firstEffective = self::effectiveFor('rollback-effective-a', 1);
+        $secondEffective = self::effectiveFor('rollback-effective-b', 2);
+        self::assertSame('selected-new', $this->store->publish(
+            fn () => PreparedIdentityFixture::prepare($this->dir)['result'], static fn () => $firstEffective,
+        )->code);
+        self::assertSame('selected-new', $this->store->publish(
+            fn () => PreparedIdentityFixture::prepare($this->dir)['result'], static fn () => $secondEffective,
+        )->code);
+        $current = (string) file_get_contents($this->dir . '/sandbox/current.json');
+        $previous = (string) file_get_contents($this->dir . '/sandbox/previous.json');
+
+        $result = $this->store->rollback(static fn () => $secondEffective);
+
+        self::assertSame('effective-artifact-mismatch', $result->code);
+        self::assertSame($current, (string) file_get_contents($this->dir . '/sandbox/current.json'));
+        self::assertSame($previous, (string) file_get_contents($this->dir . '/sandbox/previous.json'));
+    }
+
+    /** @dataProvider rootOwnershipFaults */
+    public function testFakeRootOwnershipFailureThroughStorePreservesPriorAndClosesSources(string $fault): void
+    {
+        $effective = static fn () => SandboxProjectionProducerTest::effective();
+        self::assertSame('selected-new', $this->store->publish(
+            fn () => PreparedIdentityFixture::prepare($this->dir)['result'], $effective,
+        )->code);
+        $selector = (string) file_get_contents($this->dir . '/sandbox/current.json');
+        $generationCount = count(glob($this->dir . '/sandbox/generations/[0-9a-f]*', GLOB_ONLYDIR));
+        $ops = new FakeRootOwnershipFaultOps($fault);
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $identity = null;
+
+        $result = $store->publish(function () use (&$identity) {
+            $identity = self::asRootIdentity(PreparedIdentityFixture::prepare($this->dir)['result']);
+            return $identity;
+        }, $effective);
+
+        self::assertSame('ownership-apply-failed', $result->code);
+        self::assertSame(1, $ops->faultCalls);
+        self::assertSame($selector, (string) file_get_contents($this->dir . '/sandbox/current.json'));
+        self::assertSame($generationCount, count(glob($this->dir . '/sandbox/generations/[0-9a-f]*', GLOB_ONLYDIR)));
+        self::assertNotNull($identity);
+        foreach ($identity->sources() as $source) { self::assertFalse(is_resource($source->handle)); }
+    }
+
+    public static function rootOwnershipFaults(): iterable
+    {
+        yield 'chown' => ['chown'];
+        yield 'chgrp' => ['chgrp'];
     }
 
     public function testCoherentlyRehashedDuplicateManifestEntryFailsBeforePreparation(): void
@@ -704,6 +795,44 @@ final class SandboxProjectionStoreTest extends TestCase
             [], [], [],
         );
     }
+
+    private static function asRootIdentity(IdentityPreparationResult $identity): IdentityPreparationResult
+    {
+        $sources = [];
+        foreach ($identity->sources() as $class => $source) {
+            $attestation = $source->attestation;
+            $sources[$class] = new PreparedIdentitySource(
+                $source->sourceClass,
+                $source->handle,
+                new SourceOpenAttestation(
+                    $attestation->id, $attestation->dev, $attestation->ino, $attestation->mode,
+                    0, $attestation->gid, $attestation->nlink, $attestation->size,
+                ),
+                $source->byteLength,
+                $source->sha256,
+                $source->envelope,
+            );
+        }
+
+        return new IdentityPreparationResult(
+            $identity->sourceClass,
+            $identity->personaSource,
+            $identity->publicPersonaHash,
+            $identity->keysetCommitment,
+            $identity->tls,
+            $identity->httpGroupApplied,
+            $identity->warnings,
+            $sources[PreparedIdentitySource::HTTP],
+            $sources[PreparedIdentitySource::SHELL],
+            $sources[PreparedIdentitySource::SIP],
+            $sources[PreparedIdentitySource::REDIS],
+            $sources[PreparedIdentitySource::TLS_CERTIFICATE],
+            $sources[PreparedIdentitySource::TLS_PRIVATE_KEY],
+            $sources[PreparedIdentitySource::ADMIN_TLS_CERTIFICATE] ?? null,
+            $sources[PreparedIdentitySource::ADMIN_TLS_PRIVATE_KEY] ?? null,
+            $sources[PreparedIdentitySource::POST_EXPLOIT],
+        );
+    }
 }
 
 final class CountingGenerationFactory extends CandidateGenerationFactory
@@ -749,6 +878,35 @@ final class PostCommitFsyncOps extends FailingSyncOps
     }
 }
 
+final class PostCommitReadbackCorruptionOps extends SandboxFileOps
+{
+    public bool $arm = false;
+    public int $corruptions = 0;
+    private bool $corruptOnReadback = false;
+
+    public function __construct(private string $currentPath) {}
+
+    public function rename(string $from, string $to): bool
+    {
+        $ok = parent::rename($from, $to);
+        if ($ok && $this->arm && $to === $this->currentPath) {
+            $this->arm = false;
+            $this->corruptOnReadback = true;
+        }
+        return $ok;
+    }
+
+    public function openRead(string $path)
+    {
+        if ($this->corruptOnReadback && $path === $this->currentPath) {
+            file_put_contents($path, "\n", FILE_APPEND);
+            $this->corruptOnReadback = false;
+            ++$this->corruptions;
+        }
+        return parent::openRead($path);
+    }
+}
+
 final class SelectorBypassOps extends SandboxFileOps
 {
     public bool $arm = false;
@@ -780,6 +938,21 @@ final class ShortWriteOps extends SandboxFileOps
     {
         ++$this->writes;
         return parent::write($h, substr($bytes, 0, max(1, intdiv(strlen($bytes), 2))));
+    }
+}
+
+final class ShortSourceReadOps extends SandboxFileOps
+{
+    public int $shortReads = 0;
+
+    public function readAll($h, int $max)
+    {
+        $bytes = parent::readAll($h, $max);
+        if ($this->shortReads === 0 && is_string($bytes) && $bytes !== '') {
+            ++$this->shortReads;
+            return substr($bytes, 0, -1);
+        }
+        return $bytes;
     }
 }
 
@@ -944,5 +1117,69 @@ final class PreOpenRejectOps extends SandboxFileOps
     {
         if ($path === $this->target) { ++$this->targetOpenCalls; }
         return parent::openRead($path);
+    }
+}
+
+final class FakeRootOwnershipFaultOps extends SandboxFileOps
+{
+    public int $faultCalls = 0;
+    /** @var array<string,int> */
+    private array $owners = [];
+    /** @var array<int,string> */
+    private array $handles = [];
+
+    public function __construct(private string $fault) {}
+
+    public function euid(): int { return 0; }
+
+    public function lstat(string $path): array|false
+    {
+        $st = parent::lstat($path);
+        return is_array($st) ? $this->rootMetadata($st, $path) : false;
+    }
+
+    public function openRead(string $path)
+    {
+        $h = parent::openRead($path);
+        if (is_resource($h)) { $this->handles[(int) $h] = $path; }
+        return $h;
+    }
+
+    public function fstat($h): array|false
+    {
+        $st = parent::fstat($h);
+        if (!is_array($st)) { return false; }
+        $path = $this->handles[(int) $h] ?? null;
+        if ($path === null) { $st['uid'] = 0; return $st; }
+        return $this->rootMetadata($st, $path);
+    }
+
+    public function close($h): void
+    {
+        unset($this->handles[(int) $h]);
+        parent::close($h);
+    }
+
+    public function chown(string $path, int $uid): bool
+    {
+        if ($this->fault === 'chown') { ++$this->faultCalls; return false; }
+        $this->owners[$path] = $uid;
+        return true;
+    }
+
+    public function chgrp(string $path, int $gid): bool
+    {
+        if ($this->fault === 'chgrp') { ++$this->faultCalls; return false; }
+        return true;
+    }
+
+    /** @param array<string,int> $st @return array<string,int> */
+    private function rootMetadata(array $st, string $path): array
+    {
+        $st['uid'] = $this->owners[$path] ?? 0;
+        foreach (['edge' => 10001, 'protocols' => 10002, 'post-exploit-state' => 10005, 'web' => 10007] as $role => $gid) {
+            if (str_contains($path, '/views/' . $role)) { $st['gid'] = $gid; break; }
+        }
+        return $st;
     }
 }

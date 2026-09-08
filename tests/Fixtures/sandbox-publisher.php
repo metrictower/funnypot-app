@@ -16,6 +16,10 @@ use Funnypot\Tests\Fixtures\SandboxPublisherFixtureOps;
 
 $root = dirname(__DIR__, 2);
 require $root . '/vendor/autoload.php';
+if (defined('FUNNYPOT_SANDBOX_PUBLISHER_LOAD_ONLY')) {
+    new SandboxPublisherFixtureOps();
+    return;
+}
 $env = static fn (string $key) => getenv($key);
 $ops = new SandboxPublisherFixtureOps(
     (int) (getenv('FP_SANDBOX_TEST_HOLD_MS') ?: 0),
