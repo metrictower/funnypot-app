@@ -14,6 +14,15 @@ use PHPUnit\Framework\TestCase;
 
 final class ExposureRuntimeAdapterTest extends TestCase
 {
+    private string $temp = '';
+
+    protected function tearDown(): void
+    {
+        if ($this->temp !== '') {
+            exec('rm -rf ' . escapeshellarg($this->temp));
+        }
+    }
+
     private static function manifest(): ServiceExposureManifest
     {
         $catalog = ServiceCatalog::fromPackage();
@@ -37,6 +46,21 @@ final class ExposureRuntimeAdapterTest extends TestCase
             ['endpoint_id' => 'http-80', 'transport' => 'tcp', 'container_port' => 80, 'role_id' => 'edge'],
             ['endpoint_id' => 'ssh-2222', 'transport' => 'tcp', 'container_port' => 2222, 'role_id' => 'protocols'],
         ], array_map(static fn ($b): array => $b->toArray(), $rows));
+    }
+
+    public function testCanonicalPersistentRoundTripMapsTheSameBindings(): void
+    {
+        $this->temp = sys_get_temp_dir() . '/fp-runtime-' . bin2hex(random_bytes(6));
+        $dir = $this->temp . '/.funnypot/services';
+        mkdir($dir, 0700, true);
+        chmod($this->temp . '/.funnypot', 0700);
+        chmod($dir, 0700);
+        $path = $dir . '/exposure-manifest.json';
+        file_put_contents($path, self::manifest()->toJson());
+        chmod($path, 0600);
+
+        $bindings = (new ExposureRuntimeAdapter())->bindings(ServiceExposureManifest::fromPersistentFile($path));
+        self::assertSame(['edge', 'protocols'], array_map(static fn ($binding): string => $binding->roleId, $bindings));
     }
 
     /** @dataProvider tamperedDocuments */

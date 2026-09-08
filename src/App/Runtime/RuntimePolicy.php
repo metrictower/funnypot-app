@@ -12,6 +12,14 @@ final class RuntimePolicy
     public const HASH_DOMAIN = 'funnypot/runtime-policy-hash/v1';
     private const IDS = ['prepare', 'edge', 'web', 'protocols', 'worker', 'egress'];
     private const FIELDS = ['role_id', 'uid', 'gid', 'supplemental_gids', 'long_lived'];
+    private const EXPECTED = [
+        'prepare' => [0, 0, [], false],
+        'edge' => [10001, 10001, [], true],
+        'web' => [10007, 10007, [10000], true],
+        'protocols' => [10002, 10002, [10000], true],
+        'worker' => [10003, 10003, [10000], true],
+        'egress' => [10004, 10004, [], true],
+    ];
 
     /** @param array<string,RuntimeRole> $roles */
     private function __construct(private array $roles)
@@ -58,6 +66,9 @@ final class RuntimePolicy
                     throw new RuntimePolicyException('runtime policy: invalid supplemental gid');
                 }
                 $gids[] = $gid;
+            }
+            if ([$row['uid'], $row['gid'], $gids, $row['long_lived']] !== self::EXPECTED[$id]) {
+                throw new RuntimePolicyException('runtime policy: role tuple differs from v1 authority');
             }
             $numeric[$pair] = true;
             $roles[$id] = new RuntimeRole($id, $row['uid'], $row['gid'], $gids, $row['long_lived']);

@@ -53,5 +53,14 @@ final class RuntimePolicyTest extends TestCase
         $owner['roles'][5]['uid'] = 10003;
         $owner['roles'][5]['gid'] = 10003;
         yield 'duplicate numeric owner' => [$owner];
+        $tuple = $base;
+        $tuple['roles'][2]['uid'] = 12345;
+        yield 'changed fixed tuple' => [$tuple];
+        $lifecycle = $base;
+        $lifecycle['roles'][1]['long_lived'] = false;
+        yield 'changed lifecycle' => [$lifecycle];
+        $groups = $base;
+        $groups['roles'][5]['supplemental_gids'] = [10000];
+        yield 'changed supplemental groups' => [$groups];
     }
 }

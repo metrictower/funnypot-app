@@ -42,7 +42,7 @@ final class ExposureRuntimeAdapter
         $seenIds = [];
         $seenSockets = [];
         foreach ($rows as $row) {
-            if (!is_array($row) || array_keys($row) !== ['endpoint_id', 'transport', 'container_port']
+            if (!is_array($row) || !$this->hasExactKeys($row, ['endpoint_id', 'transport', 'container_port'])
                 || !is_string($row['endpoint_id']) || !is_string($row['transport']) || !is_int($row['container_port'])) {
                 throw new RuntimePolicyException('runtime exposure: malformed bind endpoint');
             }
@@ -72,5 +72,15 @@ final class ExposureRuntimeAdapter
         }
 
         return $bindings;
+    }
+
+    /** @param array<string,mixed> $row @param list<string> $keys */
+    private function hasExactKeys(array $row, array $keys): bool
+    {
+        $actual = array_keys($row);
+        sort($actual);
+        sort($keys);
+
+        return $actual === $keys;
     }
 }
