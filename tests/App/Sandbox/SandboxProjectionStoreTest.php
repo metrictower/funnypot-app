@@ -163,6 +163,17 @@ final class SandboxProjectionStoreTest extends TestCase
         self::assertSame(0, $prepareCalls);
     }
 
+    /** @dataProvider unsafePreOpenObjects */
+    public function testUnsafeLockShapeIsRejectedBeforeOpen(string $kind, int $mode): void
+    {
+        $path = $this->dir . '/sandbox/.publication.lock';
+        $ops = new PreOpenRejectOps($path, $mode);
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $result = $store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('publication-lock-invalid', $result->code, $kind);
+        self::assertSame(0, $ops->targetOpenCalls);
+    }
+
     public function testStatusIsNotReadyWhenNonRootOwnershipWasNotApplied(): void
     {
         if (posix_geteuid() === 0) { self::markTestSkipped('non-root semantics'); }
@@ -210,6 +221,28 @@ final class SandboxProjectionStoreTest extends TestCase
         yield 'root wrong mode' => ['root-mode'];
         yield 'root symlink' => ['root-symlink'];
         yield 'generations symlink' => ['generations-symlink'];
+    }
+
+    /** @dataProvider unsafePreOpenObjects */
+    public function testUnsafeSelectorShapeIsRejectedBeforeOpen(string $kind, int $mode): void
+    {
+        $paths = SandboxPaths::forRoot($this->dir . '/sandbox');
+        $paths->prepareRoot(new SandboxFileOps());
+        $ops = new PreOpenRejectOps($paths->current(), $mode);
+        $store = new SandboxProjectionStore(
+            $paths, ProjectionEntryRegistry::v1(), RuntimePolicy::fromPackage(), $ops,
+            new CountingGenerationFactory($ops),
+        );
+        $status = $store->status(static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('invalid-selector', $status['code'], $kind);
+        self::assertSame(0, $ops->targetOpenCalls);
+    }
+
+    public static function unsafePreOpenObjects(): iterable
+    {
+        yield 'fifo' => ['fifo', 0010600];
+        yield 'symlink' => ['symlink', 0120600];
+        yield 'wrong mode' => ['wrong-mode', 0100644];
     }
 
     public function testGenerationNameCollisionNeverReplacesTheExistingDirectory(): void
@@ -617,7 +650,7 @@ final class SandboxProjectionStoreTest extends TestCase
     private static function effectiveFor(string $tag, int $revision): \Funnypot\App\Service\EffectiveExposureArtifact
     {
         return \Funnypot\App\Service\EffectiveExposureArtifact::create(
-            $revision, $revision, 'deploy', 'exact', str_repeat('a', 64), 'fpph1_' . str_repeat('b', 64),
+            $revision, $revision, 'deploy', 'exact', str_repeat('a', 64), 'fpph1_c5b906a8c87e9125c06409a9c69784b14ee0e62578ea0759f9b59b7c4a989fe6',
             hash('sha256', 'plan-' . $tag), hash('sha256', 'published-' . $tag),
             ['mode' => 'named', 'bundle' => 'web-only', 'base_family' => 'linux', 'variant_id' => 'spv1_' . str_repeat('e', 32)],
             [], [], [],
@@ -800,5 +833,33 @@ final class LostLockCreateRaceOps extends SandboxFileOps
             return false;
         }
         return parent::openExclusive($path);
+    }
+}
+
+final class PreOpenRejectOps extends SandboxFileOps
+{
+    public int $targetOpenCalls = 0;
+
+    public function __construct(private string $target, private int $mode)
+    {
+    }
+
+    public function lstat(string $path): array|false
+    {
+        if ($path === $this->target) {
+            $base = parent::lstat(dirname($path));
+            if (!is_array($base)) { return false; }
+            $base['mode'] = $this->mode;
+            $base['nlink'] = 1;
+            $base['uid'] = $this->euid();
+            return $base;
+        }
+        return parent::lstat($path);
+    }
+
+    public function openRead(string $path)
+    {
+        if ($path === $this->target) { ++$this->targetOpenCalls; }
+        return parent::openRead($path);
     }
 }

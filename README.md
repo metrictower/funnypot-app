@@ -530,6 +530,47 @@ prints readiness, source class and the public identity hash — never a secret. 
 persona / fake-filesystem reroll for installs on the old literal default), backup, restore and the
 offline rotation procedure are in [`docs/IDENTITY.md`](docs/IDENTITY.md).
 
+### Sandbox role projections
+
+The root-only projection foundation snapshots the prepared identity/TLS sources into one immutable,
+digest-bound generation with a random 16-byte id beneath `/run/funnypot-sandbox`. Run
+`sandbox:materialize-views` only after `identity:prepare` and `services:prepare`; on a fresh install,
+`bootstrap:prepare` performs exactly those first two steps and commits effective revision 1, but it
+does **not** invoke the sandbox command. FP-0107 owns the outer preflight/container-start composite:
+
+```text
+identity:prepare -> services:prepare -> sandbox:materialize-views -> scrub identity env -> start roles
+```
+
+The sandbox command deliberately reruns identity preparation in its own locked process so the live
+source handles remain open through projection. Therefore the composite runs before the environment
+scrub. Repeating it with unchanged inputs returns `unchanged-current` without minting a candidate.
+`sandbox:projection-status [--json]` reports the selected generation, effective authority and public
+certificate fingerprints without paths, private keys or the keyset commitment; `sandbox:rollback-views`
+can select only the fully validated fixed `previous.json` generation and accepts no argument.
+JSON status remains machine-readable on setup faults as the fixed redacted `code=unexpected` not-ready
+object; it never emits an exception class, message, or path.
+
+An unprivileged developer run records `ownership_applied:false`; that is diagnostic evidence, never a
+consumer-ready generation. Root applies each fixed role UID/GID and private/public file mode. Runtime
+mounts and process enforcement are intentionally deferred to FP-0107.
+
+For the future projected-view deployment, Let's Encrypt renewal requires a generation handoff: its
+deploy hook must run the composite `sandbox:materialize-views` (which observes the changed TLS bytes)
+and then let FP-0107 perform its selected-generation cutover. This foundation does not change today's
+entrypoint or renewal hook, and the cutover is not implemented yet. The status command exposes the
+selected admin certificate fingerprint so a stale view is visible. After FP-0317, every new generation
+also rotates its three capability values; FP-0107 must restart the deployed union of `edge`,
+`post-exploit-state`, and `upload-sample` when those roles exist, never edge alone. Absence of the
+optional admin pair on first boot remains valid.
+
+The extension boundary is closed: FP-0317 will retain the nine foundation rows and add exactly three
+capability rows plus one service-profile identity row (thirteen total). It will retain the prepared
+service-profile source byte-for-byte and introduce `ProjectionEphemeralSourceFactory`, whose renderer
+receives the already-minted candidate id and mints only its two bearers. FP-0107 consumes this policy and
+materializer, adds topology/migration, and binds the selected `views/web/identity/` read-only at
+`/run/funnypot/identity-http`. Neither follow-up recreates this foundation.
+
 ## Safety and invariants
 
 funnypot is built so it can only ever mislead an attacker, never help one.
@@ -622,6 +663,9 @@ bin/funnypot bootstrap:prepare --target=deploy --publish=exact   # identity then
 bin/funnypot services:prepare  --target=deploy --publish=exact   # service preflight only (--json prints the manifest)
 bin/funnypot services:status   --healthcheck                     # exit 0 on a fresh ready/degraded heartbeat, else 1
 bin/funnypot services:status   --wait-ready=45                    # poll the heartbeat up to N seconds
+bin/funnypot sandbox:materialize-views                             # publish/short-circuit one validated role-view generation
+bin/funnypot sandbox:projection-status --json                     # redacted readiness and effective binding
+bin/funnypot sandbox:rollback-views                                # select the exact validated previous generation
 ```
 
 ## Docs

@@ -21,6 +21,9 @@ final class SandboxProjectionProducer
 
     public function produce(string $generation, IdentityPreparationResult $identity, EffectiveExposureArtifact $effective): SandboxProjection
     {
+        if (($effective->toArray()['identity_public_hash'] ?? null) !== $identity->publicPersonaHash) {
+            throw new SandboxProjectionException('effective-artifact-mismatch');
+        }
         $entries = $this->entries($identity);
 
         return new SandboxProjection(
@@ -40,6 +43,9 @@ final class SandboxProjectionProducer
     /** Stable inputs are built before a candidate id exists. @return array<string,mixed> */
     public function stableInputs(IdentityPreparationResult $identity, EffectiveExposureArtifact $effective, bool $ownershipApplied): array
     {
+        if (($effective->toArray()['identity_public_hash'] ?? null) !== $identity->publicPersonaHash) {
+            throw new SandboxProjectionException('effective-artifact-mismatch');
+        }
         $entries = $this->entries($identity);
         usort($entries, static fn (SandboxProjectionEntry $a, SandboxProjectionEntry $b): int => strcmp($a->registered->entryId, $b->registered->entryId));
         $stableEntries = [];

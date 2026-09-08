@@ -17,7 +17,7 @@ namespace Funnypot\App\Config;
  * filesystem paths, secrets/identity and
  * network topology — are deliberately NOT here (they stay env-sourced inside `fromStore`); the test
  * holds their allow-list. The install identity inputs (FUNNYPOT_INSTALL_SECRET[_FILE], the persona
- * overrides, the operator TLS paths, the runtime-dir override) are never registered at all: they are
+ * overrides, the operator TLS paths, and the identity/sandbox runtime-root overrides) are never registered at all: they are
  * not AppConfig fields, so a stored override could never inject or reveal them — ConfigRegistryTest
  * pins `keyForEnv()` to null for each.
  *

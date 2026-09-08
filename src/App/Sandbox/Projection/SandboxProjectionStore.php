@@ -312,11 +312,14 @@ final class SandboxProjectionStore
             }
         }
         $lst = $this->ops->lstat($path);
+        if (!is_array($lst) || (((int) $lst['mode']) & 0170000) !== 0100000
+            || (int) $lst['nlink'] !== 1 || (int) $lst['uid'] !== $this->ops->euid()
+            || (((int) $lst['mode']) & 0777) !== 0600) {
+            throw new SandboxProjectionException('publication-lock-invalid');
+        }
         $h = $this->ops->openRead($path);
         $fst = is_resource($h) ? $this->ops->fstat($h) : false;
-        if (!is_array($lst) || !is_array($fst) || (((int) $lst['mode']) & 0170000) !== 0100000
-            || (int) $lst['nlink'] !== 1 || (int) $lst['uid'] !== $this->ops->euid() || (((int) $lst['mode']) & 0777) !== 0600
-            || !$this->sameStat($lst, $fst)) {
+        if (!is_array($fst) || !$this->sameStat($lst, $fst)) {
             if (is_resource($h)) { $this->ops->close($h); }
             throw new SandboxProjectionException('publication-lock-invalid');
         }
@@ -561,12 +564,14 @@ final class SandboxProjectionStore
     private function readTrusted(string $path, int $mode, int $max, int $owner, ?int $gid = null): string
     {
         $lst = $this->ops->lstat($path);
+        if (!is_array($lst) || (((int) $lst['mode']) & 0170000) !== 0100000
+            || (int) $lst['nlink'] !== 1 || (int) $lst['uid'] !== $owner || (((int) $lst['mode']) & 0777) !== $mode
+            || ($gid !== null && (int) $lst['gid'] !== $gid)) {
+            throw new SandboxProjectionException('selected-generation-invalid');
+        }
         $h = $this->ops->openRead($path);
         $fst = is_resource($h) ? $this->ops->fstat($h) : false;
-        if (!is_array($lst) || !is_array($fst) || (((int) $lst['mode']) & 0170000) !== 0100000
-            || (int) $lst['nlink'] !== 1 || (int) $lst['uid'] !== $owner || (((int) $lst['mode']) & 0777) !== $mode
-            || ($gid !== null && (int) $lst['gid'] !== $gid)
-            || !$this->sameStat($lst, $fst)) {
+        if (!is_array($fst) || !$this->sameStat($lst, $fst)) {
             if (is_resource($h)) { $this->ops->close($h); }
             throw new SandboxProjectionException('selected-generation-invalid');
         }

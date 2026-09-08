@@ -46,6 +46,19 @@ final class SandboxProjectionProducerTest extends TestCase
             ->produce(str_repeat('2', 32), $identity, self::effective());
     }
 
+    public function testProducerRejectsEffectiveArtifactForAnotherPublicIdentity(): void
+    {
+        $identity = PreparedIdentityFixture::prepare($this->dir)['result'];
+        try {
+            $this->expectException(SandboxProjectionException::class);
+            $this->expectExceptionMessage('effective-artifact-mismatch');
+            (new SandboxProjectionProducer(ProjectionEntryRegistry::v1(), RuntimePolicy::fromPackage()))
+                ->produce(str_repeat('2', 32), $identity, self::effective('fpph1_' . str_repeat('0', 64)));
+        } finally {
+            $identity->close();
+        }
+    }
+
     /** @dataProvider attestationFields */
     public function testProducerRejectsEveryChangedAttestationField(string $field): void
     {
@@ -65,10 +78,10 @@ final class SandboxProjectionProducerTest extends TestCase
         foreach (['dev', 'ino', 'mode', 'uid', 'gid', 'nlink'] as $field) { yield $field => [$field]; }
     }
 
-    public static function effective(): EffectiveExposureArtifact
+    public static function effective(string $identityPublicHash = 'fpph1_c5b906a8c87e9125c06409a9c69784b14ee0e62578ea0759f9b59b7c4a989fe6'): EffectiveExposureArtifact
     {
         return EffectiveExposureArtifact::create(
-            1, 1, 'deploy', 'exact', str_repeat('a', 64), 'fpph1_' . str_repeat('b', 64),
+            1, 1, 'deploy', 'exact', str_repeat('a', 64), $identityPublicHash,
             str_repeat('c', 64), str_repeat('d', 64),
             ['mode' => 'named', 'bundle' => 'web-only', 'base_family' => 'linux', 'variant_id' => 'spv1_' . str_repeat('e', 32)],
             [], [], [],

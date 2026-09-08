@@ -36,6 +36,7 @@ use Funnypot\App\Service\ServiceCli;
 use Funnypot\App\Service\ServiceProfilePreparer;
 use Funnypot\App\Service\ServiceStatusReader;
 use Funnypot\App\Service\ServicePaths;
+use Funnypot\App\Sandbox\Projection\SandboxProjectionApplication;
 
 $root = dirname(__DIR__);
 $autoload = $root . '/vendor/autoload.php';
@@ -57,6 +58,55 @@ $optOut = static function (array $argvv, string $default): string {
 
     return $default;
 };
+
+if (in_array($command, ['sandbox:materialize-views', 'sandbox:rollback-views', 'sandbox:projection-status'], true)) {
+    $statusJson = $command === 'sandbox:projection-status' && $argvv === ['--json'];
+    if (($command !== 'sandbox:projection-status' && $argvv !== [])
+        || ($command === 'sandbox:projection-status' && $argvv !== [] && !$statusJson)) {
+        fwrite(STDERR, "usage: funnypot {$command}" . ($command === 'sandbox:projection-status' ? ' [--json]' : '') . "\n");
+        exit(2);
+    }
+    try {
+        $sandbox = SandboxProjectionApplication::fromEnvironment($root . '/demo');
+        if ($command === 'sandbox:materialize-views') {
+            $result = $sandbox->materialize();
+            fwrite(STDOUT, "sandbox: {$result->code}" . ($result->generation !== null ? " generation={$result->generation}" : '') . "\n");
+            exit($result->successful() ? 0 : 1);
+        }
+        if ($command === 'sandbox:rollback-views') {
+            $result = $sandbox->rollback();
+            fwrite(STDOUT, "sandbox: {$result->code}" . ($result->generation !== null ? " generation={$result->generation}" : '') . "\n");
+            exit($result->successful() ? 0 : 1);
+        }
+        $status = $sandbox->status();
+        if ($statusJson) {
+            fwrite(STDOUT, json_encode($status, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
+        } else {
+            fwrite(STDOUT, 'sandbox: ' . ($status['ready'] ? 'ready' : 'NOT ready') . ' (' . $status['code'] . ")\n");
+            fwrite(STDOUT, '  schema: ' . (string) ($status['schema'] ?? '-') . "\n");
+            fwrite(STDOUT, '  generation: ' . (string) ($status['generation'] ?? '-') . "\n");
+            fwrite(STDOUT, sprintf(
+                "  effective: schema=%s revision=%s generation=%s hash=%s match=%s\n",
+                (string) ($status['effective_schema'] ?? '-'),
+                (string) ($status['effective_revision'] ?? '-'),
+                (string) ($status['effective_generation'] ?? '-'),
+                (string) ($status['effective_hash'] ?? '-'),
+                ($status['effective_match'] ?? false) ? 'yes' : 'no',
+            ));
+            foreach (($status['certificate_fingerprints'] ?? []) as $id => $fingerprint) {
+                fwrite(STDOUT, "  certificate {$id}: {$fingerprint}\n");
+            }
+        }
+        exit($status['ready'] ? 0 : 1);
+    } catch (\Throwable $e) {
+        if ($statusJson) {
+            fwrite(STDOUT, '{"code":"unexpected","entries":[],"generation":null,"ready":false,"schema":"sandbox-projection-selector/v1"}' . "\n");
+        } else {
+            fwrite(STDERR, "{$command} failed: unexpected\n");
+        }
+        exit(1);
+    }
+}
 
 if ($command === 'identity:prepare' || $command === 'identity:status') {
     if ($argvv !== []) {
@@ -284,5 +334,5 @@ if ($command === 'services:prepare' || $command === 'bootstrap:prepare') {
     exit(0);
 }
 
-fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list | identity:prepare | identity:status | services:prepare | services:status | bootstrap:prepare\n");
+fwrite(STDERR, "usage: funnypot compile-protocols | compile-catalog | vulns:sync | vulns:list | identity:prepare | identity:status | services:prepare | services:status | bootstrap:prepare | sandbox:materialize-views | sandbox:projection-status | sandbox:rollback-views\n");
 exit($command === '' || $command === 'help' || $command === '--help' ? 0 : 2);
