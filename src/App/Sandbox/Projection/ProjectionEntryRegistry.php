@@ -18,11 +18,19 @@ final class ProjectionEntryRegistry
     /** @param list<ProjectionRegistryEntry>|null $entries test injection only */
     public function __construct(?array $entries = null)
     {
+        $entryIds = [];
+        $destinationIds = [];
+        $paths = [];
         foreach ($entries ?? self::foundationEntries() as $entry) {
-            if (!$entry instanceof ProjectionRegistryEntry || isset($this->entries[$entry->entrySchema])) {
+            if (!$entry instanceof ProjectionRegistryEntry || isset($this->entries[$entry->entrySchema])
+                || isset($entryIds[$entry->entryId]) || isset($destinationIds[$entry->destinationId])
+                || isset($paths[$entry->relativePath])) {
                 throw new SandboxProjectionException('projection-registry-invalid');
             }
             $this->entries[$entry->entrySchema] = $entry;
+            $entryIds[$entry->entryId] = true;
+            $destinationIds[$entry->destinationId] = true;
+            $paths[$entry->relativePath] = true;
         }
         if (count($this->entries) > SandboxProjection::MAX_ENTRIES) {
             throw new SandboxProjectionException('projection-registry-invalid');

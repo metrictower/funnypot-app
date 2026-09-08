@@ -261,6 +261,9 @@ final class SandboxProjectionStore
     public function status(callable $loadEffective): array
     {
         try {
+            if (!$this->paths->validateExisting($this->ops)) {
+                return ['ready' => false, 'code' => 'nothing-selected', 'schema' => self::SELECTOR_SCHEMA, 'generation' => null, 'entries' => []];
+            }
             $snapshot = $this->snapshotSelector();
             if ($snapshot === null) {
                 return ['ready' => false, 'code' => 'nothing-selected', 'schema' => self::SELECTOR_SCHEMA, 'generation' => null, 'entries' => []];
@@ -301,11 +304,12 @@ final class SandboxProjectionStore
         $path = $this->paths->lock();
         if ($this->ops->lstat($path) === false) {
             $created = $this->ops->openExclusive($path);
-            if (!is_resource($created)) {
-                throw new SandboxProjectionException('publication-lock-invalid');
+            if (is_resource($created)) {
+                $this->ops->close($created);
+                if (!$this->ops->chmod($path, 0600)) {
+                    throw new SandboxProjectionException('publication-lock-invalid');
+                }
             }
-            $this->ops->close($created);
-            $this->ops->chmod($path, 0600);
         }
         $lst = $this->ops->lstat($path);
         $h = $this->ops->openRead($path);

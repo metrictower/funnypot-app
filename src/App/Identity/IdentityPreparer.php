@@ -396,7 +396,7 @@ final class IdentityPreparer
             return null;
         }
         // FP-0310 makes the shared .funnypot parent traverse-only (0711) for the separate www-data
-        // service-profile store. Validate that boundary as non-writable, then keep identity/ and its
+        // service-profile store. Validate that boundary as group/other traverse-only, then keep identity/ and its
         // manifest private. This also permits the mandated identity -> services -> identity rerun.
         $this->opener->requireDirectory($this->paths->privateRoot(), 'manifest', SourceOpener::MODE_TRAVERSE_ONLY);
         $src = $this->opener->openDirect($this->paths->privateRoot(), ['identity', IdentityPaths::MANIFEST_FILE], 'manifest', self::MAX_MANIFEST_BYTES, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);

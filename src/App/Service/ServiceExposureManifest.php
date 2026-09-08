@@ -230,7 +230,7 @@ final class ServiceExposureManifest
         $opener = new SourceOpener($ops);
         try {
             // The shared .funnypot parent is intentionally 0711 so www-data can reach its separate
-            // desired-profile subtree. Validate that parent against the no-write rule, then anchor
+            // desired-profile subtree. Validate that parent against the no group/other read-or-write rule, then anchor
             // the downstream direct read there so services/ and the manifest retain the private rule.
             $opener->requireDirectory($funnypotDir, 'exposure-manifest', SourceOpener::MODE_TRAVERSE_ONLY);
             $src = $opener->openDirect(

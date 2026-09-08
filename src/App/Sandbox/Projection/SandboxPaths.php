@@ -44,18 +44,26 @@ final class SandboxPaths
     {
         $st = $ops->lstat($this->root);
         if ($st === false) {
-            if ($this->root !== self::PRODUCTION_ROOT || !$ops->mkdir($this->root, 0700)) {
+            if ($this->root !== self::PRODUCTION_ROOT) {
                 throw new SandboxProjectionException('sandbox-root-invalid');
             }
+            $ops->mkdir($this->root, 0700);
         }
         self::validateRoot($this->root, $ops);
         foreach ([$this->generations(), $this->ephemeral()] as $dir) {
             $st = $ops->lstat($dir);
-            if ($st === false && !$ops->mkdir($dir, 0700)) {
-                throw new SandboxProjectionException('sandbox-root-invalid');
-            }
+            if ($st === false) { $ops->mkdir($dir, 0700); }
             self::validateDirectory($dir, $ops, 0700);
         }
+    }
+
+    /** Read-only boundary validation for status/startup consumers; creates no object. */
+    public function validateExisting(SandboxFileOps $ops): bool
+    {
+        if ($ops->lstat($this->root) === false) { return false; }
+        self::validateRoot($this->root, $ops);
+        self::validateDirectory($this->generations(), $ops, 0700);
+        return true;
     }
 
     private static function validAbsolute(string $path): string

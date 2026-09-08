@@ -6,6 +6,7 @@ namespace Funnypot\Tests\App\Sandbox;
 
 use Funnypot\App\Sandbox\Projection\ProjectionDestinationOwner;
 use Funnypot\App\Sandbox\Projection\ProjectionEntryRegistry;
+use Funnypot\App\Sandbox\Projection\SandboxProjectionException;
 use Funnypot\App\Sandbox\Projection\RestartConsumer;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -47,5 +48,32 @@ final class ProjectionRegistryTest extends TestCase
         self::assertSame(['__construct', 'v1', 'entry', 'entries', 'records', 'registryHash'], $methods);
         self::assertNotContains('register', $methods);
         self::assertNotContains('add', $methods);
+    }
+
+    /** @dataProvider duplicateFields */
+    public function testInjectedRegistryRejectsDuplicateClosedIdentifiers(string $field): void
+    {
+        $records = ProjectionEntryRegistry::v1()->entries();
+        $first = $records[0];
+        $second = $records[1];
+        $args = [
+            $second->entrySchema, $second->entryId, $second->presence, $second->destinationOwner,
+            $second->destinationId, $second->relativePath, $second->directoryMode, $second->fileMode,
+            $second->contentClass, $second->restartConsumers, $second->attestationIds, $second->linkCountPolicy,
+        ];
+        $index = ['entry_schema' => 0, 'entry_id' => 1, 'destination_id' => 4, 'relative_path' => 5][$field];
+        $args[$index] = match ($field) {
+            'entry_schema' => $first->entrySchema,
+            'entry_id' => $first->entryId,
+            'destination_id' => $first->destinationId,
+            'relative_path' => $first->relativePath,
+        };
+        $this->expectException(SandboxProjectionException::class);
+        new ProjectionEntryRegistry([$first, new \Funnypot\App\Sandbox\Projection\ProjectionRegistryEntry(...$args)]);
+    }
+
+    public static function duplicateFields(): iterable
+    {
+        foreach (['entry_schema', 'entry_id', 'destination_id', 'relative_path'] as $field) { yield $field => [$field]; }
     }
 }

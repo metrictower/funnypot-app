@@ -124,6 +124,45 @@ final class SandboxProjectionStoreTest extends TestCase
         self::assertSame(201, $ops->attempts);
     }
 
+    public function testCompetingLockCreatorWinnerIsValidatedThenUsed(): void
+    {
+        $ops = new LostLockCreateRaceOps($this->dir . '/sandbox/.publication.lock');
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $result = $store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('selected-new', $result->code);
+        self::assertTrue($ops->lostRaceInjected);
+    }
+
+    public function testCompetingCreatorThenEightSameInputCallsNeverMintAgain(): void
+    {
+        $ops = new LostLockCreateRaceOps($this->dir . '/sandbox/.publication.lock');
+        $factory = new CountingGenerationFactory($ops);
+        $store = $this->newStore($ops, $factory);
+        $prepare = fn () => PreparedIdentityFixture::prepare($this->dir)['result'];
+        $effective = static fn () => SandboxProjectionProducerTest::effective();
+        self::assertSame('selected-new', $store->publish($prepare, $effective)->code);
+        $selector = (string) file_get_contents($this->dir . '/sandbox/current.json');
+        for ($i = 0; $i < 8; ++$i) {
+            self::assertSame('unchanged-current', $store->publish($prepare, $effective)->code);
+        }
+        self::assertSame(1, $factory->calls);
+        self::assertSame($selector, (string) file_get_contents($this->dir . '/sandbox/current.json'));
+        self::assertCount(1, glob($this->dir . '/sandbox/generations/[0-9a-f]*', GLOB_ONLYDIR));
+    }
+
+    public function testUnsafeCompetingLockCreatorWinnerFailsClosedBeforePreparation(): void
+    {
+        $ops = new LostLockCreateRaceOps($this->dir . '/sandbox/.publication.lock', true);
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $prepareCalls = 0;
+        $result = $store->publish(function () use (&$prepareCalls) {
+            ++$prepareCalls;
+            return PreparedIdentityFixture::prepare($this->dir)['result'];
+        }, static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('publication-lock-invalid', $result->code);
+        self::assertSame(0, $prepareCalls);
+    }
+
     public function testStatusIsNotReadyWhenNonRootOwnershipWasNotApplied(): void
     {
         if (posix_geteuid() === 0) { self::markTestSkipped('non-root semantics'); }
@@ -131,6 +170,46 @@ final class SandboxProjectionStoreTest extends TestCase
         $status = $this->store->status(static fn () => SandboxProjectionProducerTest::effective());
         self::assertFalse($status['ready']);
         self::assertSame('ownership-not-applied', $status['code']);
+    }
+
+    public function testStatusOfAbsentRootIsReadOnlyAndReportsNothingSelected(): void
+    {
+        $absent = $this->dir . '/not-created';
+        $ops = new SandboxFileOps();
+        $store = new SandboxProjectionStore(
+            SandboxPaths::forRoot($absent), ProjectionEntryRegistry::v1(), RuntimePolicy::fromPackage(),
+            $ops, new CountingGenerationFactory($ops),
+        );
+        $status = $store->status(static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('nothing-selected', $status['code']);
+        self::assertDirectoryDoesNotExist($absent);
+    }
+
+    /** @dataProvider invalidStatusBoundaries */
+    public function testStatusRejectsUnsafeRootAndGenerationsBoundaries(string $boundary): void
+    {
+        $effective = static fn () => SandboxProjectionProducerTest::effective();
+        self::assertSame('selected-new', $this->store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], $effective)->code);
+        $root = $this->dir . '/sandbox';
+        if ($boundary === 'root-mode') {
+            chmod($root, 0755);
+        } elseif ($boundary === 'root-symlink') {
+            rename($root, $this->dir . '/sandbox-real');
+            symlink($this->dir . '/sandbox-real', $root);
+        } else {
+            rename($root . '/generations', $root . '/generations-real');
+            symlink($root . '/generations-real', $root . '/generations');
+        }
+        $status = $this->store->status($effective);
+        self::assertFalse($status['ready']);
+        self::assertSame('invalid-selector', $status['code']);
+    }
+
+    public static function invalidStatusBoundaries(): iterable
+    {
+        yield 'root wrong mode' => ['root-mode'];
+        yield 'root symlink' => ['root-symlink'];
+        yield 'generations symlink' => ['generations-symlink'];
     }
 
     public function testGenerationNameCollisionNeverReplacesTheExistingDirectory(): void
@@ -700,5 +779,26 @@ final class LockTimeoutOps extends SandboxFileOps
 
     public function sleepMs(int $ms): void
     {
+    }
+}
+
+final class LostLockCreateRaceOps extends SandboxFileOps
+{
+    public bool $lostRaceInjected = false;
+
+    public function __construct(private string $lockPath, private bool $unsafe = false)
+    {
+    }
+
+    public function openExclusive(string $path)
+    {
+        if ($path === $this->lockPath && !$this->lostRaceInjected) {
+            $this->lostRaceInjected = true;
+            $h = parent::openExclusive($path);
+            if (is_resource($h)) { parent::close($h); }
+            if ($this->unsafe) { chmod($path, 0644); }
+            return false;
+        }
+        return parent::openExclusive($path);
     }
 }

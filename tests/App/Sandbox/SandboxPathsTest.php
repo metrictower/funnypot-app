@@ -36,6 +36,17 @@ final class SandboxPathsTest extends TestCase
         SandboxPaths::fromEnvironment(fn (string $key) => $key === SandboxPaths::ROOT_ENV ? $root($this) : false);
     }
 
+    public function testCompetingCreatorWinningBothChildMkdirRacesIsValidatedAndAccepted(): void
+    {
+        $root = $this->temp();
+        $paths = SandboxPaths::fromEnvironment(static fn (string $key) => $key === SandboxPaths::ROOT_ENV ? $root : false);
+        $ops = new LostMkdirRaceOps();
+        $paths->prepareRoot($ops);
+        self::assertSame(2, $ops->lostRaces);
+        self::assertSame('0700', substr(sprintf('%o', fileperms($paths->generations())), -4));
+        self::assertSame('0700', substr(sprintf('%o', fileperms($paths->ephemeral())), -4));
+    }
+
     public static function invalidRoots(): iterable
     {
         yield 'relative' => [static fn (): string => 'relative/path'];
@@ -53,5 +64,17 @@ final class SandboxPathsTest extends TestCase
         chmod($dir, $mode);
         $this->temps[] = $dir;
         return $dir;
+    }
+}
+
+final class LostMkdirRaceOps extends SandboxFileOps
+{
+    public int $lostRaces = 0;
+
+    public function mkdir(string $path, int $mode): bool
+    {
+        $ok = parent::mkdir($path, $mode);
+        if ($ok) { ++$this->lostRaces; return false; }
+        return false;
     }
 }
