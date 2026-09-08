@@ -9,6 +9,11 @@ use Funnypot\App\Identity\IdentityFileOps;
 /** @internal Filesystem seam for deterministic fault and ownership tests. */
 class SandboxFileOps extends IdentityFileOps
 {
+    public function monotonicMilliseconds(): int
+    {
+        return (int) floor(hrtime(true) / 1000000);
+    }
+
     /** @param resource $h */
     public function fdatasync($h): bool
     {

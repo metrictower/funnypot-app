@@ -61,7 +61,6 @@ final class SandboxProjectionStore
 
         $identity = null;
         $candidate = null;
-        $candidateRenamed = false;
         $selectorCommitted = false;
         $hadCurrent = false;
         try {
@@ -131,7 +130,6 @@ final class SandboxProjectionStore
             if (!is_array($candidateStat) || !$this->ops->rename($candidate, $final)) {
                 throw new SandboxProjectionException('candidate-rename-failed');
             }
-            $candidateRenamed = true;
             $candidate = null;
             $finalStat = $this->ops->lstat($final);
             if (!is_array($finalStat) || (int) $finalStat['dev'] !== (int) $candidateStat['dev'] || (int) $finalStat['ino'] !== (int) $candidateStat['ino']) {
@@ -169,7 +167,7 @@ final class SandboxProjectionStore
             if ($candidate !== null) {
                 $this->removeTree($candidate);
             }
-            if ($candidateRenamed || $selectorCommitted) {
+            if ($selectorCommitted) {
                 return new SandboxPublicationResult('publication-uncertain');
             }
             if (in_array($e->errorCode(), ['selected-generation-invalid', 'source-attestation-drift', 'ownership-apply-failed'], true)) {
@@ -301,6 +299,7 @@ final class SandboxProjectionStore
     /** @return resource */
     private function acquireLock()
     {
+        $deadline = $this->ops->monotonicMilliseconds() + self::LOCK_TIMEOUT_MS;
         $path = $this->paths->lock();
         if ($this->ops->lstat($path) === false) {
             $created = $this->ops->openExclusive($path);
@@ -323,17 +322,26 @@ final class SandboxProjectionStore
             if (is_resource($h)) { $this->ops->close($h); }
             throw new SandboxProjectionException('publication-lock-invalid');
         }
-        $waited = 0;
-        while (!$this->ops->flock($h, LOCK_EX | LOCK_NB)) {
-            if ($waited >= self::LOCK_TIMEOUT_MS) {
+        while (true) {
+            if ($this->ops->monotonicMilliseconds() >= $deadline) {
                 $this->ops->close($h);
                 throw new SandboxProjectionException('publication-lock-timeout');
             }
-            $this->ops->sleepMs(10);
-            $waited += 10;
+            if ($this->ops->flock($h, LOCK_EX | LOCK_NB)) {
+                if ($this->ops->monotonicMilliseconds() < $deadline) {
+                    return $h;
+                }
+                $this->ops->flock($h, LOCK_UN);
+                $this->ops->close($h);
+                throw new SandboxProjectionException('publication-lock-timeout');
+            }
+            $now = $this->ops->monotonicMilliseconds();
+            if ($now >= $deadline) {
+                $this->ops->close($h);
+                throw new SandboxProjectionException('publication-lock-timeout');
+            }
+            $this->ops->sleepMs(min(10, $deadline - $now));
         }
-
-        return $h;
     }
 
     /** @param resource $h */

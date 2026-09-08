@@ -121,7 +121,43 @@ final class SandboxProjectionStoreTest extends TestCase
         self::assertSame('publication-lock-timeout', $result->code);
         self::assertSame(0, $prepareCalls);
         self::assertSame(0, $factory->calls);
-        self::assertSame(201, $ops->attempts);
+        self::assertSame(200, $ops->attempts);
+        self::assertTrue($ops->closed);
+    }
+
+    public function testPublicationLockOversleepCannotBeginPreparationAfterDeadline(): void
+    {
+        $ops = new OversleepLockOps();
+        $factory = new CountingGenerationFactory($ops);
+        $store = $this->newStore($ops, $factory);
+        $prepareCalls = 0;
+        $result = $store->publish(function () use (&$prepareCalls) {
+            ++$prepareCalls;
+            return PreparedIdentityFixture::prepare($this->dir)['result'];
+        }, static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('publication-lock-timeout', $result->code);
+        self::assertSame(0, $prepareCalls);
+        self::assertSame(0, $factory->calls);
+        self::assertSame(1, $ops->attempts);
+        self::assertTrue($ops->closed);
+    }
+
+    public function testPublicationLockSuccessAfterElapsedDeadlineIsReleasedAndRejected(): void
+    {
+        $ops = new LateSuccessfulLockOps();
+        $factory = new CountingGenerationFactory($ops);
+        $store = $this->newStore($ops, $factory);
+        $prepareCalls = 0;
+        $result = $store->publish(function () use (&$prepareCalls) {
+            ++$prepareCalls;
+            return PreparedIdentityFixture::prepare($this->dir)['result'];
+        }, static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('publication-lock-timeout', $result->code);
+        self::assertSame(0, $prepareCalls);
+        self::assertSame(0, $factory->calls);
+        self::assertSame(1, $ops->exclusiveAttempts);
+        self::assertSame(1, $ops->unlocks);
+        self::assertTrue($ops->closed);
     }
 
     public function testCompetingLockCreatorWinnerIsValidatedThenUsed(): void
@@ -330,22 +366,34 @@ final class SandboxProjectionStoreTest extends TestCase
         yield 'candidate rename' => ['candidate-rename'];
     }
 
-    /** @dataProvider postRenameFaults */
-    public function testPostCandidateRenameFaultIsUncertain(string $fault): void
+    /** @dataProvider postRenamePreCommitFaults */
+    public function testPostCandidateRenamePreCommitFaultPreservesExactPrior(string $fault): void
     {
         $ops = new PublicationFaultOps($this->dir . '/sandbox');
         $store = $this->newStore($ops, new CountingGenerationFactory($ops));
         $effective = static fn () => SandboxProjectionProducerTest::effective();
         self::assertSame('selected-new', $store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], $effective)->code);
-        $prior = json_decode((string) file_get_contents($this->dir . '/sandbox/current.json'), true)['generation'];
+        $prior = (string) file_get_contents($this->dir . '/sandbox/current.json');
         $ops->fault = $fault;
         $changed = $this->dir . '/fsync-change'; mkdir($changed, 0700);
         $result = $store->publish(fn () => PreparedIdentityFixture::prepare($changed, tag: 'b')['result'], $effective);
-        self::assertSame('publication-uncertain', $result->code);
-        self::assertSame($prior, $store->recover()->generation);
+        self::assertSame('preserved-prior', $result->code);
+        self::assertSame($prior, (string) file_get_contents($this->dir . '/sandbox/current.json'));
+        self::assertSame(json_decode($prior, true)['generation'], $store->recover()->generation);
     }
 
-    public static function postRenameFaults(): iterable
+    /** @dataProvider postRenamePreCommitFaults */
+    public function testPostCandidateRenamePreCommitFaultOnFirstInstallSelectsNothing(string $fault): void
+    {
+        $ops = new PublicationFaultOps($this->dir . '/sandbox');
+        $store = $this->newStore($ops, new CountingGenerationFactory($ops));
+        $ops->fault = $fault;
+        $result = $store->publish(fn () => PreparedIdentityFixture::prepare($this->dir)['result'], static fn () => SandboxProjectionProducerTest::effective());
+        self::assertSame('nothing-selected', $result->code);
+        self::assertFileDoesNotExist($this->dir . '/sandbox/current.json');
+    }
+
+    public static function postRenamePreCommitFaults(): iterable
     {
         yield 'generations fsync' => ['generation-fsync'];
         yield 'selector rename' => ['selector-rename'];
@@ -800,9 +848,11 @@ final class TrackingLockOps extends SandboxFileOps
     }
 }
 
-final class LockTimeoutOps extends SandboxFileOps
+class LockTimeoutOps extends SandboxFileOps
 {
     public int $attempts = 0;
+    public int $now = 0;
+    public bool $closed = false;
 
     public function flock($h, int $op): bool
     {
@@ -812,7 +862,40 @@ final class LockTimeoutOps extends SandboxFileOps
 
     public function sleepMs(int $ms): void
     {
+        $this->now += $ms;
     }
+
+    public function monotonicMilliseconds(): int { return $this->now; }
+
+    public function close($h): void { $this->closed = true; parent::close($h); }
+}
+
+final class OversleepLockOps extends LockTimeoutOps
+{
+    public function sleepMs(int $ms): void { $this->now += 2500; }
+}
+
+final class LateSuccessfulLockOps extends SandboxFileOps
+{
+    public int $now = 0;
+    public int $exclusiveAttempts = 0;
+    public int $unlocks = 0;
+    public bool $closed = false;
+
+    public function monotonicMilliseconds(): int { return $this->now; }
+
+    public function flock($h, int $op): bool
+    {
+        if ($op === LOCK_UN) { ++$this->unlocks; return true; }
+        if (($op & LOCK_EX) === LOCK_EX) {
+            ++$this->exclusiveAttempts;
+            $this->now = 2001;
+            return true;
+        }
+        return true;
+    }
+
+    public function close($h): void { $this->closed = true; parent::close($h); }
 }
 
 final class LostLockCreateRaceOps extends SandboxFileOps
