@@ -12,7 +12,6 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
-require __DIR__ . '/lib/geo.php';
 
 use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\AiApi\AiApiRouter;
@@ -40,6 +39,7 @@ use Funnypot\App\Http\CoreConfigFactory;
 use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DashboardController;
 use Funnypot\App\Http\DownloadRouter;
+use Funnypot\App\Http\EarlyIngressGuard;
 use Funnypot\App\Identity\HttpIdentity;
 use Funnypot\App\Identity\IdentityBootstrapException;
 use Funnypot\App\Identity\IdentityPaths;
@@ -91,6 +91,19 @@ use Funnypot\Core\Support\VisualPersona;
 // like a missing page instead of exposing internals. Generalises the engine's "only ever upgrade a
 // 404, never escape as a 500" invariant to the whole front controller.
 @ini_set('display_errors', '0');
+// Until admission, neither PHP's automatic fatal log nor our handler may copy request bytes.
+// This fixed closure is deliberately independent of autoload: even a broken guard class rejects.
+$funnypotLogErrors = ini_set('log_errors', '0');
+$funnypotAdmitted = false;
+$funnypot414 = static function (): void {
+    if (!headers_sent()) {
+        http_response_code(414);
+        header('Content-Type: text/html; charset=UTF-8');
+        header('Cache-Control: no-store');
+        header('Connection: close');
+        echo '<!doctype html><title>414 URI Too Long</title>URI Too Long';
+    }
+};
 $funnypot404 = static function (): void {
     if (!headers_sent()) {
         http_response_code(404);
@@ -98,11 +111,21 @@ $funnypot404 = static function (): void {
         echo '<!doctype html><title>404 Not Found</title>404 Not Found';
     }
 };
-$funnypotFault = static function (string $where, string $msg, string $file, int $line) use ($funnypot404): void {
+$funnypotFault = static function (string $where, string $msg, string $file, int $line) use ($funnypot404, $funnypot414, &$funnypotAdmitted): void {
+    if (!$funnypotAdmitted) {
+        $funnypot414();
+
+        return;
+    }
     error_log("funnypot {$where}: {$msg} @ {$file}:{$line}");
     $funnypot404();
 };
-set_exception_handler(static function (\Throwable $e) use ($funnypotFault, $funnypot404): void {
+set_exception_handler(static function (\Throwable $e) use ($funnypotFault, $funnypot404, $funnypot414, &$funnypotAdmitted): void {
+    if (!$funnypotAdmitted) {
+        $funnypot414();
+
+        return;
+    }
     // An identity bootstrap fault logs ONLY its stable public code — never the message, file or line
     // the generic path records — so a missing/tampered bundle can never name a private path or the
     // bootstrap source in a log that may be shipped or scraped. Same believable 404 either way.
@@ -120,6 +143,22 @@ register_shutdown_function(static function () use ($funnypotFault): void {
         $funnypotFault('fatal', $e['message'], $e['file'], (int) $e['line']);
     }
 });
+
+try {
+    $funnypotTargetAccepted = EarlyIngressGuard::accepts($_SERVER['REQUEST_URI'] ?? '/');
+} catch (\Throwable $e) {
+    $funnypotTargetAccepted = false;
+}
+if (!$funnypotTargetAccepted) {
+    $funnypot414();
+
+    return;
+}
+$funnypotAdmitted = true;
+if ($funnypotLogErrors !== false) {
+    ini_set('log_errors', $funnypotLogErrors);
+}
+require __DIR__ . '/lib/geo.php';
 
 // Store-backed config (FP-0242a): resolved value = stored override > env seed > coded default. The
 // config db sits beside the hit store on the persisted volume; its path is derived from env WITHOUT

@@ -532,6 +532,23 @@ offline rotation procedure are in [`docs/IDENTITY.md`](docs/IDENTITY.md).
 
 ## Safety and invariants
 
+The standalone HTTP edge accepts at most **4,096 raw bytes per complete request target**. nginx
+counts the original target (including absolute-form scheme/authority), before both PHP and static
+ACME routing. PHP repeats the check on its CGI `REQUEST_URI` before GeoIP, configuration, identity,
+stores, body reads or routing; CGI cannot reconstruct an authority nginx has already removed.
+Oversized targets are rejected whole, never shortened into a valid lure, with a fixed, unlogged
+414 (`text/html; charset=UTF-8`, `Cache-Control: no-store`, connection closed). Exactly 4,096 bytes
+retain normal behavior. Missing/non-string CGI targets retain the existing `/` fallback.
+
+All public/admin vhosts share 1 KiB initial / four 8 KiB large header buffers, a five-second header
+deadline and a 1 MiB gross body fallback. The header deadline can close a partial request without
+sending any bytes; only nginx special-response paths use the static generic 408. Request-time nginx
+error logging is suppressed to prevent rejected targets entering logs; global startup/configuration
+diagnostics remain available. This does not add route-specific body timeouts or change inspection
+windows in the currently installed core v0.6.3. Core v0.7.0 adoption and app classifier migration are
+separate, gated work. Production image/raw-socket/no-leak acceptance must pass before deployment;
+source parity tests are not evidence that the image has passed that gate.
+
 funnypot is built so it can only ever mislead an attacker, never help one.
 
 - **Emulate output, never run input.** The fake shell is a lookup table: no `exec`, `proc_open` or
