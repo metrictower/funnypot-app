@@ -63,6 +63,19 @@ final class ExposureRuntimeAdapterTest extends TestCase
         self::assertSame(['edge', 'protocols'], array_map(static fn ($binding): string => $binding->roleId, $bindings));
     }
 
+    public function testAcceptedNginxAliasMapsToEdgeOnlyWhenItsServiceIsInEffectiveClosure(): void
+    {
+        $catalog = ServiceCatalog::fromPackage();
+        $manifest = ServiceExposureManifest::build(
+            'deploy', 'exact', $catalog->catalogHash(), 'fpph1_' . str_repeat('b', 64), 1, str_repeat('c', 64), 1,
+            ['mode' => 'manual', 'bundle' => null, 'base_family' => 'linux', 'variant_id' => 'spv1_' . str_repeat('d', 32)],
+            ['web-alt-http'], [], [['endpoint_id' => 'http-8080', 'transport' => 'tcp', 'container_port' => 8080]],
+            ['tcp/8080'], ['deploy tcp/8080:8080'], ['http-8080'], [],
+        );
+        $bindings = (new ExposureRuntimeAdapter())->bindings($manifest, $catalog);
+        self::assertSame([['endpoint_id' => 'http-8080', 'transport' => 'tcp', 'container_port' => 8080, 'role_id' => 'edge']], array_map(static fn ($b): array => $b->toArray(), $bindings));
+    }
+
     /** @dataProvider tamperedDocuments */
     public function testRejectsTamperedStaleDuplicateAndOutOfClosureManifests(callable $mutate): void
     {
@@ -83,6 +96,9 @@ final class ExposureRuntimeAdapterTest extends TestCase
         }];
         yield 'listener outside accepted set' => [static function (array &$d): void {
             $d['bind_endpoints'][] = ['endpoint_id' => 'mysql-3306', 'transport' => 'tcp', 'container_port' => 3306];
+        }];
+        yield 'nginx alias outside accepted set' => [static function (array &$d): void {
+            $d['bind_endpoints'][] = ['endpoint_id' => 'http-8080', 'transport' => 'tcp', 'container_port' => 8080];
         }];
         yield 'duplicate published tuple' => [static function (array &$d): void { $d['published'][] = $d['published'][0]; }];
         yield 'outer effective mismatch' => [static function (array &$d): void { $d['desired_exposures'][] = 'tcp/9999'; }];

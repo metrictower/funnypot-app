@@ -63,7 +63,16 @@ final class ExposureRuntimeAdapter
                 default => throw new RuntimePolicyException('runtime exposure: forbidden endpoint owner kind'),
             };
             $effectiveServices = $effective['effective_service_ids'] ?? [];
-            if ($role !== 'edge' && (!is_array($effectiveServices) || !in_array($endpoint->serviceId, $effectiveServices, true))) {
+            $accepted = $endpoint->ownerKind === 'canonical-web';
+            if ($endpoint->ownerKind === 'nginx-alias') {
+                $httpAliases = $doc['nginx_http_alias_endpoint_ids'] ?? null;
+                $httpsAliases = $doc['nginx_https_alias_endpoint_ids'] ?? null;
+                $accepted = is_array($httpAliases) && is_array($httpsAliases)
+                    && (in_array($endpoint->endpointId, $httpAliases, true) || in_array($endpoint->endpointId, $httpsAliases, true));
+            } elseif ($endpoint->ownerKind !== 'canonical-web') {
+                $accepted = is_array($effectiveServices) && in_array($endpoint->serviceId, $effectiveServices, true);
+            }
+            if (!$accepted) {
                 throw new RuntimePolicyException('runtime exposure: endpoint outside accepted manifest');
             }
             $seenIds[$row['endpoint_id']] = true;
