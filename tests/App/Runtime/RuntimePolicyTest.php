@@ -23,7 +23,7 @@ final class RuntimePolicyTest extends TestCase
     {
         $policy = RuntimePolicy::fromPackage();
         self::assertSame(['schema' => RuntimePolicy::SCHEMA, 'roles' => self::ROLES], $policy->toArray());
-        self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $policy->policyHash());
+        self::assertSame('690235d24871b59b211c47b2a89f0669d7ad6bf06645225c7ddce76284c84367', $policy->policyHash());
         self::assertNull($policy->role('post-exploit-state'));
         self::assertNull($policy->role('upload-sample'));
     }
