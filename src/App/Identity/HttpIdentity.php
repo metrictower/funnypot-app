@@ -26,6 +26,13 @@ final class HttpIdentity
         'docker_registry_token_key', 'engagement_analytics_key',
     ];
 
+    /**
+     * Additive keys a newer image writes but an older bundle may not carry. Read optionally so a new
+     * image booting against a not-yet-re-prepared old bundle never fails the whole web tier; the
+     * feature that consumes one enforces its presence only when it is enabled.
+     */
+    private const OPTIONAL_KEYS = ['attrition_journey_key'];
+
     private function __construct(
         private string $personaMaterial,
         private string $coreRenderSalt,
@@ -33,6 +40,7 @@ final class HttpIdentity
         private string $sessionMacKey,
         private string $dockerRegistryTokenKey,
         private string $engagementAnalyticsKey,
+        private ?string $attritionJourneyKey = null,
     ) {
     }
 
@@ -45,13 +53,14 @@ final class HttpIdentity
             $d->consoleSessionMacKey(),
             $d->dockerRegistryTokenKey(),
             $d->engagementAnalyticsKey(),
+            $d->attritionJourneyKey(),
         );
     }
 
     /** @param array<string,mixed> $payload */
     public static function fromPayload(array $payload): self
     {
-        $p = IdentityBundleReader::requireExactly($payload, self::KEYS);
+        $p = IdentityBundleReader::requireWithOptional($payload, self::KEYS, self::OPTIONAL_KEYS);
 
         return new self(
             $p['persona_material'],
@@ -60,6 +69,7 @@ final class HttpIdentity
             IdentityKeyDeriver::decodeKey($p['console_session_mac_key']),
             IdentityKeyDeriver::decodeKey($p['docker_registry_token_key']),
             IdentityKeyDeriver::decodeKey($p['engagement_analytics_key']),
+            isset($p['attrition_journey_key']) ? IdentityKeyDeriver::decodeKey($p['attrition_journey_key']) : null,
         );
     }
 
@@ -72,7 +82,7 @@ final class HttpIdentity
     /** @return array<string,string> */
     public function toPayload(): array
     {
-        return [
+        $out = [
             'persona_material' => $this->personaMaterial,
             'core_render_salt' => IdentityKeyDeriver::encodeKey($this->coreRenderSalt),
             'shell_filesystem_key' => IdentityKeyDeriver::encodeKey($this->filesystemKey),
@@ -80,6 +90,11 @@ final class HttpIdentity
             'docker_registry_token_key' => IdentityKeyDeriver::encodeKey($this->dockerRegistryTokenKey),
             'engagement_analytics_key' => IdentityKeyDeriver::encodeKey($this->engagementAnalyticsKey),
         ];
+        if ($this->attritionJourneyKey !== null) {
+            $out['attrition_journey_key'] = IdentityKeyDeriver::encodeKey($this->attritionJourneyKey);
+        }
+
+        return $out;
     }
 
     public function personaMaterial(): string
@@ -122,5 +137,11 @@ final class HttpIdentity
     public function engagementAnalyticsKey(): string
     {
         return $this->engagementAnalyticsKey;
+    }
+
+    /** The attrition-journey HMAC key, or null when the bundle predates it (feature must stay off). */
+    public function attritionJourneyKey(): ?string
+    {
+        return $this->attritionJourneyKey;
     }
 }

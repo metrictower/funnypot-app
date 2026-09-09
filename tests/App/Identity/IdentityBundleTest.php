@@ -67,7 +67,8 @@ final class IdentityBundleTest extends TestCase
         $redis = json_decode((string) file_get_contents($this->paths->redisBundlePath()), true);
         $post = json_decode((string) file_get_contents($this->paths->postExploitBundlePath()), true);
 
-        self::assertSame(['console_session_mac_key', 'core_render_salt', 'docker_registry_token_key', 'engagement_analytics_key', 'persona_material', 'shell_filesystem_key'], array_keys($http['payload']));
+        self::assertSame(['attrition_journey_key', 'console_session_mac_key', 'core_render_salt', 'docker_registry_token_key', 'engagement_analytics_key', 'persona_material', 'shell_filesystem_key'], array_keys($http['payload']));
+        self::assertSame(IdentityKeyDeriver::encodeKey($d->attritionJourneyKey()), $http['payload']['attrition_journey_key']);
         self::assertSame(['persona_material', 'shell_filesystem_key'], array_keys($shell['payload']));
         self::assertSame(['persona_material'], array_keys($sip['payload']));
         self::assertSame(['persona_material', 'redis_telemetry_fingerprint_key'], array_keys($redis['payload']), 'RedisIdentity: exactly persona + redis-telemetry/v1');
@@ -167,6 +168,25 @@ final class IdentityBundleTest extends TestCase
         chmod($this->paths->httpRuntimeDir(), 0700);
 
         $this->expectCode('bundle-unknown', fn () => (new IdentityBundleReader($this->paths))->read('manifest'));
+    }
+
+    public function test_http_bundle_carries_the_attrition_key_and_an_old_bundle_still_loads(): void
+    {
+        $d = IdentityTestSupport::deriver();
+        // The freshly prepared bundle carries the additive attrition key and load() exposes it.
+        $h = HttpIdentity::load($this->paths);
+        self::assertSame($d->attritionJourneyKey(), $h->attritionJourneyKey());
+
+        // A prior-schema bundle (the additive key absent) still loads — two-mode reader, no web-tier
+        // outage — and simply reports the key as unavailable so the feature stays off.
+        $p = $this->paths->httpBundlePath();
+        $doc = json_decode((string) file_get_contents($p), true);
+        unset($doc['payload']['attrition_journey_key']);
+        file_put_contents($p, (string) json_encode($doc, JSON_UNESCAPED_SLASHES));
+        chmod($p, 0640);
+        $old = HttpIdentity::load($this->paths);
+        self::assertNull($old->attritionJourneyKey());
+        self::assertSame('bundle-test-persona-value', $old->personaMaterial());
     }
 
     public function test_reader_never_touches_the_manifest_or_the_master(): void

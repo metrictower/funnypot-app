@@ -105,4 +105,44 @@ final class IdentityBundleReader
 
         return $out;
     }
+
+    /**
+     * Require every $required key and accept any $optional key, rejecting anything else. This is the
+     * two-mode reader an ADDITIVELY-extended bundle needs: a new image reads the prior schema (the
+     * optional key simply absent) as well as the new one, so a not-yet-re-prepared old bundle never
+     * fails the whole web tier at bootstrap. Presence of an optional key is enforced by the feature
+     * that consumes it, not here. Every present value is a non-empty string; an unknown key is a
+     * tamper signal and fails.
+     *
+     * @param array<string,mixed> $payload
+     * @param list<string>        $required
+     * @param list<string>        $optional
+     * @return array<string,string> only the keys actually present (required + present optional)
+     */
+    public static function requireWithOptional(array $payload, array $required, array $optional): array
+    {
+        $allowed = array_merge($required, $optional);
+        foreach (array_keys($payload) as $k) {
+            if (!in_array($k, $allowed, true)) {
+                throw IdentityBootstrapException::withCode('bundle-payload-malformed', IdentityBootstrapException::REMEDY_RUNTIME);
+            }
+        }
+        $out = [];
+        foreach ($required as $k) {
+            if (!is_string($payload[$k] ?? null) || $payload[$k] === '') {
+                throw IdentityBootstrapException::withCode('bundle-payload-malformed', IdentityBootstrapException::REMEDY_RUNTIME);
+            }
+            $out[$k] = $payload[$k];
+        }
+        foreach ($optional as $k) {
+            if (array_key_exists($k, $payload)) {
+                if (!is_string($payload[$k]) || $payload[$k] === '') {
+                    throw IdentityBootstrapException::withCode('bundle-payload-malformed', IdentityBootstrapException::REMEDY_RUNTIME);
+                }
+                $out[$k] = $payload[$k];
+            }
+        }
+
+        return $out;
+    }
 }

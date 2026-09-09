@@ -37,6 +37,7 @@ final class IdentityKeyDeriver
     private const INFO_KEYSET_PROOF = 'runtime-keyset-proof/v1';
     private const INFO_REDIS_TELEMETRY = 'redis-telemetry/v1';
     private const INFO_POST_EXPLOIT = 'post-exploit-state/v1';
+    private const INFO_ATTRITION_JOURNEY = 'attrition-journey/v1';
 
     private const COMMITMENT_DOMAIN = 'funnypot/keyset-commitment/v1';
     private const PUBLIC_HASH_DOMAIN = 'funnypot/public-persona-hash/v1';
@@ -45,7 +46,7 @@ final class IdentityKeyDeriver
     public const DOMAINS = [
         self::INFO_PERSONA, self::INFO_CORE_RENDER_SALT, self::INFO_SHELL_FS, self::INFO_CONSOLE_MAC,
         self::INFO_DOCKER_TOKEN, self::INFO_ANALYTICS, self::INFO_EXPERIMENT, self::INFO_SERVICE_PROFILE,
-        self::INFO_KEYSET_PROOF, self::INFO_REDIS_TELEMETRY, self::INFO_POST_EXPLOIT,
+        self::INFO_KEYSET_PROOF, self::INFO_REDIS_TELEMETRY, self::INFO_POST_EXPLOIT, self::INFO_ATTRITION_JOURNEY,
     ];
 
     private function __construct(private string $master)
@@ -113,6 +114,12 @@ final class IdentityKeyDeriver
     public function postExploitStateKey(): string
     {
         return $this->derive(self::INFO_POST_EXPLOIT);
+    }
+
+    /** The web tier's attrition-journey handle key — HMAC key for the bounded async-export decoy. */
+    public function attritionJourneyKey(): string
+    {
+        return $this->derive(self::INFO_ATTRITION_JOURNEY);
     }
 
     /**
