@@ -71,6 +71,7 @@ try {
     // FPM catch_workers_output receives SqliteHitStore's php://stderr record, independently of
     // error_log and access logging. Inspect the actual destination, not just a created filename.
     $check(str_contains((string) file_get_contents('/tmp/ingress/fpm-error.log'), 'ingress-positive-agent'), 'positive-php-stderr-record');
+    $check(str_contains((string) file_get_contents('/tmp/ingress/php-error.log'), 'ingress-positive-php-error'), 'positive-php-error-log');
     $check(str_contains((string) file_get_contents('/tmp/ingress/fpm-access.log'), 'ingress-fpm-request'), 'positive-fpm-access');
     foreach (['config', 'store', 'raw', 'geo'] as $field) {
         $check(str_contains((string) file_get_contents('/tmp/ingress/fpm-calls.log'), '"' . $field . '":1'), 'positive-' . $field . '-spy');
@@ -79,6 +80,10 @@ try {
     // Startup/config diagnostics have their own positive control from nginx -t / startup.
     $check(str_contains((string) file_get_contents('/evidence/nginx-config-test.log'), 'test is successful'), 'positive-nginx-config-diagnostic');
     $save('accepted-sinks', $control, 0, $calls());
+    // Accepted-control diagnostics traverse the actual container stdout/stderr capture. The
+    // host verifies both after container exit; no target/header/body is copied into these logs.
+    fwrite(STDOUT, "ingress-positive-container-stdout\n");
+    fwrite(STDERR, "ingress-positive-container-stderr\n");
     $before = $calls();
     $control = $wire->http(80, 'public.ingress.invalid', 'POST', '/ingress-body-control', 1, 'ingress-positive-body');
     $check($calls() === $before + 1 && str_contains((string) file_get_contents('/tmp/ingress/fpm-calls.log'), '"body":1'), 'positive-body-spy');
@@ -178,13 +183,14 @@ try {
     foreach ($snapshot() as $path => $bytes) {
         $check(!str_contains($bytes, $rejectMarker), 'negative-sentinel-in-sink-' . basename($path));
     }
-    file_put_contents('/evidence/receipt.json', json_encode(['status' => 'passed',
+    file_put_contents('/evidence/receipt.json', json_encode(['status' => 'container-checks-passed',
         'elapsed_ms' => (hrtime(true) - $started) / 1e6, 'cases' => $cases,
         'sink_controls' => ['hits', 'raw_requests', 'hits.log', 'abuse_queue', 'ti_queue',
-            'PHP stderr', 'FPM access', 'FPM admission/body/bootstrap counters', 'nginx config diagnostics'],
+            'PHP stderr', 'PHP configured error_log', 'FPM access', 'FPM admission/body/bootstrap counters', 'nginx config diagnostics'],
+        'completion_gate' => 'host container.log positive/negative check and completion.json still required',
         'nginx_request_logs' => 'disabled by production policy; not falsely counted as positive sinks',
     ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
-    echo "Input ceiling real-image acceptance passed\n";
+    echo "Input ceiling in-container checks passed; host log check remains\n";
 } catch (Throwable $error) {
     file_put_contents('/evidence/receipt.json', json_encode(['status' => 'failed',
         'failed_check' => $error->getMessage(), 'cases' => $cases], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));

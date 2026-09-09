@@ -538,7 +538,8 @@ ACME routing. PHP repeats the check on its CGI `REQUEST_URI` before GeoIP, confi
 stores, body reads or routing; CGI cannot reconstruct an authority nginx has already removed.
 Oversized targets are rejected whole, never shortened into a valid lure, with a fixed, unlogged
 414 (`text/html; charset=UTF-8`, `Cache-Control: no-store`, connection closed). Exactly 4,096 bytes
-retain normal behavior. Missing/non-string CGI targets retain the existing `/` fallback.
+retain normal behavior. The front controller explicitly normalizes missing/non-string CGI targets
+to `/` before bootstrap; the locked core v0.6.3 mapper cannot do that for non-string values itself.
 
 All public/admin vhosts share 1 KiB initial / four 8 KiB large header buffers, a five-second header
 deadline and a 1 MiB gross body fallback. The header deadline can close a partial request without
@@ -551,6 +552,9 @@ source parity tests are not evidence that the image has passed that gate.
 The operator-only [input-ceiling acceptance job](tests/acceptance/ingress/README.md) records the
 production nginx version, real FPM/ACME boundaries, timeout behavior and independent sink controls
 inside a resource-bounded, network-isolated container; it is manually dispatched, not a local test.
+Its final completion receipt additionally requires a bounded post-exit check of captured container
+stdout/stderr; the in-container receipt alone is not successful acceptance. PHP's configured error log
+has a separate accepted positive control from FPM's stderr capture.
 
 funnypot is built so it can only ever mislead an attacker, never help one.
 

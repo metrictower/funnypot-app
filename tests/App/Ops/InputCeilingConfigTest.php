@@ -110,4 +110,26 @@ final class InputCeilingConfigTest extends TestCase
         self::assertStringContainsString('return 408 "Request Timeout\\n";', $edge);
         self::assertStringContainsString('error_page 408 = @funnypot_header_timeout;', $this->read('demo/funnypot-location.conf'));
     }
+
+    public function test_image_log_controls_are_wired_independently_before_final_acceptance(): void
+    {
+        $prepend = $this->read('tests/acceptance/ingress/prepend.php');
+        self::assertStringContainsString("error_log('ingress-positive-php-error');", $prepend);
+        self::assertStringContainsString("\$counts['config'] === 1", $prepend);
+        self::assertStringContainsString("=== 'ingress-positive-header'", $prepend);
+        $check = $this->read('tests/acceptance/ingress/check.php');
+        self::assertStringContainsString("file_get_contents('/tmp/ingress/php-error.log'), 'ingress-positive-php-error'", $check);
+        self::assertStringContainsString("'status' => 'container-checks-passed'", $check);
+        $run = $this->read('tests/acceptance/ingress/run.sh');
+        self::assertStringContainsString('ulimit -f 1024', $run);
+        self::assertStringContainsString('timeout 5 bash tests/acceptance/ingress/verify-container-log.sh', $run);
+        self::assertStringContainsString('>"$out/completion.json"', $run);
+        self::assertLessThan(strpos($run, 'timeout 5 bash'), strpos($run, '/acceptance/container.sh'));
+        foreach (['stdout', 'stderr'] as $sink) {
+            self::assertStringContainsString('ingress-positive-container-' . $sink, $check);
+            self::assertStringContainsString('ingress-positive-container-' . $sink, $this->read('tests/acceptance/ingress/verify-container-log.sh'));
+        }
+        self::assertStringContainsString('ingress-reject-7b6e4d', $check);
+        self::assertStringContainsString('ingress-reject-7b6e4d', $this->read('tests/acceptance/ingress/verify-container-log.sh'));
+    }
 }

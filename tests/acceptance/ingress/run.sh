@@ -18,6 +18,9 @@ cleanup() {
 }
 trap cleanup EXIT
 timeout 900 docker build -f demo/Dockerfile -t "$image" . >"$out/build.log" 2>&1
+(
+# Bound the host-side capture while it is written, not only when inspected afterward.
+ulimit -f 1024
 timeout --signal=TERM --kill-after=10 240 docker run --name "$task_id" \
     --network none --read-only --cpus 2 --memory 1g --pids-limit 64 \
     --security-opt no-new-privileges --cap-drop ALL \
@@ -33,4 +36,8 @@ timeout --signal=TERM --kill-after=10 240 docker run --name "$task_id" \
     --mount "type=bind,src=$PWD/tests/acceptance/ingress,dst=/acceptance,readonly" \
     --mount "type=bind,src=$out,dst=/evidence" \
     --entrypoint /bin/sh "$image" /acceptance/container.sh >"$out/container.log" 2>&1
+)
 test -s "$out/receipt.json"
+# The container has exited and no longer writes this log. Missing controls, a leaked reject
+# marker, unreadable/oversized logs, and command failure all prevent final acceptance.
+timeout 5 bash tests/acceptance/ingress/verify-container-log.sh "$out/container.log" >"$out/completion.json"

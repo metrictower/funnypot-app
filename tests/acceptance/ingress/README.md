@@ -30,14 +30,21 @@ server close after approximately five seconds is valid, not a missing 408 failur
 close or timeout beyond the finite 7.5-second tolerance fails.
 
 Each live sink has its own accepted positive assertion before negative scans: hit row, raw row,
-JSON-lines export, both local report queue rows, PHP stderr, FPM access and the fixed instrumentation.
+JSON-lines export, both local report queue rows, PHP stderr, PHP's configured error_log, FPM access
+and the fixed instrumentation. The accepted request's test-only shutdown observer emits a fixed
+error_log control; this is separate from the hit writer's php://stderr/FPM capture control.
 All DB/WAL/SHM/export/log files are scanned under bounded directories. The queue controls use only
 RFC-5737 fixture source addresses and synthetic placeholder strings, and can never be drained.
 nginx request logs are deliberately disabled by production policy and are not falsely claimed to
 have positive request controls; its `nginx -t` diagnostic has a separate positive assertion.
 
 Evidence under `ingress-evidence/` records build/config/version logs and a receipt with every case's
-status, body size, FPM delta and elapsed time. The actual installed nginx version is recorded, not
+status, body size, FPM delta and elapsed time. `receipt.json` only attests `container-checks-passed`:
+after that container exits, a pure host-side checker requires separate stdout/stderr positive markers
+and no reject marker in the captured `container.log`, rejecting missing/symlink/empty/oversized files.
+Capture is file-size-limited while written; the checker is bounded to1MiB/five seconds. Only successful
+post-exit verification writes `completion.json` with `status: passed`; both receipts and a successful
+job are needed for acceptance. The actual installed nginx version is recorded, not
 assumed from the floating production base. Any missing control, malformed/truncated reply, timeout,
 overflow or sentinel leak fails the job. A failed receipt is never a green acceptance. Private test
 identity files and SQLite contents are not copied into uploaded artifacts.

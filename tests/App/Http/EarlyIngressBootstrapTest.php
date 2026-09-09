@@ -60,8 +60,21 @@ final class EarlyIngressBootstrapTest extends TestCase
         self::assertTrue($result['geo_included']);
     }
 
+    public function test_missing_and_non_string_targets_reach_the_actual_slash_fallback(): void
+    {
+        [$control] = $this->request('/');
+        foreach (['array', 'object', 'integer', 'false', 'true', 'null', 'missing'] as $shape) {
+            [$result, $stderr] = $this->request('/', 'none', 'GET', $shape);
+            self::assertSame($control['status'], $result['status'], $shape);
+            self::assertTrue($result['target_is_slash'], $shape);
+            self::assertTrue($result['geo_included'], $shape);
+            self::assertContains('Funnypot\\Core\\RequestContext', $result['classes'], $shape);
+            self::assertStringNotContainsString('funnypot uncaught', $stderr, $shape);
+        }
+    }
+
     /** @return array{array,string,list<string>} */
-    private function request(string $target, string $fault = 'none', string $method = 'GET'): array
+    private function request(string $target, string $fault = 'none', string $method = 'GET', string $shape = 'string'): array
     {
         $root = dirname(__DIR__, 3);
         $data = sys_get_temp_dir() . '/fp-ingress-' . bin2hex(random_bytes(8));
@@ -85,7 +98,7 @@ final class EarlyIngressBootstrapTest extends TestCase
         $pipes = [];
         try {
             $proc = proc_open([PHP_BINARY, '-d', 'memory_limit=256M', '-d', 'max_execution_time=10',
-                $root . '/tests/Fixtures/ingress/front-controller.php', base64_encode($target), $fault, $method],
+                $root . '/tests/Fixtures/ingress/front-controller.php', base64_encode($target), $fault, $method, $shape],
                 [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes, $root, $env);
             self::assertIsResource($proc);
             fclose($pipes[0]);

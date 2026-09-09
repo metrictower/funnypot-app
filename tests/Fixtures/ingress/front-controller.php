@@ -44,6 +44,16 @@ namespace {
         'HTTP_USER_AGENT' => 'ingress-boundary-control', 'HTTP_X_INGRESS_CONTROL' => 'header-control',
     ];
     $_GET = $_POST = $_COOKIE = [];
+    $shape = $argv[4] ?? 'string';
+    $nonStrings = ['null' => null, 'false' => false, 'true' => true,
+        'integer' => 4097, 'array' => [], 'object' => new \stdClass()];
+    if ($shape === 'missing') {
+        unset($_SERVER['REQUEST_URI']);
+    } elseif (array_key_exists($shape, $nonStrings)) {
+        $_SERVER['REQUEST_URI'] = $nonStrings[$shape];
+    } elseif ($shape !== 'string') {
+        exit(2);
+    }
     http_response_code(200); // CGI's default, otherwise the CLI-only getter starts at false.
     $classes = [];
     $GLOBALS['ingress_body_reads'] = 0;
@@ -63,6 +73,7 @@ namespace {
             'status' => http_response_code(), 'body' => base64_encode($body),
             'classes' => $classes, 'body_reads' => $GLOBALS['ingress_body_reads'],
             'geo_included' => in_array($root . '/demo/lib/geo.php', get_included_files(), true),
+            'target_is_slash' => ($_SERVER['REQUEST_URI'] ?? null) === '/',
         ], JSON_THROW_ON_ERROR);
     });
     require $root . '/demo/index.php';

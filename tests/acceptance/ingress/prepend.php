@@ -24,5 +24,10 @@ namespace {
             $counts[$key] = (int) class_exists($class, false);
         }
         file_put_contents('/tmp/ingress/fpm-calls.log', json_encode($counts) . "\n", FILE_APPEND | LOCK_EX);
+        if ($counts['config'] === 1 && ($_SERVER['HTTP_X_INGRESS_CONTROL'] ?? '') === 'ingress-positive-header') {
+            // Exercise PHP's configured error_log, separately from php://stderr/FPM capture.
+            // Only the accepted positive request emits this fixed, target-free control.
+            error_log('ingress-positive-php-error');
+        }
     });
 }

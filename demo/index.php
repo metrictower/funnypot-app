@@ -145,7 +145,12 @@ register_shutdown_function(static function () use ($funnypotFault): void {
 });
 
 try {
-    $funnypotTargetAccepted = EarlyIngressGuard::accepts($_SERVER['REQUEST_URI'] ?? '/');
+    // SAPI targets are strings. Make the documented fallback explicit for malformed host/test
+    // globals too: the locked core v0.6.3 mapper does not normalize non-string values itself.
+    if (!isset($_SERVER['REQUEST_URI']) || !is_string($_SERVER['REQUEST_URI'])) {
+        $_SERVER['REQUEST_URI'] = '/';
+    }
+    $funnypotTargetAccepted = EarlyIngressGuard::accepts($_SERVER['REQUEST_URI']);
 } catch (\Throwable $e) {
     $funnypotTargetAccepted = false;
 }
