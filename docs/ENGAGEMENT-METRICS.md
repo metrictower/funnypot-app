@@ -112,14 +112,25 @@ path. `demo/retention.php` runs the bulk reclaim on its timer — `retainDays(mi
 min(hits,30) : 30))`, `retainBytes(global bytes)`, checkpoint + `incremental_vacuum` — and recounts the
 gauges. The identifier/enum field length is a class constant (64 bytes).
 
+The same configured byte cap feeds **two different meters**: inline logical charges of 256 bytes/event
+and 192 bytes/episode, versus periodic physical `page_count * page_size` plus WAL size. They are not
+equal quantities and have no fixed 1.5–2x conversion. Freelist pages, WAL readers and checkpoint
+behavior can delay physical reclamation. The logical admission cap is not a hard filesystem quota.
+
 The store is its own file, `engagement.sqlite`, beside the hit db (one file per concern): the hit
-writers queue up to 3 s on their WAL lock and this store must never queue at all.
+writers queue up to 3 s on their WAL lock, while ordinary engagement request/read connections have a 5 ms
+busy clamp. The explicit retention-only factory uses 3000 ms without changing request/read instances.
 
 ## Observer performance and failure behaviour
 
 The recorder runs only after the response decision exists, does no sleep, retry, DNS or network I/O,
 and never throws. `PRAGMA busy_timeout` is re-issued at **5 ms** after the shared `Sqlite::open()`
-(which sets 3000 ms), so lock contention sheds the metric instead of holding a request worker. Any
+(whose earlier pragmas use 3000 ms). This caps lock-handler waiting per operation, not connection-cold
+latency or a whole request/retention pass. `SqliteEngagementStore::forMaintenance()` alone selects 3000 ms;
+`demo/retention.php` keeps its file-exists guard and operation order. Ordinary null-ID-factory readers
+still use 5 ms. Both forms without an ID factory reject recording before opening a DB or calling the
+clock, including already-existing episodes, without changing any fault counter. Their reads/retention
+may still perform schema/maintenance writes; this is not an OS-level read-only connection. Any recording
 lock, I/O, schema, cap or serialization fault returns a no-op status and increments `fault` when the
 db allows it. `ProducerWiringTest` asserts a producer's status, headers and body are byte-identical
 with metrics off, on, and faulting.

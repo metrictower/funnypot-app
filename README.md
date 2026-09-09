@@ -162,13 +162,20 @@ constant. Episode resolution is one `BEGIN IMMEDIATE` transaction (idle-gap, abs
 clock-rollback splits stay correct under concurrent workers), the store is **bounded** by clamped
 per-episode and global row/byte caps enforced inline plus an age ceiling never longer than the hit
 retention or 30 days, and it is **observer-only**: a 5 ms busy-timeout clamp sheds on lock contention,
-any fault is a no-op with a fixed-name saturating health counter, and a producer's response is
+recording faults are no-ops with a fixed-name saturating health counter when writable, and a producer's response is
 byte-identical with metrics off, on, or faulting. The analytics panel gains an **engagement episodes**
 section — depth, active span, continuation, artifact reuse, polls/tool turns, bytes, measured server
 cost, and identity **basis × confidence** — with a dash for any zero-denominator ratio and an explicit
 `(est.)` on the bytes-derived context estimate; it never labels an episode an "actor". Measured overhead
 on the warm-local benchmark (`scripts/engagement-bench.php`): **p95 ≈ 0.13 ms** per event. Full schema,
 identity rules, limits and knobs: [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md).
+
+Only the retention timer uses `SqliteEngagementStore::forMaintenance()` with a 3000 ms per-operation
+busy timeout; ordinary request/read instances retain 5 ms. Neither is an end-to-end cold-open deadline:
+the shared opener's earlier pragmas still use 3000 ms. A store constructed without an ID factory cannot
+record even into an existing episode: it returns `fault` before DB/clock/counter work. Logical inline
+byte charges (256/event + 192/episode) and periodic physical page/WAL measurements use the same cap
+but are different quantities, not a fixed conversion or hard filesystem-size guarantee.
 
 The admin panel is the **emulation catalog**: one toggle per capability, so you decide exactly which
 CVEs, attack classes and services this box pretends to be.

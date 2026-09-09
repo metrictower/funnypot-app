@@ -21,7 +21,7 @@ use Throwable;
 /**
  * Engagement episodes + events in their OWN engagement.sqlite (one file per concern,
  * docs/DATA-LAYER-DECISION.md): the hit writers queue up to 3 s on their WAL lock, while this store
- * must never queue at all, so sharing a file would put a 5 ms writer behind a 3000 ms one.
+ * request writer has a 5 ms busy clamp, so sharing a file would put it behind a 3000 ms hit writer.
  *
  * Three tables:
  *   - engagement_episodes  one row per episode: the keyed evidence digest it groups on, basis +
@@ -33,9 +33,10 @@ use Throwable;
  *
  * resolveAndRecord() follows {@see TarpitBudget::acquire()}: one raw `BEGIN IMMEDIATE`, read the
  * gauges + the current episode under the write lock, decide new-vs-continue, cap-check, insert,
- * COMMIT — or ROLLBACK to a no-op on any fault. The busy timeout is clamped to 5 ms AFTER the shared
- * {@see Sqlite::open()} (which sets 3000 ms): an observer sheds on contention, it never waits on a
- * request's critical path. The caller is the one deciding responses; nothing here can change one.
+ * COMMIT — or ROLLBACK to a no-op on any fault. Ordinary connections get a 5 ms busy timeout AFTER
+ * {@see Sqlite::open()} (whose earlier pragmas use 3000 ms); only forMaintenance() retains 3000 ms.
+ * These are per-operation lock waits, not cold-open/end-to-end deadlines. The caller decides
+ * responses; nothing here can change one. Non-recording instances decline before even opening a DB.
  *
  * Global ceilings are enforced from O(1) gauges kept in engagement_state (a COUNT(*) over 250k rows
  * on every write would eat the latency budget). The retention pass recounts them after bulk deletes.
@@ -47,6 +48,7 @@ use Throwable;
 final class SqliteEngagementStore implements EngagementStore, EngagementAnalytics
 {
     public const BUSY_TIMEOUT_MS = 5;
+    public const MAINTENANCE_BUSY_TIMEOUT_MS = 3000;
 
     /** Logical retained-byte accounting per row; the caps meter these, not on-disk pages. */
     public const EVENT_ROW_BYTES = 256;
@@ -65,6 +67,8 @@ final class SqliteEngagementStore implements EngagementStore, EngagementAnalytic
     private const RETAIN_CHUNK = 2000;
 
     private ?PDO $db = null;
+    private readonly bool $canRecord;
+    private int $busyTimeoutMs = self::BUSY_TIMEOUT_MS;
 
     /** @var callable():int */
     private $clock;
@@ -88,10 +92,19 @@ final class SqliteEngagementStore implements EngagementStore, EngagementAnalytic
         ?callable $idFactory = null,
         ?callable $clock = null
     ) {
+        $this->canRecord = $idFactory !== null;
         $this->id = $idFactory ?? static function (string $domain, string $material): string {
             throw new LogicException('engagement store opened without an id factory (maintenance instance)');
         };
         $this->clock = $clock ?? static fn (): int => time();
+    }
+
+    /** Timer-only construction: read/prune with longer lock patience, never record events. */
+    public static function forMaintenance(string $dbPath, EngagementCaps $caps, ?callable $clock = null): self
+    {
+        $store = new self($dbPath, $caps, null, $clock);
+        $store->busyTimeoutMs = self::MAINTENANCE_BUSY_TIMEOUT_MS;
+        return $store;
     }
 
     /** The conventional engagement.sqlite path beside the hit db — derived in ONE place. */
@@ -102,6 +115,9 @@ final class SqliteEngagementStore implements EngagementStore, EngagementAnalytic
 
     public function resolveAndRecord(EpisodeKey $key, EngagementEvent $event): string
     {
+        if (!$this->canRecord) {
+            return self::FAULT;
+        }
         $db = null;
         try {
             $db = $this->db();
@@ -613,9 +629,9 @@ final class SqliteEngagementStore implements EngagementStore, EngagementAnalytic
             return $this->db;
         }
         $db = Sqlite::open($this->dbPath);
-        // The shared seam sets 3000 ms so hit writers queue through a burst. An observer must do the
-        // opposite: shed on contention immediately rather than hold a request worker.
-        $db->exec('PRAGMA busy_timeout=' . self::BUSY_TIMEOUT_MS);
+        // Shared open has already performed its own pragmas with 3000 ms. Keep request/read
+        // operations short; only the explicitly non-recording timer factory opts into longer waits.
+        $db->exec('PRAGMA busy_timeout=' . $this->busyTimeoutMs);
         $db->exec(
             'CREATE TABLE IF NOT EXISTS engagement_episodes (
                 episode_id TEXT PRIMARY KEY,

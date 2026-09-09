@@ -14,8 +14,9 @@ namespace Funnypot\App\Engagement;
  *
  * An invalid handle is simply skipped — it never becomes a key, never raises confidence, and the
  * request still lands in the network tier, so adding junk cannot switch metrics off. Every digest
- * is an install-local HMAC ({@see AnalyticsKey::id()}) and carries the resolver version, so a change
- * in how evidence is reduced starts fresh episodes instead of silently merging with old ones.
+ * is an install-local HMAC ({@see AnalyticsKey::id()}). Network evidence includes this resolver's
+ * version; verified-handle evidence uses the handle instance without that resolver version.
+ * Artifact identifiers use their own separate domain. These existing bytes determine grouping.
  *
  * Artifact handles are verified the same way but yield only an `artifact_id`: proof that Funnypot
  * issued that object, linking issue/fetch/reuse events across episodes. It is never an identity
