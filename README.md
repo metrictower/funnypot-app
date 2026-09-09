@@ -167,7 +167,14 @@ byte-identical with metrics off, on, or faulting. The analytics panel gains an *
 section — depth, active span, continuation, artifact reuse, polls/tool turns, bytes, measured server
 cost, and identity **basis × confidence** — with a dash for any zero-denominator ratio and an explicit
 `(est.)` on the bytes-derived context estimate; it never labels an episode an "actor". Measured overhead
-on the warm-local benchmark (`scripts/engagement-bench.php`): **p95 ≈ 0.13 ms** per event. Full schema,
+on the local benchmark (`scripts/engagement-bench.php 1000 50`): **warm p95 0.123 ms**, or
+**connection-cold p95 0.956 ms** with trailing `--cold` (2026-09-09, Darwin arm64, PHP 8.4.10;
+1,000 recorded events and zero drops in each run). Cold mode reconstructs the store/recorder for each
+sample against the same prepared synthetic database; it is not disk-cache-cold or full FPM startup.
+Both modes include every measured outcome in percentiles and pass only with zero drops and unrounded
+p95 ≤ 5 ms. Arguments are bounded to 1,000–100,000 events and 1–254 keys; the script accepts no database
+path, owns and cleans its temporary storage, and exits 0 for success, 1 for measured failure, 2 for
+argument/setup/harness/cleanup errors. Full schema,
 identity rules, limits and knobs: [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md).
 
 Only the retention timer uses `SqliteEngagementStore::forMaintenance()` with a 3000 ms per-operation
