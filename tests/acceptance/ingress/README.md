@@ -2,8 +2,10 @@
 
 CI/operator only: `bash tests/acceptance/ingress/run.sh` in a fresh Linux checkout with Docker and
 GNU timeout. The manually dispatched `input-ceilings.yml` job runs exactly this command. Local
-agents run only `InputCeilingConfigTest`, `EarlyIngressGuardTest`, `EarlyIngressBootstrapTest` and
-the pure `IngressWireTest`, individually; they do **not** run this directory's entry scripts.
+agents run only `InputCeilingConfigTest`, `EarlyIngressGuardTest`, `EarlyIngressBootstrapTest`,
+`DownloadLimitsConfigTest`, the pure `IngressWireTest` and `IngressLogProofTest`, individually.
+The last file runs only the bounded pure shell log checker on test-owned files; agents do **not**
+run the image/setup/client entry scripts.
 
 The job builds the production `demo/Dockerfile` (online dependency resolution), then runs that exact
 image in one isolated container with network **none**, no published ports, a read-only root, bounded
