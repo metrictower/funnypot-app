@@ -1,0 +1,24 @@
+name: HTTP input ceiling acceptance
+
+# Real-image work is deliberately operator/CI-owned, never a local-agent test invocation.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ingress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image and run isolated nginx/FPM acceptance
+        run: bash tests/acceptance/ingress/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: input-ceiling-evidence
+          path: ingress-evidence/
+          retention-days: 7
+          if-no-files-found: error

@@ -12,3 +12,6 @@ demo/assets/audio/*/
 
 # runtime hit store — never commit the live DB
 /storage/
+
+# Operator/CI-only real-image input-ceiling acceptance receipts.
+/ingress-evidence/
