@@ -112,26 +112,59 @@ path. `demo/retention.php` runs the bulk reclaim on its timer — `retainDays(mi
 min(hits,30) : 30))`, `retainBytes(global bytes)`, checkpoint + `incremental_vacuum` — and recounts the
 gauges. The identifier/enum field length is a class constant (64 bytes).
 
+The same configured byte cap feeds **two different meters**: inline logical charges of 256 bytes/event
+and 192 bytes/episode, versus periodic physical `page_count * page_size` plus WAL size. They are not
+equal quantities and have no fixed 1.5–2x conversion. Freelist pages, WAL readers and checkpoint
+behavior can delay physical reclamation. The logical admission cap is not a hard filesystem quota.
+
 The store is its own file, `engagement.sqlite`, beside the hit db (one file per concern): the hit
-writers queue up to 3 s on their WAL lock and this store must never queue at all.
+writers queue up to 3 s on their WAL lock, while ordinary engagement request/read connections have a 5 ms
+busy clamp. The explicit retention-only factory uses 3000 ms without changing request/read instances.
 
 ## Observer performance and failure behaviour
 
 The recorder runs only after the response decision exists, does no sleep, retry, DNS or network I/O,
 and never throws. `PRAGMA busy_timeout` is re-issued at **5 ms** after the shared `Sqlite::open()`
-(which sets 3000 ms), so lock contention sheds the metric instead of holding a request worker. Any
+(whose earlier pragmas use 3000 ms). This caps lock-handler waiting per operation, not connection-cold
+latency or a whole request/retention pass. `SqliteEngagementStore::forMaintenance()` alone selects 3000 ms;
+`demo/retention.php` keeps its file-exists guard and operation order. Ordinary null-ID-factory readers
+still use 5 ms. Both forms without an ID factory reject recording before opening a DB or calling the
+clock, including already-existing episodes, without changing any fault counter. Their reads/retention
+may still perform schema/maintenance writes; this is not an OS-level read-only connection. Any recording
 lock, I/O, schema, cap or serialization fault returns a no-op status and increments `fault` when the
 db allows it. `ProducerWiringTest` asserts a producer's status, headers and body are byte-identical
 with metrics off, on, and faulting.
 
 ### Benchmark record
 
-`php scripts/engagement-bench.php [events] [keys]` times `EngagementRecorder::record()` from outside
-the store over N warm events and exits non-zero if p95 exceeds the 5 ms budget.
+`php scripts/engagement-bench.php [events=2000] [keys=50] [--cold]` validates events 1000..100000
+and keys 1..254 before creating an exclusively owned temporary directory. There is no database-path
+argument. Both modes prepare the same synthetic database with 200 warm-up events. Default `warm`
+uses one store/recorder; `connection-cold-existing-db` releases them and constructs fresh instances
+for every measured event, timing from before construction through `record()` completion (including
+lazy open, schema checks and prepares). Destruction and connection metadata inspection are outside
+the sample. This is not disk-cache-cold, first-ever migration or complete PHP-FPM startup.
+
+All measured attempts contribute to percentiles. `statuses` counts recorded/shed/fault/disabled and
+sums to `measured_count`; `drops` counts every non-recorded outcome. Warm-up counts are reported
+separately. `within_budget` uses unrounded p95 ≤ 5 ms, `healthy` requires zero measured drops, and
+`success` requires both: exit 0 on success, 1 on measured failure, 2 on argument/setup/harness/cleanup
+error. A fast all-fault run fails; `fault` alone does not identify lock contention. Actual pragmas
+come from the first measured store connection after timing, not a new PDO with different defaults.
+All recorder/store/PDO references are released before removing only the script-owned database files.
 
 | date | platform | PHP | mode | events / keys | p50 | p95 | p99 | max | drops |
 |---|---|---|---|---|---|---|---|---|---|
-| 2026-09-04 | Darwin 25.5.0 arm64, local SSD temp dir | 8.4.10 | WAL, synchronous=NORMAL, busy 5 ms | 2000 / 50 | 0.080 ms | 0.125 ms | 0.279 ms | 3.045 ms | 0 |
+| 2026-09-04 | Darwin 25.5.0 arm64, local SSD temp dir | 8.4.10 | historical warm | 2000 / 50 | 0.080 ms | 0.125 ms | 0.279 ms | 3.045 ms | 0 |
+| 2026-09-09 | Darwin 25.5.0 arm64, owned temp dir | 8.4.10 | warm | 1000 / 50 | 0.085 ms | 0.123 ms | 0.222 ms | 1.725 ms | 0 |
+| 2026-09-09 | Darwin 25.5.0 arm64, owned temp dir | 8.4.10 | connection-cold-existing-db | 1000 / 50 | 0.672 ms | 0.956 ms | 1.078 ms | 1.450 ms | 0 |
+
+Both September 9 runs used SQLite 3.53.4 and observed WAL, synchronous=1 (NORMAL), busy_timeout=5 ms
+on the measured connection. Each recorded all 200 warm-up and 1,000 measured events, with zero
+shed/fault/disabled outcomes; constructors numbered 1 warm / 1001 cold. Both exited 0 with healthy,
+within_budget and success true. Commands were the above CLI with `1000 50`, once without and once
+with `--cold`, under PHP memory_limit=1G and max_execution_time=120. The September 4 row remains
+historical warm evidence; its old final-PDO metadata probe did not observe the recording connection.
 
 This is an engineering budget on the documented platform, not a claim of zero latency or a guarantee
 against arbitrary host I/O stalls. `EngagementBenchmarkTest` keeps a deliberately loose regression

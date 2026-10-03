@@ -114,7 +114,7 @@ $engPath = SqliteEngagementStore::defaultPath($config->dbPath);
 if (is_file($engPath)) {
     try {
         $engCaps = EngagementCaps::fromConfig($config);
-        $eng = new SqliteEngagementStore($engPath, $engCaps); // maintenance instance: prunes, never records
+        $eng = SqliteEngagementStore::forMaintenance($engPath, $engCaps); // explicit timer-only 3000 ms busy policy
         $eng->checkpointWal();
         $engByAge = $eng->retainDays($engCaps->retainDays);
         $engBySize = $eng->retainBytes($engCaps->globalMaxBytes);

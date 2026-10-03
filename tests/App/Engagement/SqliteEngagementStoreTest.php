@@ -334,6 +334,67 @@ final class SqliteEngagementStoreTest extends TestCase
         self::assertSame(0, $s->summary(0)['events']);
     }
 
+    public function test_non_recording_instances_cannot_append_existing_or_new_episodes(): void
+    {
+        $path = $this->path();
+        $writer = $this->store(null, $path);
+        self::assertSame(EngagementStore::RECORDED, $writer->resolveAndRecord($this->key(), $this->event()));
+        $db = $this->raw($path);
+        $snapshot = static function () use ($db): array {
+            $rows = [];
+            foreach (['engagement_episodes', 'engagement_events', 'engagement_state'] as $table) {
+                $rows[$table] = $db->query('SELECT * FROM ' . $table . ' ORDER BY rowid')->fetchAll(PDO::FETCH_ASSOC);
+            }
+            return $rows;
+        };
+        $before = $snapshot();
+        foreach ([false, true] as $maintenance) {
+            $clockCalls = 0;
+            $clock = static function () use (&$clockCalls): int { ++$clockCalls; return self::T0; };
+            $reader = $maintenance ? SqliteEngagementStore::forMaintenance($path, new EngagementCaps(), $clock)
+                : new SqliteEngagementStore($path, new EngagementCaps(), null, $clock);
+            foreach ([$this->key(), $this->key('fresh-key')] as $key) {
+                self::assertSame(EngagementStore::FAULT, $reader->resolveAndRecord($key, $this->event()));
+                self::assertSame($before, $snapshot(), 'no event, episode, fault counter or gauge mutation');
+            }
+            self::assertSame(0, $clockCalls);
+            self::assertNull((new \ReflectionProperty(SqliteEngagementStore::class, 'db'))->getValue($reader));
+            self::assertSame(1, $reader->summary(0)['events'], 'read/maintenance capability remains available');
+        }
+        self::assertSame(EngagementStore::RECORDED, $writer->resolveAndRecord($this->key(), $this->event()));
+    }
+
+    public function test_non_recording_guard_precedes_clock_and_database_creation(): void
+    {
+        foreach ([false, true] as $maintenance) {
+            $path = $this->path();
+            $clockCalls = 0;
+            $clock = static function () use (&$clockCalls): int { ++$clockCalls; throw new \RuntimeException('clock must stay unused'); };
+            $store = $maintenance ? SqliteEngagementStore::forMaintenance($path, new EngagementCaps(), $clock)
+                : new SqliteEngagementStore($path, new EngagementCaps(), null, $clock);
+            self::assertSame(EngagementStore::FAULT, $store->resolveAndRecord($this->key(), $this->event()));
+            self::assertSame(0, $clockCalls);
+            self::assertFileDoesNotExist($path);
+            self::assertNull((new \ReflectionProperty(SqliteEngagementStore::class, 'db'))->getValue($store));
+        }
+    }
+
+    public function test_only_explicit_maintenance_factory_gets_the_longer_connection_timeout(): void
+    {
+        $path = $this->path();
+        $writer = $this->store(null, $path);
+        $reader = new SqliteEngagementStore($path, new EngagementCaps());
+        $maintenance = SqliteEngagementStore::forMaintenance($path, new EngagementCaps());
+        foreach ([[$writer, 5], [$reader, 5], [$maintenance, 3000]] as [$store, $expected]) {
+            $store->health(); // Open its actual connection, not an unrelated raw PDO probe.
+            $pdo = (new \ReflectionProperty(SqliteEngagementStore::class, 'db'))->getValue($store);
+            self::assertInstanceOf(PDO::class, $pdo);
+            self::assertSame($expected, (int) $pdo->query('PRAGMA busy_timeout')->fetchColumn());
+        }
+        self::assertSame(3000, SqliteEngagementStore::MAINTENANCE_BUSY_TIMEOUT_MS);
+        self::assertSame(5, SqliteEngagementStore::BUSY_TIMEOUT_MS);
+    }
+
     // --- retention ---------------------------------------------------------------------------------
 
     public function test_retain_days_drops_old_rows_and_recounts_gauges(): void

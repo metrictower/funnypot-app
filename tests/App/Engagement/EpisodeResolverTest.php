@@ -123,4 +123,16 @@ final class EpisodeResolverTest extends TestCase
 
         self::assertNotSame($a, $b, 'no identifier correlates two deployments');
     }
+
+    public function test_existing_network_handle_and_artifact_domains_are_byte_pinned(): void
+    {
+        $key = AnalyticsKey::fromRaw(str_repeat('k', 32));
+        $resolver = new EpisodeResolver($key, new SignedHandle($key));
+        $body = '1.' . self::NOW . '.' . (self::NOW + 600) . '.' . str_repeat('a', 32);
+        $episode = $body . '.' . $key->mac(SignedHandle::DOMAIN_EPISODE, $body);
+        $artifact = $body . '.' . $key->mac(SignedHandle::DOMAIN_ARTIFACT, $body);
+        self::assertSame('a6724607e2211d0bf2aa9cace2c30df7', $resolver->resolve(null, self::IP, 'curl/8.0', self::NOW)->digest);
+        self::assertSame('73d2c0be684178f7088f3e85e8d4e097', $resolver->resolve($episode, self::IP, 'curl/8.0', self::NOW)->digest);
+        self::assertSame('b2cef0c000084a12d66ac13aba97a20c', $resolver->artifactId($artifact, self::NOW));
+    }
 }
