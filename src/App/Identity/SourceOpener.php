@@ -16,6 +16,8 @@ final class SourceOpener
 {
     /** Group/other WRITE forbidden (shared-readable trees such as identity-http and /etc). */
     public const MODE_NO_GO_WRITE = 0022;
+    /** Group/other READ or WRITE forbidden; execute-only traversal remains allowed. */
+    public const MODE_TRAVERSE_ONLY = 0066;
     /** Any group/other access forbidden (the private persistent/runtime trees). */
     public const MODE_PRIVATE = 0077;
 

@@ -395,7 +395,11 @@ final class IdentityPreparer
         if ($this->ops->lstat($this->paths->manifestPath()) === false) {
             return null;
         }
-        $src = $this->opener->openDirect($this->paths->storageRoot(), ['.funnypot', 'identity', IdentityPaths::MANIFEST_FILE], 'manifest', self::MAX_MANIFEST_BYTES, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
+        // FP-0310 makes the shared .funnypot parent traverse-only (0711) for the separate www-data
+        // service-profile store. Validate that boundary as group/other traverse-only, then keep identity/ and its
+        // manifest private. This also permits the mandated identity -> services -> identity rerun.
+        $this->opener->requireDirectory($this->paths->privateRoot(), 'manifest', SourceOpener::MODE_TRAVERSE_ONLY);
+        $src = $this->opener->openDirect($this->paths->privateRoot(), ['identity', IdentityPaths::MANIFEST_FILE], 'manifest', self::MAX_MANIFEST_BYTES, SourceOpener::MODE_PRIVATE, SourceOpener::MODE_PRIVATE);
         $this->ops->close($src->handle);
         $m = json_decode($src->bytes, true, 8);
         if (!is_array($m) || ($m['schema'] ?? null) !== self::MANIFEST_SCHEMA) {

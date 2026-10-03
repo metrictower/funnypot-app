@@ -23,6 +23,8 @@ final class SourceOpenAttestation
 {
     public const DIRECT_NOFOLLOW = 'direct-nofollow/v1';
     public const LETSENCRYPT_MANAGED_CHAIN = 'letsencrypt-managed-chain/v1';
+    /** Reserved for FP-0317's unlink-after-open capability sources. */
+    public const GENERATED_ANONYMOUS = 'generated-anonymous/v1';
 
     public function __construct(
         public readonly string $id,
@@ -34,7 +36,7 @@ final class SourceOpenAttestation
         public readonly int $nlink,
         public readonly int $size,
     ) {
-        if ($id !== self::DIRECT_NOFOLLOW && $id !== self::LETSENCRYPT_MANAGED_CHAIN) {
+        if (!in_array($id, [self::DIRECT_NOFOLLOW, self::LETSENCRYPT_MANAGED_CHAIN, self::GENERATED_ANONYMOUS], true)) {
             throw new \InvalidArgumentException('unknown attestation id');
         }
     }

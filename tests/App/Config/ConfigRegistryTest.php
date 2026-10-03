@@ -43,6 +43,7 @@ final class ConfigRegistryTest extends TestCase
         'FUNNYPOT_PERSONA_SEED', 'FUNNYPOT_PERSONA_SECRET', 'FUNNYPOT_FS_SECRET',
         'FUNNYPOT_TLS_CERT_FILE', 'FUNNYPOT_TLS_KEY_FILE', 'FUNNYPOT_CN', 'FUNNYPOT_PUBLIC_DNS', 'FUNNYPOT_LE_DOMAIN',
         'FUNNYPOT_IDENTITY_RUNTIME_DIR',
+        'FUNNYPOT_SANDBOX_ROOT',
     ];
 
     /** The install identity is ENV-ONLY forever: no registry key, no stored override, no admin echo. */

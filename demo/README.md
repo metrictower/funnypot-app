@@ -37,6 +37,30 @@ php bin/funnypot identity:prepare
 php -S 0.0.0.0:8080 -t demo demo/index.php
 ```
 
+The sandbox projection foundation provides root preflight commands for the future role-separated
+deployment; it does not start or remount today's roles. Its required order is
+`identity:prepare` -> `services:prepare` -> `sandbox:materialize-views` -> scrub identity inputs ->
+start roles. `bootstrap:prepare` performs only the first two operations; FP-0107 will own the outer
+composite at preflight and every container start. The sandbox step reruns identity preparation before
+the scrub so its live handles stay open through the locked snapshot, and unchanged input returns
+`unchanged-current` without creating another generation.
+
+```bash
+php bin/funnypot sandbox:materialize-views
+php bin/funnypot sandbox:projection-status --json
+php bin/funnypot sandbox:rollback-views
+```
+
+The production root is `/run/funnypot-sandbox`; `FUNNYPOT_SANDBOX_ROOT` exists only for a protected
+operator/test root and is never a stored config value or command-line path. A non-root run records
+`ownership_applied:false` and is not consumer-ready. In that future deployment, Let's Encrypt renewal
+must run the materialize composite and then FP-0107's selected-generation cutover; this foundation does
+not alter today's renewal hook. Status exposes the selected admin certificate fingerprint. FP-0317 later
+extends the fixed nine rows to exactly thirteen (three generated capability rows and the byte-identical
+prepared service-profile row) and adds the first ephemeral renderer. A new generation then requires
+FP-0107 to restart the deployed union of edge plus post-exploit/upload-sample when present, rather than
+reloading edge alone. Runtime mounts, migration, topology, and cutover remain FP-0107 work.
+
 Then open <http://localhost:8080> for the dashboard.
 
 > Use Docker (nginx + php-fpm) for anything a scanner will actually hit. `php -S` is
@@ -79,6 +103,7 @@ Watch them appear on the homepage, and stream the raw log with `docker logs -f <
 | `FUNNYPOT_INSTALL_SECRET` | unset | the same canonical master as a raw env value, for direct process startup; scrubbed from children. Prefer the file |
 | `FUNNYPOT_PERSONA_SEED` | unset | optional **cosmetic** override of the visible persona (company/domain/versions), used verbatim so an existing explicit persona keeps its identity; never feeds a key. Legacy alias `FUNNYPOT_PERSONA_SECRET`. Short/placeholder values only warn (`identity:status`) |
 | `FUNNYPOT_IDENTITY_RUNTIME_DIR` | `/run/funnypot` | where `identity:prepare` publishes the scoped runtime bundles (`identity-http/` 0750 root:www-data, `identity-private/` 0700 root) and the TLS links; a path, kept in child env so workers find their bundle |
+| `FUNNYPOT_SANDBOX_ROOT` | `/run/funnypot-sandbox` | root-only immutable role-view generations and fixed current/previous selectors; env-only path, never stored or accepted on argv |
 | `FUNNYPOT_TLS_CERT_FILE` / `FUNNYPOT_TLS_KEY_FILE` | unset | explicit operator TLS pair (both or neither; canonical paths, no symlinks). Served byte-identical, never copied or regenerated. Else a complete legacy `/etc/nginx/funnypot.{crt,key}` pair is served; else a persisted generated decoy cert |
 | `FUNNYPOT_CN` / `FUNNYPOT_PUBLIC_DNS` | persona hostname | subject CN / extra DNS SAN of the generated decoy cert (strict lowercase DNS names) |
 | `FUNNYPOT_GEO_DB` | `demo/storage/dbip-country.csv.gz` | DB-IP Lite CSV for the GeoIP map/country stats |

@@ -17,9 +17,7 @@ final class ServiceExposureManifestTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->temps as $dir) {
-            if (is_dir($dir)) {
-                exec('rm -rf ' . escapeshellarg($dir));
-            }
+            $this->removeFixture($dir);
         }
     }
 
@@ -141,6 +139,37 @@ final class ServiceExposureManifestTest extends TestCase
         self::assertSame(1, $m->effectiveArtifact()->revision());
     }
 
+    public function testFromPersistentFileAcceptsProductionTraverseOnlyParent(): void
+    {
+        [$path, $root] = $this->writePersistent(self::sampleManifest());
+        chmod($root . '/.funnypot', 0711);
+        self::assertSame(1, ServiceExposureManifest::fromPersistentFile($path)->effectiveArtifact()->revision());
+    }
+
+    public function testFromPersistentFileRejectsReadableOrWritableSharedParent(): void
+    {
+        foreach ([0755, 0733] as $mode) {
+            [$path, $root] = $this->writePersistent(self::sampleManifest());
+            chmod($root . '/.funnypot', $mode);
+            try {
+                ServiceExposureManifest::fromPersistentFile($path);
+                self::fail(sprintf('mode %04o should be rejected', $mode));
+            } catch (RuntimeException $e) {
+                self::assertStringContainsString('component-unsafe', $e->getMessage());
+            }
+        }
+    }
+
+    public function testFromPersistentFileRejectsSymlinkedPrivateComponent(): void
+    {
+        [$path, $root] = $this->writePersistent(self::sampleManifest());
+        rename($root . '/.funnypot/services', $root . '/services-real');
+        symlink($root . '/services-real', $root . '/.funnypot/services');
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('component-unsafe');
+        ServiceExposureManifest::fromPersistentFile($path);
+    }
+
     public function testFromPersistentFileRejectsATamperedFile(): void
     {
         [$path] = $this->writePersistent(self::sampleManifest());
@@ -173,5 +202,20 @@ final class ServiceExposureManifestTest extends TestCase
         chmod($path, 0600);
 
         return [$path, $root];
+    }
+
+    private function removeFixture(string $path): void
+    {
+        $st = @lstat($path);
+        if (!is_array($st)) { return; }
+        if ((((int) $st['mode']) & 0170000) !== 0040000) { @unlink($path); return; }
+        @chmod($path, 0700);
+        $names = @scandir($path);
+        if (is_array($names)) {
+            foreach ($names as $name) {
+                if ($name !== '.' && $name !== '..') { $this->removeFixture($path . '/' . $name); }
+            }
+        }
+        @rmdir($path);
     }
 }
