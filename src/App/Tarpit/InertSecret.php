@@ -21,9 +21,9 @@ use Funnypot\Core\Support\Fake\FakeSecrets;
  * Rather than change the append-only denylist or emit a value that trips it, this picks a per-key VARIANT
  * that is clean: it re-derives the FakeSecrets value under `key`, `key|v1`, `key|v2`, … until the value
  * (checked inside delimiters, so a leading/trailing run is caught) matches NOTHING on the app denylist.
- * The result is still a genuine, correctly-shaped, per-(seed,key) inert FakeSecrets token — just one whose
- * digits don't coincidentally spell a detector signature. Deterministic: the same (seed,key) always yields
- * the same clean variant.
+ * Normal results retain their FakeSecrets shape. Exhausting all primary variants falls back to a
+ * separately derived, checked 24-letter token rather than returning a dirty value. If that bounded
+ * emergency space also fails the gate, an internal exception reaches the caller's existing fault boundary.
  */
 final class InertSecret
 {
@@ -65,8 +65,8 @@ final class InertSecret
      * filler hex token, a labyrinth id — can be forced clean the same way. $gen must be deterministic in
      * the key it is handed (so the chosen variant is stable). The value is checked inside delimiters, so a
      * digit run at either boundary is caught (the exact false-positive an `AKIA…`/base36/hex tail can hit
-     * against the app's broadened bare-CRS pattern). Bounded loop: a fresh sha256-derived value trips the
-     * denylist with vanishing probability, so this almost always returns on the first try.
+     * against the app's broadened bare-CRS pattern). Both candidate families are bounded and every return
+     * passes the same check; neither a pathological callable nor denylist drift permits unchecked output.
      *
      * @param callable(string):string $gen
      */
@@ -80,7 +80,19 @@ final class InertSecret
             }
         }
 
-        return $gen($key); // unreachable in practice; return the base value rather than loop forever
+        $alphabet = 'qvxzjkw';
+        for ($i = 0; $i < 64; $i++) {
+            $digest = hash('sha256', "funnypot/inert-secret-emergency/v1\0" . $key . "\0" . $i, true);
+            $value = '';
+            for ($j = 0; $j < 24; $j++) {
+                $value .= $alphabet[ord($digest[$j]) % 7];
+            }
+            if (self::isClean('"' . $value . '"')) {
+                return $value;
+            }
+        }
+
+        throw new InertSecretExhausted();
     }
 
     /**
