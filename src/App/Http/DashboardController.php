@@ -137,7 +137,7 @@ final class DashboardController
     private function filters(): array
     {
         $f = [];
-        foreach (['method', 'event', 'ip', 'cc', 'severity', 'q', 'recording', 'tool', 'ts_from', 'ts_to'] as $k) {
+        foreach (['method', 'event', 'exclude_event', 'ip', 'cc', 'severity', 'q', 'recording', 'tool', 'ts_from', 'ts_to'] as $k) {
             if (isset($_GET[$k]) && $_GET[$k] !== '') {
                 $f[$k] = (string) $_GET[$k];
             }
@@ -150,6 +150,12 @@ final class DashboardController
         }
         if (isset($_GET['known'])) {
             $f['known'] = true;
+        }
+        if (!empty($_GET['interactive'])) {
+            $f['interactive'] = true;
+        }
+        if (!empty($_GET['taunt'])) {
+            $f['taunt'] = true;
         }
 
         return $f;
@@ -816,6 +822,8 @@ final class DashboardController
         echo '<button class=\'btn qv\' data-f=\'{"event":"docker"}\'>Docker</button>';
         echo '<button class=\'btn qv\' data-f=\'{"event":"llm-fake"}\'>LLM pages</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"VNC"}\'>VNC</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"VNC","interactive":"1"}\' title=\'VNC sessions that progressed past port-scan connect (handshake, screen viewed, clicks, taunts)\'>VNC interactive</button>';
+        echo '<button class=\'btn qv\' data-f=\'{"method":"VNC","taunt":"1"}\' title=\'VNC deception traps triggered (reverse VNC dialog popup, taunt slideshow storm)\'>VNC taunts</button>';
         echo '<button class=\'btn qscan\' id=qscan title=\'show only classified reconnaissance tools (scanners / wardialers) — lured in and captured\'>&#128269; scanners</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"SIP"}\'>SIP logs</button>';
         echo '<button class=\'btn qv\' data-f=\'{"method":"SIP","recording":"1"}\'>SIP recordings</button>';

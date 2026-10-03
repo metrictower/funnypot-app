@@ -318,6 +318,109 @@ final class SqliteHitStoreTest extends TestCase
         self::assertSame(3, $store->delta(0, ['method' => 'SSH'])['cursor']);
     }
 
+    public function test_vnc_filters_interactive_and_taunt(): void
+    {
+        $store = new SqliteHitStore($this->dbPath());
+
+        // 3 raw port-scan TCP connects
+        for ($i = 1; $i <= 3; $i++) {
+            $store->append([
+                'ts' => gmdate('c'),
+                'ip' => "10.0.0.{$i}",
+                'method' => 'VNC',
+                'event' => 'connect',
+                'path' => "VNC connection from 10.0.0.{$i}:" . (40000 + $i),
+            ]);
+        }
+
+        // Sessions that progressed:
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'version',
+            'path' => 'VNC client speaks RFB 003.008',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'handshake_complete',
+            'path' => 'VNC handshake complete (800x600, client: RFB 003.008)',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'screen_viewed',
+            'path' => 'VNC framebuffer requested - attacker saw the screen',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'click',
+            'path' => 'VNC mouse click: btn=1 at (200, 300)',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'popup_shown',
+            'path' => 'Reverse-VNC-connection dialog shown by click btn=1 at (200, 300)',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'trap_triggered',
+            'path' => 'Taunt slideshow started',
+        ]);
+        $store->append([
+            'ts' => gmdate('c'),
+            'ip' => '10.0.1.1',
+            'method' => 'VNC',
+            'event' => 'taunt_disconnect',
+            'path' => 'VNC taunt slideshow finished - dropping connection',
+        ]);
+
+        // Unrelated HTTP hit
+        $store->append($this->httpHit('1.1.1.1', 'US', true, '', 'git-config'));
+
+        // 1. All VNC hits (including port-scan connects)
+        $allVnc = $store->delta(0, ['method' => 'VNC'])['rows'];
+        self::assertCount(10, $allVnc);
+
+        // 2. VNC interactive filter: excludes connect, keeps handshake, screen, clicks, and taunts
+        $interactive = $store->delta(0, ['method' => 'VNC', 'interactive' => true])['rows'];
+        self::assertCount(7, $interactive);
+        foreach ($interactive as $row) {
+            self::assertNotSame('connect', $row['event']);
+            self::assertSame('VNC', $row['method']);
+        }
+        $interactiveEvents = array_column($interactive, 'event');
+        self::assertContains('handshake_complete', $interactiveEvents);
+        self::assertContains('screen_viewed', $interactiveEvents);
+        self::assertContains('click', $interactiveEvents);
+        self::assertContains('popup_shown', $interactiveEvents);
+        self::assertContains('trap_triggered', $interactiveEvents);
+        self::assertContains('taunt_disconnect', $interactiveEvents);
+
+        // 3. VNC taunts filter: only popup, trap triggered, and taunt disconnect
+        $taunts = $store->delta(0, ['method' => 'VNC', 'taunt' => true])['rows'];
+        self::assertCount(3, $taunts);
+        $tauntEvents = array_column($taunts, 'event');
+        self::assertEqualsCanonicalizing(['popup_shown', 'trap_triggered', 'taunt_disconnect'], $tauntEvents);
+
+        // 4. event => taunt alias
+        $tauntAlias = $store->delta(0, ['method' => 'VNC', 'event' => 'taunt'])['rows'];
+        self::assertCount(3, $tauntAlias);
+
+        // 5. exclude_event => connect
+        $excluded = $store->delta(0, ['method' => 'VNC', 'exclude_event' => 'connect'])['rows'];
+        self::assertCount(7, $excluded);
+    }
+
     public function test_known_attacker_flag_and_filter(): void
     {
         $store = new SqliteHitStore($this->dbPath());

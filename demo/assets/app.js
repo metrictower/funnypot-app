@@ -11,6 +11,16 @@ const fq=()=>Object.entries(serverFilter).map(([k,v])=>encodeURIComponent(k)+'='
 const BASE=(typeof window!=='undefined'&&window.FP_BASE)||'/';  // feed/admin live here (/ public, hidden path in stealth)
 const seen=new Set();
 const key=r=>[r.ts,r.ip,r.method,r.path,r.severity||''].join('|');
+function fmtTs(ts){
+  if(!ts)return '';
+  const d=ts.substr(0,10), t=ts.substr(11,8);
+  if(!t)return esc(ts);
+  const now=new Date();
+  const utcToday=now.toISOString().substr(0,10);
+  const localToday=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const isToday=(d===utcToday||d===localToday);
+  return isToday?t:`<span class="ids">${esc(d)}</span> ${t}`;
+}
 let map=null, markers=null;
 // FP-0250 (2.1): no CDN tile layer (was CARTO dark_all raster tiles — a second external load + Referer
 // leak of the hidden dashboard path on every authed page view). The vendored, same-origin world-outline
@@ -70,9 +80,9 @@ function rowEl(r){
   const served=r.served?'<span class="served">served</span>':'&mdash;';
   const cc=r.cc?` <span class="ids">${esc(r.cc)}</span>`:'';
   const known=r.known_attacker?' <span class="badge known" title="known attacker (threat-intel blocklist)">known</span>':'';
-  const t=(r.ts||'').substr(11,8);
+  const t=fmtTs(r.ts);
   const blk=r.ip?` <button class="blockbtn" title="Block this IP everywhere, permanently">block</button>`:'';
-  tr.innerHTML=`<td>${t}</td><td>${esc(r.ip)}${cc}${known}${blk}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${toolBadge}${ids}${payload}${audio}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
+  tr.innerHTML=`<td title="${esc(r.ts||'')}">${t}</td><td>${esc(r.ip)}${cc}${known}${blk}</td><td class="path"><b>${esc(r.method)}</b> ${esc(r.path)}${toolBadge}${ids}${payload}${audio}</td><td>${badge}${srcBadge}</td><td>${served}</td>`;
   const tbEl=tr.querySelector('.badge.tool');
   if(tbEl){tbEl.onclick=(e)=>{e.stopPropagation();filter=r.tool||r.ua;$('filter').value=filter;applyFilter();};}
   const blkEl=tr.querySelector('.blockbtn');

@@ -152,11 +152,23 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
     {
         $clauses = [];
         $params = [];
-        foreach (['method', 'event', 'cc', 'severity', 'tool'] as $col) {   // exact match
+        foreach (['method', 'cc', 'severity', 'tool'] as $col) {   // exact match
             if (isset($f[$col]) && $f[$col] !== '') {
                 $clauses[] = "$col = :$col";
                 $params[":$col"] = (string) $f[$col];
             }
+        }
+        if (isset($f['event']) && $f['event'] !== '') {
+            if ($f['event'] === 'taunt') {
+                $clauses[] = "(event IN ('taunt', 'popup_shown', 'trap_triggered', 'taunt_disconnect') OR path LIKE '%taunt%')";
+            } else {
+                $clauses[] = 'event = :event';
+                $params[':event'] = (string) $f['event'];
+            }
+        }
+        if (isset($f['exclude_event']) && $f['exclude_event'] !== '') {
+            $clauses[] = 'event <> :exclude_event';
+            $params[':exclude_event'] = (string) $f['exclude_event'];
         }
         if (isset($f['ip']) && $f['ip'] !== '') {
             $clauses[] = 'ip LIKE :ip';
@@ -177,6 +189,12 @@ final class SqliteHitStore implements HitStore, AnalyticsStore
         }
         if (!empty($f['recording']) || !empty($f['has_recording'])) {
             $clauses[] = "(recording IS NOT NULL AND recording <> '')";
+        }
+        if (!empty($f['interactive'])) {
+            $clauses[] = "(event <> 'connect' AND event <> '')";
+        }
+        if (!empty($f['taunt'])) {
+            $clauses[] = "(event IN ('taunt', 'popup_shown', 'trap_triggered', 'taunt_disconnect') OR path LIKE '%taunt%')";
         }
         // Time-series drill-down (FP-0243b): brushing a range on the analytics series adds a ts
         // window. `ts` is ISO-8601 TEXT and compares lexicographically (see append()), so an

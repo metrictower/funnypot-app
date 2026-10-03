@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "metrictower/funnypot-core",
-            "version": "v0.6.3",
+            "version": "v0.6.4",
             "source": {
                 "type": "git",
                 "url": "https://github.com/metrictower/funnypot-core.git",
-                "reference": "a8f28673efdb4f1af21e51d6872aeb140993ff75"
+                "reference": "2e8760d9f67c8870a31e555f83cb9ac874434dc9"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/a8f28673efdb4f1af21e51d6872aeb140993ff75",
-                "reference": "a8f28673efdb4f1af21e51d6872aeb140993ff75",
+                "url": "https://api.github.com/repos/metrictower/funnypot-core/zipball/2e8760d9f67c8870a31e555f83cb9ac874434dc9",
+                "reference": "2e8760d9f67c8870a31e555f83cb9ac874434dc9",
                 "shasum": ""
             },
             "require": {
@@ -262,7 +262,7 @@
             ],
             "authors": [
                 {
-                    "name": "Théo FIDRY",
+                    "name": "Th\u00e9o FIDRY",
                     "email": "theo.fidry@gmail.com"
                 }
             ],
@@ -2931,7 +2931,7 @@
     ],
     "aliases": [],
     "minimum-stability": "dev",
-    "stability-flags": {},
+    "stability-flags": [],
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
@@ -2940,6 +2940,6 @@
         "ext-posix": "*",
         "ext-sodium": "*"
     },
-    "platform-dev": {},
+    "platform-dev": [],
     "plugin-api-version": "2.6.0"
 }
