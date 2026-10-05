@@ -234,6 +234,13 @@ final class AppConfig
         public int $attritionGlobalRows = 50000,
         /** Global logical retained-state bytes (MiB), clamped 1–64. */
         public int $attritionGlobalStateMb = 64,
+        /**
+         * Opt-in, prod-impossible debug header `X-Pot-Served: <tier>/<id>` so a developer can see which
+         * decoy served a request. Default off; prod is protected by default-deny (deploy.sh never sets
+         * the flag), not by prod-detection. The `X-Pot-` namespace is disjoint from the load-bearing
+         * `X-Detected-*` / `X-Request-Id` namespaces so it can never shadow one.
+         */
+        public bool $debugHeaders = false,
     ) {
     }
 
@@ -375,6 +382,7 @@ final class AppConfig
             threatIntelMaxQueueAgeHours: max(1, (int) $str('FUNNYPOT_THREATINTEL_MAX_QUEUE_AGE_HOURS', '24')),
             llmEnabled: in_array(strtolower((string) $env('FUNNYPOT_LLM')), ['1', 'on', 'true', 'yes'], true),
             aiApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_AI_API')), ['1', 'on', 'true', 'yes'], true),
+            debugHeaders: in_array(strtolower((string) $env('FUNNYPOT_DEBUG_HEADERS')), ['1', 'on', 'true', 'yes'], true),
             dockerApiEnabled: in_array(strtolower((string) $env('FUNNYPOT_DOCKER_API')), ['1', 'on', 'true', 'yes'], true),
             aiStrictAuth: in_array(strtolower((string) $env('FUNNYPOT_AI_STRICT_AUTH')), ['1', 'on', 'true', 'yes'], true),
             aiStrictModel: in_array(strtolower((string) $env('FUNNYPOT_AI_STRICT_MODEL')), ['1', 'on', 'true', 'yes'], true),

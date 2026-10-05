@@ -113,6 +113,7 @@ final class ConfigRegistry
             'threatintel_report' => ['field' => 'threatIntelReport', 'env' => 'FUNNYPOT_THREATINTEL_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'llm_enabled' => ['field' => 'llmEnabled', 'env' => 'FUNNYPOT_LLM', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'ai_api_enabled' => ['field' => 'aiApiEnabled', 'env' => 'FUNNYPOT_AI_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'debug_headers' => ['field' => 'debugHeaders', 'env' => 'FUNNYPOT_DEBUG_HEADERS', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'docker_api_enabled' => ['field' => 'dockerApiEnabled', 'env' => 'FUNNYPOT_DOCKER_API', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'endless_download' => ['field' => 'endlessDownload', 'env' => 'FUNNYPOT_ENDLESS_DOWNLOAD', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false],
 

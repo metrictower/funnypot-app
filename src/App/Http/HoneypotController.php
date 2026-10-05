@@ -19,6 +19,7 @@ use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\RequestContext;
+use Funnypot\Core\SynthesizedResponse;
 use Geo;
 
 /**
@@ -280,6 +281,7 @@ final class HoneypotController
             $panel = $this->llmFakes->respond($context, $clientIp);   // writes its own 'panel' hit
             if ($panel !== null) {
                 $this->serveDelay();
+                $this->stampDebugHeader($panel);
                 ResponseEmitter::emit($panel);
 
                 return;
@@ -311,6 +313,7 @@ final class HoneypotController
         $decoyServed = false;
         $llm = null;
         if ($response !== null) {
+            $this->stampDebugHeader($response);
             ResponseEmitter::emit($response);
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,
@@ -321,6 +324,7 @@ final class HoneypotController
             $llm = $this->llmFakes?->respond($context, $clientIp);
             $this->serveDelay();
             if ($llm !== null) {
+                $this->stampDebugHeader($llm);
                 ResponseEmitter::emit($llm);
             } else {
                 // Non-detection (or matched-but-declined): a believable server 404, not a constant string.
@@ -356,6 +360,41 @@ final class HoneypotController
      *  port + URL (and the detected class, if any) in the comment. Reports both engine-matched attacks
      *  and classifier-caught payloads on unmatched paths. Each reporter is independent; both enqueues
      *  are fast local writes that never touch the network on the request path. */
+    /**
+     * FP-0003: prod-impossible debug visibility. When FUNNYPOT_DEBUG_HEADERS is on (default off; deploy.sh
+     * never sets it, so prod is default-deny, not prod-detection), stamp `X-Pot-Served: <tier>/<id>` from the
+     * served response's handle so a developer can see which decoy answered and where it lives. No-op when the
+     * flag is off or the response carries no handle (an app-generated panel/LLM fake has a null servedBy). The
+     * `X-Pot-` namespace is deliberately disjoint from the load-bearing `X-Detected-*` / `X-Request-Id`
+     * namespaces, so it can never shadow one. Must run before ResponseEmitter::emit() sends headers.
+     */
+    private function stampDebugHeader(SynthesizedResponse $response): void
+    {
+        if (!$this->config->debugHeaders) {
+            return;
+        }
+        $value = self::debugServedValue($response);
+        if ($value !== null) {
+            header('X-Pot-Served: ' . $value);
+        }
+    }
+
+    /**
+     * The `<tier>/<id>` value for the X-Pot-Served debug header, or null when the response carries no
+     * served-by handle (an app-generated panel/LLM fake). Pure so it is unit-testable — the phpunit CLI
+     * SAPI cannot introspect header() (see LoginFormOracleTest). tier = the handle kind (route/attack/
+     * method/llm); id = the rule id for an attack handle, else the route/method key.
+     */
+    public static function debugServedValue(SynthesizedResponse $response): ?string
+    {
+        $handle = $response->servedBy;
+        if ($handle === null) {
+            return null;
+        }
+
+        return $handle->kind . '/' . ($handle->ruleId ?? $handle->key ?? '');
+    }
+
     private function maybeReport(bool $report, string $clientIp, RequestContext $context, ?string $payloadClass = null): void
     {
         if (!$report || ($this->abuse === null && $this->threatIntel === null)) {
