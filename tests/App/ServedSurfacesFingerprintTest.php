@@ -17,6 +17,8 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\ThreatIntel\AttackClassifier;
+use Funnypot\App\ThreatIntel\OperatorBlocklist;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
@@ -595,15 +597,12 @@ final class ServedSurfacesFingerprintTest extends TestCase
     // --- 3f. HoneypotController::robots() — a small, self-contained static surface -------------------
 
     /**
-     * FP-0112 review #3: HoneypotController's catch-all handle() is NOT scanned here — its dynamic
-     * LLM branch (LlmFakeResponder) is covered by the review #1 runtime sanitizer fix
-     * (LlmOutputSanitizer::hasSharedOwnVocabularyLeak), and its STATIC core-engine template output is
-     * funnypot-core's own fingerprint-safety gate's responsibility, not this app's — duplicating that
-     * gate here would test funnypot-core's compiled artifacts through an app-repo test, which is out of
-     * this app's scope. Wiring handle() end-to-end (the real Honeypot engine + Config) was judged too
-     * heavy to add opportunistically here; see backlog/ready-to-code/FP-0304-served-surface-coverage-completion/
-     * for the deferred scope. robots() is scanned below because it is small, self-contained, and needs
-     * none of that wiring — no reason to leave a five-line static method unscanned.
+     * HoneypotController::handle()'s two APP-OWNED served surfaces are scanned in section 3g below
+     * (FP-0304). Its dynamic LLM branch (LlmFakeResponder) is covered by the runtime sanitizer fix
+     * (LlmOutputSanitizer::hasSharedOwnVocabularyLeak), and its STATIC core-engine template output
+     * ($funnypot->respond()) is funnypot-core's own fingerprint-safety gate's responsibility, not this
+     * app's (FP-0112 review #3) — duplicating that gate here would test funnypot-core's compiled
+     * artifacts through an app-repo test. robots() is scanned here because it is small and self-contained.
      */
     public function test_robots_txt_carries_no_fingerprint_signature(): void
     {
@@ -612,6 +611,73 @@ final class ServedSurfacesFingerprintTest extends TestCase
         $body = $this->render(fn () => $honeypot->robots());
         self::assertStringContainsString('Disallow:', $body, 'sanity: still the real robots.txt, not vacuously empty');
         self::assertServedClean($body, 'HoneypotController::robots()');
+    }
+
+    // --- 3g. HoneypotController::handle() — the catch-all served path (FP-0304) --------------------
+
+    /**
+     * FP-0304: wire handle() end-to-end (real Honeypot engine + Config via the test CoreConfigFactory)
+     * and scan the two APP-OWNED served surfaces it can emit — both funnel through serveBelievable404():
+     *   - the operator manual-block short-circuit (served before the engine runs);
+     *   - the plain-miss believable 404 (engine matched nothing, no decoy, LLM off).
+     * The engine's own template output on a match ($funnypot->respond()) is deliberately NOT scanned here
+     * (funnypot-core's gate owns it, FP-0112 review #3). Like the CorporateController surfaces above,
+     * handle() emits via raw http_response_code()/header()/echo (no injectable sink), so the body is
+     * captured with ob_start(); serveBelievable404()'s only header is a fixed Content-Type its own
+     * contract pins (it emits no security/Cache-Control header that could shape a tell).
+     */
+    private function honeypotControllerFor(?OperatorBlocklist $operatorBlock): HoneypotController
+    {
+        $dir = sys_get_temp_dir() . '/fp-0304-' . bin2hex(random_bytes(6));
+        @mkdir($dir, 0777, true);
+        $this->cleanupPaths[] = $dir;
+
+        return new HoneypotController(
+            new NoopHitStore(),
+            new \Geo($dir . '/no-geo'),
+            AppConfig::fromEnv($dir),
+            $dir,                                   // empty decoy dir: no archive can match -> no decoy serve
+            IdentityTestSupport::coreConfigFactory(),
+            null,                                   // blocklist
+            null,                                   // abuse (no network)
+            null,                                   // threatIntel (no network)
+            null,                                   // llmFakes OFF -> a miss falls straight to the 404
+            new AttackClassifier(),
+            $operatorBlock,
+        );
+    }
+
+    /** A plain engine miss (unmapped path, no decoy, LLM off) must serve the believable 404, clean. */
+    public function test_handle_plain_miss_404_carries_no_fingerprint_signature(): void
+    {
+        $controller = $this->honeypotControllerFor(null);
+        $body = $this->render(fn () => $controller->handle(
+            new RequestContext('GET', '/random9271.php', '', ['User-Agent' => 'curl/8.0']),
+            '9.9.9.9',
+            'off'
+        ));
+        self::assertStringContainsString('404 Not Found', $body, 'sanity: the plain miss served the believable 404, not an empty capture');
+        self::assertServedClean($body, 'HoneypotController::handle() plain-miss believable 404');
+    }
+
+    /** An operator-blocked source is served the same believable 404 (short-circuit before the engine). */
+    public function test_handle_operator_blocked_source_404_carries_no_fingerprint_signature(): void
+    {
+        $dir = sys_get_temp_dir() . '/fp-0304-blk-' . bin2hex(random_bytes(6));
+        @mkdir($dir, 0777, true);
+        $this->cleanupPaths[] = $dir;
+        $block = new OperatorBlocklist($dir . '/operator-block.sqlite');
+        $block->add('9.9.9.9');
+        self::assertTrue($block->isBlocked('9.9.9.9'), 'sanity: the test IP is actually blocked');
+
+        $controller = $this->honeypotControllerFor($block);
+        $body = $this->render(fn () => $controller->handle(
+            new RequestContext('GET', '/wp-login.php', '', ['User-Agent' => 'curl/8.0']),
+            '9.9.9.9',
+            'off'
+        ));
+        self::assertStringContainsString('404 Not Found', $body, 'sanity: a blocked source gets the believable 404');
+        self::assertServedClean($body, 'HoneypotController::handle() operator-blocked believable 404');
     }
 
     // --- 4. Decoy archives — text decoys + recursive member-entry inspection of the nested archives -
