@@ -383,7 +383,7 @@ final class HoneypotController
      * The `<tier>/<id>` value for the X-Pot-Served debug header, or null when the response carries no
      * served-by handle (an app-generated panel/LLM fake). Pure so it is unit-testable — the phpunit CLI
      * SAPI cannot introspect header() (see LoginFormOracleTest). tier = the handle kind (route/attack/
-     * method/llm); id = the rule id for an attack handle, else the route/method key.
+     * llm); id = the rule id for an attack handle, else the route key.
      */
     public static function debugServedValue(SynthesizedResponse $response): ?string
     {

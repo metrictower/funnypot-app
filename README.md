@@ -495,8 +495,10 @@ on the dashboard itself (below).
 
 `FUNNYPOT_DEBUG_HEADERS=1` stamps an `X-Pot-Served: <tier>/<id>` header on each served response (e.g.
 `attack/attack-phpmyadmin-gate`), so a developer can see which decoy answered a probe and where it lives.
-It is **default-off and prod-impossible**: `deploy.sh` never sets the flag, so prod is protected by
-default-deny, not by prod-detection. The `X-Pot-` namespace is deliberately disjoint from the load-bearing
+It is **default-off and prod-safe by default-deny**: `deploy.sh` never sets the flag, so prod is protected
+by default-deny, not by prod-detection (the project avoids prod-detection, which is itself a tell). A
+manual env override on the host would still enable it, so it is a conscious local act, not a hard runtime
+block. The `X-Pot-` namespace is deliberately disjoint from the load-bearing
 `X-Detected-*` / `X-Request-Id` namespaces, and the header is never emitted in the engine's compiled
 output — enabling it is a conscious, local act. Leave it off anywhere an attacker can observe responses.
 
