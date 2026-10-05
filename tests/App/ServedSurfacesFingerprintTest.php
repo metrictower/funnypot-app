@@ -59,12 +59,12 @@ require_once dirname(__DIR__, 2) . '/demo/lib/geo.php';
  *   - LabyrinthController / PolluterController — real served surfaces, but scanned in their OWN test
  *     files ({@see \Funnypot\Tests\App\Tarpit\LabyrinthNavTest},
  *     {@see \Funnypot\Tests\App\Tarpit\ContextPolluterTest}), not duplicated here.
- *   - HoneypotController::handle()'s catch-all — its dynamic LLM branch is covered by the runtime
- *     LlmOutputSanitizer own_vocabulary parity fix (review #1); its static core-engine template output
- *     is funnypot-core's own fingerprint-safety gate's responsibility, not this app's. The REMAINING
- *     app-owned parts of handle() (the plain-404/operator-block branches, the panel-precedence
- *     composition) are not yet scanned anywhere — deferred to
- *     backlog/ready-to-code/FP-0304-served-surface-coverage-completion/.
+ *   - HoneypotController::handle()'s catch-all — its two app-owned served branches (the plain-404 and
+ *     operator-block surfaces, both via serveBelievable404()) ARE scanned here in section 3g (FP-0304).
+ *     Its dynamic LLM branch is covered by the runtime LlmOutputSanitizer own_vocabulary parity fix
+ *     (review #1) — which gates the deterministic panel-precedence render too (pageBodyOk runs the
+ *     own-vocabulary scan even when trustedChrome=true); its static core-engine template output is
+ *     funnypot-core's own fingerprint-safety gate's responsibility, not this app's.
  *
  * Subsumes and removes the stopgap DownloadWorkerFingerprintTest (this suite's sw.js coverage below is
  * a strict superset: same file, same word-boundary matching, plus the surfaces enumerated above).
@@ -631,6 +631,13 @@ final class ServedSurfacesFingerprintTest extends TestCase
         $dir = sys_get_temp_dir() . '/fp-0304-' . bin2hex(random_bytes(6));
         @mkdir($dir, 0777, true);
         $this->cleanupPaths[] = $dir;
+        // Neutralise ambient engine env so a CI host's FUNNYPOT_* cannot give the engine a real
+        // deny-set / decoy pack / latency (parity with corporateController()); the fixture must be
+        // self-contained. The '404 Not Found' sanity assert would catch an unexpected template serve
+        // regardless, but clearing these keeps the plain-miss path deterministic.
+        putenv('FUNNYPOT_VULNS');
+        putenv('FUNNYPOT_DECOY_ARCHIVE');
+        putenv('FUNNYPOT_LATENCY_MS');
 
         return new HoneypotController(
             new NoopHitStore(),
