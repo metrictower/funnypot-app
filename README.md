@@ -219,6 +219,14 @@ CVEs, attack classes and services this box pretends to be.
 
 ![emulation catalog toggles](docs/img/emulations.png)
 
+**Stateful command-injection execution-phase oracle (opt-in, `FUNNYPOT_CMDI_EXEC_PHASE=1`).** After the
+stateless arithmetic oracle confirms a Commix/Artemis probe (`<L>$((a*b))<R>`), the scanner sends real
+recon commands wrapped in the same random tags (`<L>\`whoami\`<R>`) and expects the output **bracketed in
+those tags** so it can extract it. This binds the confirmed tag pair to an opaque per-source scope (a
+bounded, short-TTL store) and, on a follow-up carrying that bound pair, returns seeded web-context recon
+(`whoami`→`www-data`, `id`, `uname`, `hostname`, `pwd`, `ls`) bracketed in the tags — nothing is executed,
+the source+tag binding keeps it low-FP. Off by default (byte-identical when unset).
+
 ---
 
 ## Quick start (Docker)
