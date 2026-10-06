@@ -147,6 +147,30 @@ final class WriteCaptureTrapTest extends TestCase
         self::assertStringContainsString('passthru() has been disabled', $r->body, 'the attempted function is named (from the fixed set)');
     }
 
+    public function test_warning_blames_the_function_the_dropped_shell_itself_calls(): void
+    {
+        // The shell's own source calls passthru(); a generic `cmd=` attempt (no named function) must
+        // still blame passthru(), coherent with the attacker's planted code — not the default system().
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo "<?php passthru($_GET[0]);?>" > /var/www/html/s.php')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/s.php', 'cmd=' . rawurlencode('id')), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertStringContainsString('passthru() has been disabled', $r->body);
+        self::assertStringNotContainsString('system() has been disabled', $r->body);
+    }
+
+    public function test_exec_failure_content_type_matches_the_bare_view(): void
+    {
+        // Same resource must not change Content-Type depending on whether a param is present.
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo "<?php system($_GET[0]);?>" > /var/www/html/s.php')), '10.0.0.1');
+        $view = $t->maybeServe($this->ctx('GET', '/s.php'), '10.0.0.1');
+        $exec = $t->maybeServe($this->ctx('GET', '/s.php', 'cmd=id'), '10.0.0.1');
+        self::assertNotNull($view);
+        self::assertNotNull($exec);
+        self::assertSame($view->headers['Content-Type'], $exec->headers['Content-Type'], 'no Content-Type flip between view and exec');
+    }
+
     public function test_captured_php_bare_view_still_returns_the_source(): void
     {
         $t = $this->trap();

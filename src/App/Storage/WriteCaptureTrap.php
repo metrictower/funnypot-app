@@ -97,10 +97,17 @@ final class WriteCaptureTrap
         // literal source — it confirms the shell is present but inert, encouraging bypass attempts while
         // executing nothing and reflecting no captured byte. A bare view (no command) still returns the
         // stored source (the "PHP not parsing" miss).
-        if ($method === 'GET' && self::isPhp($path) && ($fn = $this->execAttempt($context)) !== null) {
+        if ($method === 'GET' && self::isPhp($path) && ($attempted = $this->execAttempt($context)) !== null) {
+            // Blame the exec function the dropped shell's OWN source calls (so the warning is coherent
+            // with the attacker's planted code); fall back to the function named in this request, else
+            // the generic system(). Still bounded to the fixed set — never arbitrary attacker text.
+            $fn = $this->functionInShell($hit['content']) ?? $attempted;
+
             return new SynthesizedResponse(
                 200,
-                ['Content-Type' => 'text/html; charset=utf-8'],
+                // Same Content-Type as the bare view of this resource, so a param on the URL never
+                // flips the type for the same path (an internally-inconsistent tell).
+                ['Content-Type' => $hit['content_type']],
                 $this->execFailure($fn, $path),
                 Detection::none()
             );
@@ -135,6 +142,20 @@ final class WriteCaptureTrap
         }
         if (preg_match('~(?:^|[?&])(?:cmd|c|exec|command|cmdfile|0|1|x|shell|run|act|do|download)=~i', '?' . (string) $context->query) === 1) {
             return 'system';
+        }
+
+        return null;
+    }
+
+    /**
+     * The first dangerous exec function a captured shell's OWN source calls, or null. Read from the
+     * stored content (the attacker's earlier drop) but matched against the SAME fixed alternation as
+     * execAttempt, so only a known function name is ever surfaced — never arbitrary attacker bytes.
+     */
+    private function functionInShell(string $content): ?string
+    {
+        if (preg_match('~\b(system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|eval|assert)\b~i', $content, $m) === 1) {
+            return strtolower($m[1]);
         }
 
         return null;
