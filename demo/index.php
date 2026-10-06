@@ -399,7 +399,14 @@ $writeCaptureTrap = $config->writeCapture
 // so a WebDAV PUT and an HTTP write-capture share one bounded ledger. Off unless FUNNYPOT_WEBDAV.
 $webDavTrap = $config->webdav
     ? new \Funnypot\App\WebDav\WebDavTrap(
-        new \Funnypot\App\Storage\WriteCaptureStore(\Funnypot\App\Storage\WriteCaptureStore::defaultPath($config->dbPath))
+        new \Funnypot\App\Storage\WriteCaptureStore(\Funnypot\App\Storage\WriteCaptureStore::defaultPath($config->dbPath)),
+        // Same deterministic fake FS the SSH/console shell serves (role 'ops', persona seed) so a mounted
+        // WebDAV share and an SSH session show ONE coherent filesystem.
+        new \Funnypot\Shell\Fs\FakeFilesystem(
+            \Funnypot\Shell\Fs\Draw::seed($identity->filesystemKey() . "\0" . $personaSeed . "\0ops"),
+            'ops',
+            $personaSeed
+        )
     )
     : null;
 $honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $writeCaptureTrap, $webDavTrap);

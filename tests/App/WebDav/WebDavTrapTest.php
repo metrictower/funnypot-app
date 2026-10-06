@@ -7,6 +7,8 @@ namespace Funnypot\Tests\App\WebDav;
 use Funnypot\App\Storage\WriteCaptureStore;
 use Funnypot\App\WebDav\WebDavTrap;
 use Funnypot\Core\RequestContext;
+use Funnypot\Shell\Fs\Draw;
+use Funnypot\Shell\Fs\FakeFilesystem;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -44,9 +46,48 @@ final class WebDavTrapTest extends TestCase
         return new WebDavTrap(new WriteCaptureStore($path));
     }
 
+    private function trapWithFs(): WebDavTrap
+    {
+        $path = sys_get_temp_dir() . '/fp0200fs-' . bin2hex(random_bytes(6)) . '/wc.sqlite';
+        $this->tmp[] = $path;
+        $fs = new FakeFilesystem(Draw::seed("webdav-test\0ops"), 'ops', 4242);
+
+        return new WebDavTrap(new WriteCaptureStore($path), $fs);
+    }
+
     private function req(string $method, string $path, string $body = '', array $headers = []): RequestContext
     {
         return new RequestContext($method, $path, '', $headers, $body === '' ? null : $body, 'x.test');
+    }
+
+    public function test_propfind_lists_the_fake_filesystem_tree(): void
+    {
+        $r = $this->trapWithFs()->handle($this->req('PROPFIND', '/webdav/', '', ['Depth' => '1']), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertSame(207, $r->status);
+        $prev = libxml_use_internal_errors(true);
+        $doc = simplexml_load_string($r->body);
+        libxml_use_internal_errors($prev);
+        self::assertNotFalse($doc, 'valid multistatus');
+        $doc->registerXPathNamespace('D', 'DAV:');
+        self::assertGreaterThan(1, count($doc->xpath('//D:response')), 'the FS root contributes children beyond the collection itself');
+    }
+
+    public function test_dropped_file_still_wins_over_the_fake_fs(): void
+    {
+        $t = $this->trapWithFs();
+        $t->handle($this->req('PUT', '/webdav/mine.txt', 'my bytes'), '10.0.0.1');
+        self::assertSame('my bytes', $t->handle($this->req('GET', '/webdav/mine.txt'), '10.0.0.1')->body);
+    }
+
+    public function test_deterministic_fs_read_is_stable(): void
+    {
+        // The fake FS is deterministic: the same seed lists the same root both times.
+        $a = $this->trapWithFs();
+        $r1 = $a->handle($this->req('PROPFIND', '/webdav/', '', ['Depth' => '1']), '10.0.0.1');
+        $b = $this->trapWithFs();
+        $r2 = $b->handle($this->req('PROPFIND', '/webdav/', '', ['Depth' => '1']), '10.0.0.1');
+        self::assertSame($r1->body, $r2->body, 'same seed -> identical listing');
     }
 
     public function test_options_advertises_dav(): void

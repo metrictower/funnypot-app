@@ -8,6 +8,8 @@ use Funnypot\App\Storage\WriteCaptureStore;
 use Funnypot\Core\Detection;
 use Funnypot\Core\RequestContext;
 use Funnypot\Core\SynthesizedResponse;
+use Funnypot\Shell\Fs\FakeFilesystem;
+use Throwable;
 
 /**
  * FP-0200 (core slice): an RFC-4918-shaped WebDAV honeypot mounted at /webdav/. A client or scanner can
@@ -26,7 +28,7 @@ final class WebDavTrap
 {
     private const MOUNT = '/webdav';
 
-    public function __construct(private WriteCaptureStore $store)
+    public function __construct(private WriteCaptureStore $store, private ?FakeFilesystem $fs = null)
     {
     }
 
@@ -98,13 +100,15 @@ final class WebDavTrap
         // the requested collection itself
         $resources[] = $this->dir($path === '' ? self::MOUNT . '/' : $this->hrefDir($path));
         if ($depth !== '0') {
-            // a small canned root + the source's own dropped files (so a PUT then PROPFIND shows it)
-            foreach (['readme.txt', 'backup'] as $canned) {
-                $isDir = strpos($canned, '.') === false;
-                $resources[] = $isDir ? $this->dir(self::MOUNT . '/' . $canned . '/') : $this->file(self::MOUNT . '/' . $canned, 128, 'text/plain', 1_700_000_000);
+            // Children of the requested path in the deterministic fake filesystem (/webdav maps to the FS
+            // root), so a mounted share shows a plausible, consistent Linux tree.
+            foreach ($this->fsChildren($path) as $r) {
+                $resources[] = $r;
             }
+            // the source's own dropped files (so a PUT then PROPFIND shows it)
             foreach ($this->store->listForScope($scope) as $f) {
-                if (strncmp($f['path'], self::MOUNT . '/', strlen(self::MOUNT) + 1) === 0) {
+                if (strncmp($f['path'], self::MOUNT . '/', strlen(self::MOUNT) + 1) === 0
+                    && $this->canon(dirname($f['path'])) === ($path === '' ? self::MOUNT : $path)) {
                     $resources[] = $this->file($f['path'], $f['size'], $f['content_type'], $f['captured_at']);
                 }
             }
@@ -112,6 +116,49 @@ final class WebDavTrap
 
         return new SynthesizedResponse(207, ['Content-Type' => 'application/xml; charset=utf-8'],
             WebDavMultistatus::build($resources), Detection::none());
+    }
+
+    /**
+     * Fake-FS children of a WebDAV path, as multistatus descriptors. /webdav -> FS "/". Fail-closed to a
+     * small canned root when there is no FS or the path isn't a directory.
+     *
+     * @return list<array{href:string,collection:bool,size:int,contentType:string,mtime:int,displayname:string}>
+     */
+    private function fsChildren(string $davPath): array
+    {
+        if ($this->fs === null) {
+            // canned fallback (no FS wired)
+            return [
+                $this->dir(self::MOUNT . '/backup/'),
+                $this->file(self::MOUNT . '/readme.txt', 128, 'text/plain', 1_700_000_000),
+            ];
+        }
+        $fsPath = $this->fsPathFor($davPath);
+        try {
+            $nodes = $this->fs->list($fsPath);
+        } catch (Throwable $e) {
+            return [];
+        }
+        $base = $davPath === '' ? self::MOUNT : $davPath;
+        $out = [];
+        foreach ($nodes as $node) {
+            $href = $base . '/' . $node->name;
+            if ($node->isDir()) {
+                $out[] = $this->dir($href . '/');
+            } else {
+                $out[] = $this->file($href, $node->size, $this->typeFor($node->name), $node->mtime);
+            }
+        }
+
+        return $out;
+    }
+
+    /** /webdav -> "/", /webdav/etc -> "/etc". */
+    private function fsPathFor(string $davPath): string
+    {
+        $rest = substr($this->canon($davPath), strlen(self::MOUNT));
+
+        return $rest === '' ? '/' : $rest;
     }
 
     private function put(RequestContext $context, string $scope, string $path): SynthesizedResponse
@@ -124,13 +171,24 @@ final class WebDavTrap
 
     private function get(RequestContext $context, string $scope, string $path, bool $head): SynthesizedResponse
     {
+        // A dropped file for this source wins (freshest); else fall back to the deterministic fake FS.
         $hit = $this->store->verify($scope, $path);
-        if ($hit === null) {
-            return $this->simple(404, "Not Found\n");
+        if ($hit !== null) {
+            return new SynthesizedResponse(200, ['Content-Type' => $hit['content_type']],
+                $head ? '' : $hit['content'], Detection::none());
+        }
+        if ($this->fs !== null) {
+            try {
+                $body = $this->fs->read($this->fsPathFor($path));
+
+                return new SynthesizedResponse(200, ['Content-Type' => $this->typeFor($path)],
+                    $head ? '' : $body, Detection::none());
+            } catch (Throwable $e) {
+                // not a readable file in the fake FS -> 404 below
+            }
         }
 
-        return new SynthesizedResponse(200, ['Content-Type' => $hit['content_type']],
-            $head ? '' : $hit['content'], Detection::none());
+        return $this->simple(404, "Not Found\n");
     }
 
     private function lock(string $path): SynthesizedResponse
