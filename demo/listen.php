@@ -43,6 +43,8 @@ use Funnypot\Protocol\Mssql\MssqlServer;
 use Funnypot\Protocol\Mqtt\MqttConfig;
 use Funnypot\Protocol\Mqtt\MqttServer;
 use Funnypot\Protocol\Snmp\SnmpConfig;
+use Funnypot\Protocol\Minecraft\MinecraftConfig;
+use Funnypot\Protocol\Minecraft\MinecraftServer;
 use Funnypot\Protocol\Snmp\SnmpServer;
 use Funnypot\Protocol\Ldap\LdapConfig;
 use Funnypot\Protocol\Ldap\LdapServer;
@@ -187,6 +189,13 @@ if ($protocol === 'smb') {
 // full attacker command while staying 100% inert. FUNNYPOT_MSSQL_MODE=low restores the deny path.
 if ($protocol === 'mssql') {
     (new MssqlServer(MssqlConfig::fromEnv($personaMaterial()), $log))->run($bind);
+    exit(0);
+}
+
+// Minecraft honeypot (port 25565): VarInt-framed server-list-ping persona + Log4Shell JNDI capture
+// (handshake address & login username), inert — never performs the JNDI lookup.
+if ($protocol === 'minecraft') {
+    (new MinecraftServer(MinecraftConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 
