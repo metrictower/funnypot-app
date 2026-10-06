@@ -7,6 +7,7 @@ namespace Funnypot\Tests;
 use Funnypot\Protocol\ProtocolSession;
 use Funnypot\Protocol\ProtocolTemplateSet;
 use Funnypot\Protocol\Ssh\SshConnection;
+use PHPUnit\Framework\ExpectationFailedException;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -33,6 +34,11 @@ use PHPUnit\Framework\TestCase;
  *    persona), but are not yet asserted against the detector tells HERE.
  *  - Genuinely out of scope: gaspot-honeypot-detect (Veeder-Root gas-pump controller) — funnypot has
  *    no such emulator, so there is nothing to detect.
+ *
+ * CAVEAT: the static sweep inspects the compiled template's PRE-RENDER literal (its `{{hex:..}}` blocks
+ * are NOT byte-expanded), so it catches an ASCII literal tell (a version/product/salt string) but not a
+ * tell hex-encoded inside a `{{hex:..}}` block. That is sufficient for every tell asserted here (all
+ * ASCII literals), but a future binary-protocol tell would need a behavioral/byte-level probe (FP-0604).
  */
 final class ProtocolHoneypotEvasionTest extends TestCase
 {
@@ -100,13 +106,25 @@ final class ProtocolHoneypotEvasionTest extends TestCase
      */
     public function test_static_sweep_actually_inspects_served_bytes(): void
     {
-        $strings = $this->allSendableStrings($this->compiledProtocol('mysql'));
-        $joined = implode("\n", $strings);
+        $joined = implode("\n", $this->allSendableStrings($this->compiledProtocol('mysql')));
         self::assertStringContainsString('mysql_native_password', $joined, 'the sweep must see the real greeting');
         self::assertStringContainsString('8.0.36', $joined, 'funnypot presents 8.0.36, not the dionaea 5.7.16');
-        // Gate-bite: if a dionaea tell were present, the assertion used by the sweep would catch it.
-        $planted = $joined . "\n" . '5.7.16';
-        self::assertStringContainsString('5.7.16', $planted); // the matcher the sweep relies on fires on the tell
+        // ethernet-ip non-vacuity: its banner is empty, so coverage rests on the identity send — confirm
+        // the sweep actually sees it (else the 1756-L61 absent-assertion could pass on empty content).
+        $eip = implode("\n", $this->allSendableStrings($this->compiledProtocol('ethernet-ip')));
+        self::assertStringContainsString('1769-', $eip, 'the sweep must see the ethernet-ip CompactLogix identity');
+
+        // Gate-bite: prove the sweep's OWN assertion (assertStringNotContainsString) FIRES on a planted
+        // tell — so the absent-assertions above are a real guard, not theater. Real content is clean;
+        // the same content with a tell appended must trip the assertion.
+        self::assertStringNotContainsString('5.7.16', $joined);
+        $tripped = false;
+        try {
+            self::assertStringNotContainsString('5.7.16', $joined . "\n5.7.16");
+        } catch (ExpectationFailedException $e) {
+            $tripped = true;
+        }
+        self::assertTrue($tripped, 'the evasion sweep would not have caught a planted dionaea tell');
     }
 
     /**
