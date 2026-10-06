@@ -201,6 +201,20 @@ on the local benchmark (`scripts/engagement-bench.php 1000 50`): **warm p95 0.12
 **connection-cold p95 0.956 ms** with trailing `--cold` (2026-09-09, Darwin arm64, PHP 8.4.10;
 1,000 recorded events and zero drops in each run). Cold mode reconstructs the store/recorder for each
 sample against the same prepared synthetic database; it is not disk-cache-cold or full FPM startup.
+
+**Deception-quality self-scorecard (FP-0352).** `php scripts/scorecard.php [--evidence=path.json]` emits a
+JSON scorecard mirrored from the public UHBS rubric (github.com/uhbs/uhbs-standard, Apache-2.0 — schema +
+rubric reconstructed as our own PHP; **mirror-not-import**, no PyPI dependency, no external submission):
+per-module A–F, the **Safety Gate** (`containment_score`, `delta_c`, `unauthorized_egress_leaks`, `passed`),
+the **UHQS** composite `δ_C·(w_A·A+w_B·B+w_C·C+w_E·E+w_F·F)` (no `w_D` term — Module D/containment is the gate:
+`δ_C=1.0` if containment ≥ 95, else `(containment/100)²`), and a letter `grade`. The exit code is a CI signal:
+**0** pass, **1** fail (containment < 95 **or** any egress leak — fail-safe: missing containment evidence
+counts as failing, never a green on absent proof), **2** setup error. The module weights + grade bands are an
+explicit `internal-default` (self-labelled `weights_source`/`grade_source`) — recovering the canonical UHBS
+weights is deferred to the private ingest bench, so an internally-calibrated UHQS is never mistaken for an
+externally-comparable one. **Security:** the scorecard is CLI/CI/operator-only and writes to STDOUT — it is
+NEVER a decoy route and never persists under the docroot, because an anonymously-reachable self-grade would
+be a decisive honeypot tell.
 Both modes include every measured outcome in percentiles and pass only with zero drops and unrounded
 p95 ≤ 5 ms. Arguments are bounded to 1,000–100,000 events and 1–254 keys; the script accepts no database
 path, owns and cleans its temporary storage, and exits 0 for success, 1 for measured failure, 2 for
