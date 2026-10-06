@@ -86,9 +86,24 @@ final class WriteCaptureTrap
         if ($method !== 'GET' && $method !== 'HEAD') {
             return null;
         }
-        $hit = $this->store->verify($this->scopeFor($clientIp), $this->canonicalise('/' . ltrim($context->path, '/')));
+        $path = $this->canonicalise('/' . ltrim($context->path, '/'));
+        $hit = $this->store->verify($this->scopeFor($clientIp), $path);
         if ($hit === null) {
             return null;
+        }
+
+        // FP-0149: a dropped .php webshell accessed WITH a command-execution attempt gets a persona-coherent
+        // PHP disabled_functions EXECUTION FAILURE (PHP runs, dangerous functions disabled) instead of the
+        // literal source — it confirms the shell is present but inert, encouraging bypass attempts while
+        // executing nothing and reflecting no captured byte. A bare view (no command) still returns the
+        // stored source (the "PHP not parsing" miss).
+        if ($method === 'GET' && self::isPhp($path) && ($fn = $this->execAttempt($context)) !== null) {
+            return new SynthesizedResponse(
+                200,
+                ['Content-Type' => 'text/html; charset=utf-8'],
+                $this->execFailure($fn, $path),
+                Detection::none()
+            );
         }
 
         return new SynthesizedResponse(
@@ -97,6 +112,40 @@ final class WriteCaptureTrap
             $method === 'HEAD' ? '' : $hit['content'],
             Detection::none()
         );
+    }
+
+    private static function isPhp(string $urlPath): bool
+    {
+        return (bool) preg_match('~\.(?:php|phtml|php[57]|phar)$~i', $urlPath);
+    }
+
+    /**
+     * Does the request try to RUN a command through the dropped shell? Returns the PHP exec function to
+     * name in the disabled_functions warning (from a FIXED set — never attacker-echoed), or null for a
+     * benign view. A bare webshell command param (cmd=/c=/x=…) with no named function defaults to system().
+     */
+    private function execAttempt(RequestContext $context): ?string
+    {
+        $surface = rawurldecode((string) $context->query) . ' ' . rawurldecode((string) ($context->rawBody ?? ''));
+        if ($surface === ' ') {
+            return null;
+        }
+        if (preg_match('~\b(system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|eval|assert)\b~i', $surface, $m) === 1) {
+            return strtolower($m[1]);
+        }
+        if (preg_match('~(?:^|[?&])(?:cmd|c|exec|command|cmdfile|0|1|x|shell|run|act|do|download)=~i', '?' . (string) $context->query) === 1) {
+            return 'system';
+        }
+
+        return null;
+    }
+
+    /** The exact PHP disabled_functions warning line, with the filesystem path (not the URL). No reflection. */
+    private function execFailure(string $fn, string $urlPath): string
+    {
+        $fsPath = '/var/www/html' . $urlPath;
+
+        return "<br />\n<b>Warning</b>:  {$fn}() has been disabled for security reasons in <b>{$fsPath}</b> on line <b>1</b><br />\n";
     }
 
     private function canonicalise(string $path): string

@@ -125,6 +125,57 @@ final class WriteCaptureTrapTest extends TestCase
         self::assertNull($t->maybeServe($this->ctx('GET', '/anything.txt'), '10.0.0.1'));
     }
 
+    // --- FP-0149: dropped-webshell execution-failure emulation -------------------------------------
+
+    public function test_captured_php_with_a_command_serves_an_exec_failure_not_the_source(): void
+    {
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo "<?php system($_GET[0]);?>" > /var/www/html/s.php')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/s.php', 'cmd=' . rawurlencode('id')), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertStringContainsString('has been disabled for security reasons', $r->body, 'a command attempt gets a disabled_functions failure');
+        self::assertStringContainsString('/var/www/html/s.php', $r->body, 'the warning names the filesystem path');
+        self::assertStringNotContainsString('<?php system', $r->body, 'the captured source is NOT served on an exec attempt');
+    }
+
+    public function test_named_exec_function_is_reported_in_the_warning(): void
+    {
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo x > /var/www/html/s.php')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/s.php', 'x=' . rawurlencode('passthru(whoami)')), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertStringContainsString('passthru() has been disabled', $r->body, 'the attempted function is named (from the fixed set)');
+    }
+
+    public function test_captured_php_bare_view_still_returns_the_source(): void
+    {
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo "<?php echo 1;?>" > /var/www/html/s.php')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/s.php'), '10.0.0.1'); // no query = a view, not a command
+        self::assertNotNull($r);
+        self::assertStringContainsString('<?php echo 1;?>', $r->body, 'a bare view returns the stored source');
+        self::assertStringNotContainsString('disabled for security', $r->body);
+    }
+
+    public function test_exec_failure_does_not_reflect_the_submitted_command(): void
+    {
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo x > /var/www/html/s.php')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/s.php', 'cmd=' . rawurlencode('system(cat /etc/CANARY)')), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertStringNotContainsString('CANARY', $r->body, 'the submitted command is never echoed');
+    }
+
+    public function test_non_php_captured_file_with_a_query_still_serves_content(): void
+    {
+        // The exec-failure is php-only; a .txt with a query is not an "execution" attempt.
+        $t = $this->trap();
+        $t->maybeCapture($this->ctx('POST', '/api', '', 'c=' . rawurlencode('echo TAG > /var/www/html/out.txt')), '10.0.0.1');
+        $r = $t->maybeServe($this->ctx('GET', '/out.txt', 'x=1'), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertSame('TAG', $r->body);
+    }
+
     public function test_dynamic_write_without_literal_is_not_captured(): void
     {
         // `id > rce.txt` has no static content — not captured (a verify GET 404s / returns null here).
