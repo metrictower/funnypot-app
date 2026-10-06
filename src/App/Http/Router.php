@@ -154,8 +154,9 @@ final class Router
             return;
         }
 
-        // Corporate disguise.
-        if ($method === 'GET' && $p === '/') {
+        // Corporate disguise — EXCEPT a bare-IP landing (no hostname), which drops into the fake admin
+        // panel via the honeypot catch-all below (FP-0049). A named host keeps the corporate homepage.
+        if ($method === 'GET' && $p === '/' && !HoneypotController::isBareIpHost($ctx->host)) {
             $this->corporate->homepage();
 
             return;
@@ -299,7 +300,10 @@ final class Router
         // at the /admin/root/* decoys below. A credential POST is captured; a scanner never gets the
         // dashboard back here.
         if ($path === '/' && !isset($_GET['admin'])) {
-            if ($method === 'GET' && $_GET === []) {
+            // A bare-IP landing (no hostname) drops into the fake admin panel via the honeypot catch-all
+            // below (FP-0049); a named host still gets the generic sign-in decoy home. POST creds are
+            // captured regardless of host.
+            if ($method === 'GET' && $_GET === [] && !HoneypotController::isBareIpHost($ctx->host)) {
                 $this->home->index();
 
                 return;
