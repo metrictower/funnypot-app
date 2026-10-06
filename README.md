@@ -47,6 +47,12 @@ per-row **block** button (and a blocked-IP manager) lets the operator permanentl
 (exact IP or IPv4 CIDR): a blocked source is served nothing across every tier — the HTTP deception, SIP,
 and the TCP protocol emulators — persisted on the data volume and enforced with an O(1) per-packet check.
 
+A **server-storage health card** (operator-only) shows free/total disk, the call-recordings footprint,
+the hit-database size and the payload-quarantine size; when free space drops below 2 GB or 15% a
+high-visibility **low-disk banner** warns before the SIP recordings or hit logs can exhaust the host disk,
+with a one-click prune to free space. The telemetry rides only the authenticated feed — never the public
+view (it would leak host paths/sizes).
+
 ![funnypot dashboard](docs/img/dashboard.png)
 
 **Aggregate analytics scale to high volume.** A background rollup worker (`demo/rollup.php`, on a

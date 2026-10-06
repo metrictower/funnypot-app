@@ -125,6 +125,12 @@ final class DashboardController
         $out = $this->store->delta((int) ($_GET['after'] ?? 0), $filters);
         $out['stats'] = $this->store->stats();
         $out['widgets'] = $this->store->widgets();
+        // Server storage telemetry (FP-0209) — operator-only: it reveals host disk sizes and paths, so
+        // it rides ONLY the authenticated full feed (never the unauthenticated minimal/none views above).
+        $out['server'] = (new ServerStorageTelemetry(
+            \dirname(__DIR__, 3) . '/demo/storage',
+            $this->config->dbPath
+        ))->collect();
         echo json_encode($out, $flags);
     }
 
@@ -790,6 +796,12 @@ final class DashboardController
         echo "<div class=head><h1>Welcome to <span class=honey>funnypot</span> &#127855;</h1>";
         echo "<span id=live class=live><span class=dot></span> live</span></div>";
         echo "<p class=lead>This host is a honeypot. Each row is a scanner probing for a vulnerability &mdash; served a plausible fake, its time wasted. Updates live.</p>";
+        // FP-0209 low-disk warning banner — hidden until the feed's server.low_disk flips (app.js
+        // renderServer). The prune button invokes the existing admin('prune') retention action.
+        echo "<div id=lowdisk style='display:none;align-items:center;gap:12px;margin:0 0 12px;padding:10px 14px;"
+            . "background:#3a1414;border:1px solid #e0484d;border-radius:6px;color:#ffd6d6;font-weight:600'>"
+            . "<span class=msg style='flex:1'></span>"
+            . "<button class=btn id=lowdisk_prune>Free space (prune)</button></div>";
         echo "<div class=stats>";
         echo "<div class=stat><b id=total>&mdash;</b><span>requests</span></div>";
         echo "<div class=stat><b id=detections>&mdash;</b><span>scans detected</span></div>";
@@ -802,6 +814,8 @@ final class DashboardController
         echo "<div class=card><h3>top talkers</h3><ul class=wl id=w_talkers></ul></div>";
         echo "<div class=card><h3>source countries</h3><div id=w_countries></div></div>";
         echo "<div class=card><h3>templates fired</h3><ul class=wl id=w_templates></ul></div>";
+        // FP-0209 server storage health card (operator-only feed field `server`; app.js renderServer).
+        echo "<div class=card><h3>server storage</h3><ul class=wl id=srv_card></ul></div>";
         echo "<div class=card><h3>activity (hourly)</h3><div class=hist id=w_hist></div></div>";
         echo "</div>";
         echo "<div class=controls id=views>";

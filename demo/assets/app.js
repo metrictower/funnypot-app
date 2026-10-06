@@ -90,6 +90,32 @@ function renderWidgets(w){
   $('w_hist').innerHTML=(w.histogram||[]).map(h=>`<div style="height:${Math.round(h.n/hmax*100)}%" title="${esc(h.h)}: ${h.n}"></div>`).join('');
   document.querySelectorAll('#w_talkers li.click').forEach(li=>li.onclick=()=>{filter=li.dataset.ip;$('filter').value=filter;applyFilter();});
 }
+// FP-0209: human-readable bytes (null -> em dash).
+function fmtB(n){if(n==null)return'—';const u=['B','KB','MB','GB','TB'];let i=0,v=n;while(v>=1024&&i<u.length-1){v/=1024;i++;}return(v<10&&i>0?v.toFixed(1):Math.round(v))+' '+u[i];}
+// FP-0209: render the server-storage card + toggle the low-disk banner from the feed's `server` field.
+function renderServer(s){
+  const card=$('srv_card');
+  if(card){
+    const up=s.disk_used_percent;
+    card.innerHTML=
+      `<li><span>disk free</span><span class="n">${fmtB(s.disk_free_bytes)}${s.disk_total_bytes!=null?' / '+fmtB(s.disk_total_bytes):''}${up!=null?' ('+up+'% used)':''}</span></li>`+
+      `<li><span>recordings</span><span class="n">${fmtB(s.recordings_bytes)} (${s.recordings_count})</span></li>`+
+      `<li><span>database</span><span class="n">${fmtB(s.database_bytes)}</span></li>`+
+      `<li><span>quarantine</span><span class="n">${fmtB(s.quarantine_bytes)} (${s.quarantine_count})</span></li>`;
+  }
+  const b=$('lowdisk');
+  if(b){
+    if(s.low_disk){
+      const gb=s.disk_free_bytes!=null?(s.disk_free_bytes/1e9).toFixed(1):'?';
+      const freePct=(s.disk_used_percent!=null)?(100-s.disk_used_percent):'?';
+      const msg=b.querySelector('.msg');
+      if(msg)msg.textContent='⚠️ Low Disk Space: '+gb+' GB ('+freePct+'%) remaining. Audio recordings and hit logs may be impacted.';
+      b.style.display='flex';
+      const pb=$('lowdisk_prune');
+      if(pb)pb.onclick=()=>{if(confirm('Prune hit events to the newest 1000 to free space?'))admin('prune');};
+    }else{b.style.display='none';}
+  }
+}
 async function tick(){
   try{
     const d=await (await fetch(BASE+'?feed=1&after='+cursor+(fq()?'&'+fq():''),{cache:'no-store'})).json();
@@ -100,6 +126,7 @@ async function tick(){
     cursor=d.cursor;
     if(d.stats)['total','detections','served','ips','harvested'].forEach(k=>$(k).textContent=d.stats[k]);
     renderWidgets(d.widgets);
+    if(d.server)renderServer(d.server);
     if(!tb.children.length)empty();else applyFilter();
     started=true;$('live').classList.add('on');
   }catch(e){$('live').classList.remove('on');}
