@@ -105,6 +105,64 @@ final class PerIpAdmissionThrottleTest extends TestCase
         self::assertSame(1, $d2->floodCount);
     }
 
+    public function test_rollup_count_and_sinceMs_share_a_per_window_base(): void
+    {
+        // Regression for the time-base mismatch: from window 2 on, floodSinceMs must be the per-window
+        // duration (matching the per-window floodCount), NOT cumulative-since-flood-start.
+        $t = $this->throttle(1, 0.0001, null, 4096, 60.0);
+        self::assertTrue($t->admit('9.9.9.9')->admitted); // seed
+
+        $w1 = $t->admit('9.9.9.9'); // first drop -> emits (window 1, instantaneous)
+        self::assertTrue($w1->hasRollup());
+        self::assertSame(0, $w1->floodSinceMs);
+
+        // window 2: drops over ~61s, then an emit
+        for ($i = 0; $i < 3; $i++) { $this->now += 10.0; self::assertFalse($t->admit('9.9.9.9')->hasRollup()); }
+        $this->now += 31.0; // total 61s since the window-1 emit
+        $w2 = $t->admit('9.9.9.9');
+        self::assertTrue($w2->hasRollup());
+        self::assertSame(4, $w2->floodCount);            // 3 silent + this one
+        self::assertSame(61000, $w2->floodSinceMs);      // per-window, not cumulative
+
+        // window 3: another ~61s -> sinceMs must RESET to the window, not grow to ~122s
+        for ($i = 0; $i < 2; $i++) { $this->now += 20.0; self::assertFalse($t->admit('9.9.9.9')->hasRollup()); }
+        $this->now += 21.0;
+        $w3 = $t->admit('9.9.9.9');
+        self::assertTrue($w3->hasRollup());
+        self::assertSame(3, $w3->floodCount);
+        self::assertSame(61000, $w3->floodSinceMs);      // NOT 122000
+    }
+
+    public function test_negative_clock_does_not_corrupt_the_bucket(): void
+    {
+        $t = $this->throttle(2, 1);
+        self::assertTrue($t->admit('1.2.3.4')->admitted);
+        self::assertTrue($t->admit('1.2.3.4')->admitted); // drained (burst 2)
+        $this->now -= 100.0;                              // clock jumps backward
+        self::assertFalse($t->admit('1.2.3.4')->admitted, 'negative elapsed is clamped; no phantom refill');
+    }
+
+    public function test_negative_burst_is_disabled(): void
+    {
+        $t = $this->throttle(-5, 10);
+        self::assertFalse($t->enabled());
+        self::assertTrue($t->admit('1.1.1.1')->admitted);
+        self::assertSame(0, $t->trackedIps());
+    }
+
+    public function test_lru_evicts_the_oldest_not_the_survivor(): void
+    {
+        // maxIps=2. Touch 'old' first, then 'keep' (newer), then 'new' forces an eviction. The OLDEST
+        // ('old') must go; 'keep' must survive — proven by its bucket still being drained on re-admit
+        // (a wrongly-evicted 'keep' would be re-seeded a full burst and admit).
+        $t = $this->throttle(1, 0.0001, null, 2);
+        $t->admit('old');                    // t=1000, drained
+        $this->now += 1.0; $t->admit('keep'); // t=1001, drained, newer than 'old'
+        $this->now += 1.0; $t->admit('new');  // t=1002, map full -> evict oldest 'old'
+        self::assertSame(2, $t->trackedIps());
+        self::assertFalse($t->admit('keep')->admitted, "survivor kept its drained bucket (not re-seeded)");
+    }
+
     public function test_lru_eviction_bounds_the_map(): void
     {
         $t = $this->throttle(5, 1, null, 3); // cap 3 IPs

@@ -25,7 +25,7 @@ namespace Funnypot\Protocol;
  */
 final class PerIpAdmissionThrottle
 {
-    /** @var array<string, array{tokens: float, last: float, dropped: int, runStart: float, lastRollup: float}> */
+    /** @var array<string, array{tokens: float, last: float, dropped: int, windowStart: float, lastRollup: float}> */
     private array $buckets = [];
 
     private float $seed;
@@ -76,22 +76,27 @@ final class PerIpAdmissionThrottle
             // A token is available again: the flood (if any) has ended — reset the drop-run so the next
             // drop starts a fresh rollup window and per-command logging resumes below the threshold.
             $b['dropped'] = 0;
-            $b['runStart'] = 0.0;
+            $b['windowStart'] = 0.0;
             $b['lastRollup'] = 0.0;
 
             return AdmissionDecision::admitted();
         }
 
-        // Dropped: accumulate the suppressed count and decide whether to emit a rollup now.
+        // Dropped: accumulate the suppressed count and decide whether to emit a rollup now. `dropped`
+        // and `windowStart` are BOTH per-window (reset together on each emit) so a logged rollup's
+        // count and sinceMs share one time base — a consumer's count/sinceMs rate is correct every
+        // window, not just the first. Recovery (an admit) ends the run; the tail lost on recovery is
+        // bounded in TIME to < rollupSecs (its count is drop-rate dependent, not bounded).
         $b['dropped']++;
-        if ($b['runStart'] === 0.0) {
-            $b['runStart'] = $now;
+        if ($b['windowStart'] === 0.0) {
+            $b['windowStart'] = $now;
         }
         if ($b['lastRollup'] === 0.0 || ($now - $b['lastRollup']) >= $this->rollupSecs) {
             $count = $b['dropped'];
-            $sinceMs = (int) round(($now - $b['runStart']) * 1000);
+            $sinceMs = (int) round(($now - $b['windowStart']) * 1000);
             $b['lastRollup'] = $now;
-            $b['dropped'] = 0; // report the delta each window; next window counts afresh
+            $b['dropped'] = 0;       // next window counts afresh …
+            $b['windowStart'] = $now; // … from now, so sinceMs matches that fresh count
 
             return AdmissionDecision::droppedWithRollup($count, $sinceMs);
         }
@@ -122,7 +127,7 @@ final class PerIpAdmissionThrottle
             'tokens' => $this->seed,
             'last' => $now,
             'dropped' => 0,
-            'runStart' => 0.0,
+            'windowStart' => 0.0,
             'lastRollup' => 0.0,
         ];
     }
