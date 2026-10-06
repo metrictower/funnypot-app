@@ -1,0 +1,25 @@
+{
+    "experiments": [
+        {
+            "experiment_id": "labyrinth-export-links",
+            "revision": 1,
+            "seam": "labyrinth.navigation",
+            "control_variant": "current-links",
+            "variants": [
+                {
+                    "id": "current-links",
+                    "weight": 1,
+                    "implementation_id": "labyrinth-nav/current/v1"
+                },
+                {
+                    "id": "expanded-exports",
+                    "weight": 1,
+                    "implementation_id": "labyrinth-nav/expanded-exports/v1"
+                }
+            ],
+            "eligibility_version": "verified-episode-handle/v1",
+            "safety_contract_version": "tarpit-guard-before-render/v1",
+            "config_hash": "0b3639e2cd28458eda08534497d3c9aab0b5638bcc0ad50ee467a517e8f17410"
+        }
+    ]
+}
