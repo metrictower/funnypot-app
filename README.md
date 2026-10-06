@@ -214,7 +214,9 @@ exposition: `funnypot_events_total`, `funnypot_detections_total`, `funnypot_fake
 labelled series `funnypot_template_fired_total{template="…"}` + `funnypot_events_by_country_total{country="…"}`.
 It renders from the same cheap `stats()`/`widgets()` the dashboard feed uses (no full hit-store scan) and
 carries **bounded cardinality by construction** — raw source IPs are never emitted as labels (a PII +
-cardinality hazard). A starter Grafana dashboard is at
+cardinality hazard). The `_total` series count over the **retained** hit-store window (the hit table is
+pruned by retention), so they are window-scoped rather than lifetime-cumulative — use `rate()`/`increase()`
+(which read each prune as a counter reset), as the starter dashboard does. A starter Grafana dashboard is at
 [`demo/grafana/funnypot-overview.json`](demo/grafana/funnypot-overview.json). The scrape **endpoint** is
 operator-only and must be access-gated (trusted-peer, FP-0250 exposure-ceiling — never on the deception
 surface); that gated route is the integration step tracked in FP-0605. Example scrape config:

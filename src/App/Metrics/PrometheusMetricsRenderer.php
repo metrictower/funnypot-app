@@ -27,21 +27,25 @@ final class PrometheusMetricsRenderer
      */
     public function render(array $stats, array $widgets): string
     {
-        $out = $this->scalar('events_total', 'counter', 'Total requests received by the honeypot.', $stats['total'] ?? 0)
-            . $this->scalar('detections_total', 'counter', 'Requests detected as a scanner probe.', $stats['detections'] ?? 0)
-            . $this->scalar('fakes_served_total', 'counter', 'Fake responses served to a probe.', $stats['served'] ?? 0)
-            . $this->scalar('payloads_captured_total', 'counter', 'Requests carrying a captured body/payload.', $stats['harvested'] ?? 0)
-            . $this->scalar('unique_source_ips', 'gauge', 'Distinct source IPs observed.', $stats['ips'] ?? 0);
+        // NB: these _total series count over the RETAINED hit-store window (the hits table is pruned by
+        // retention), so they are not strictly monotonic — a prune drops the value. rate()/increase()
+        // tolerate that (each prune reads as a counter reset), which is the intended charting use; the
+        // HELP text says "retained" so the window-scoped meaning is self-documenting, not implied-lifetime.
+        $out = $this->scalar('events_total', 'counter', 'Requests received, over the retained hit-store window.', $stats['total'] ?? 0)
+            . $this->scalar('detections_total', 'counter', 'Requests detected as a scanner probe, over the retained window.', $stats['detections'] ?? 0)
+            . $this->scalar('fakes_served_total', 'counter', 'Fake responses served, over the retained window.', $stats['served'] ?? 0)
+            . $this->scalar('payloads_captured_total', 'counter', 'Requests carrying a captured body/payload, over the retained window.', $stats['harvested'] ?? 0)
+            . $this->scalar('unique_source_ips', 'gauge', 'Distinct source IPs in the retained window.', $stats['ips'] ?? 0);
 
         $out .= $this->labelled(
             'template_fired_total',
-            'Matches per detection template (top ' . 12 . ', bounded).',
+            'Matches per detection template over the retained window (top 12, bounded).',
             'template',
             $this->pairs($widgets['templates'] ?? [], 't')
         );
         $out .= $this->labelled(
             'events_by_country_total',
-            'Requests per source country (top 12, bounded).',
+            'Requests per source country over the retained window (top 12, bounded).',
             'country',
             $this->pairs($widgets['countries'] ?? [], 'cc')
         );
