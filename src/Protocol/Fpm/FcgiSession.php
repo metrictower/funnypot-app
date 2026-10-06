@@ -137,8 +137,8 @@ final class FcgiSession
         if ($this->completed || $this->requestId === null) {
             return '';
         }
-        // A request with no STDIN stream still completes once PARAMS close (GET-style); treat a closed
-        // PARAMS with a closed-or-absent STDIN as complete.
+        // Complete only once BOTH streams are closed by their empty record. Real nginx/FPM clients
+        // (and the CVE-2019-11043 tooling) always send the empty STDIN, so this is the in-protocol path.
         if (!$this->paramsClosed || !$this->stdinClosed) {
             return '';
         }
@@ -175,7 +175,10 @@ final class FcgiSession
     private function respond(): string
     {
         $rid = $this->requestId ?? 1;
-        $body = "<!DOCTYPE html>\n<html><head><title>200 OK</title></head><body><h1>It works</h1></body></html>\n";
+        // Neutral minimal page — coherent with an nginx + PHP-FPM persona (NOT the Apache "It works"
+        // idiom), and identical regardless of input so nothing from the request is reflected.
+        $body = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Welcome</title></head>\n"
+            . "<body><h1>Welcome</h1></body></html>\n";
         $headers = "Status: 200 OK\r\n"
             . "Content-Type: text/html; charset=UTF-8\r\n"
             . 'X-Powered-By: ' . $this->config->poweredBy() . "\r\n"

@@ -41,8 +41,8 @@ final class FastCgiRecord
 
     public const HEADER_LEN = 8;
 
-    /** Guard: a single record's content is bounded so a hostile contentLength can't pre-allocate. */
-    public const MAX_CONTENT_LEN = 65535; // the field is 2 bytes — this is its natural ceiling
+    /** The 2-byte contentLength field's natural ceiling; used by encode() to reject an oversize record. */
+    public const MAX_CONTENT_LEN = 65535;
 
     public int $version;
     public int $type;
