@@ -118,6 +118,18 @@ final class SipServer
     private const CALL_BUCKET_MAX_IPS = 4096; // cap tracked sources (all maps) so they can't grow unbounded
 
     /**
+     * FP-0218: per-source rollup for a bare/off-dialog INFO/DTMF flood. INFO is NOT a THROTTLED_METHOD (it's
+     * the in-dialog DTMF carrier), so an off-dialog INFO flood would otherwise write one DB row per packet.
+     * This is a DEDICATED map (NOT $floodState — that is call-admission-only; reusing it would corrupt the
+     * call_flood rollup and its THROTTLED_METHODS-gated recovery flush). Mirrors $egressCapState's pattern:
+     * log the first INFO_OFFDIALOG_INTEL_CAP off-dialog DTMF events as intel, then collapse the tail to one
+     * `info_flood` rollup per window. In-dialog (admitted) DTMF is unaffected (capped by DTMF_MAX_DIGITS).
+     * @var array<string, array{count: int, since: string, lastLog: float, lastLoggedCount: int}>
+     */
+    private array $infoFloodState = [];
+    private const INFO_OFFDIALOG_INTEL_CAP = 3; // first N off-dialog INFO/DTMF per source logged; rest rolled up
+
+    /**
      * Cumulative per-source call ceiling (distinct from the per-second rate bucket): counts a source's
      * throttled requests (calls, extension-enum REGISTERs, OPTIONS sweeps) across an active run. Once it
      * exceeds callCeiling the source is a confirmed flooder we've already characterized, so it flips to
@@ -1653,6 +1665,71 @@ final class SipServer
         ]);
     }
 
+    /**
+     * FP-0218: bound an off-dialog INFO/DTMF flood from one source. Returns true while the per-source count
+     * is within INFO_OFFDIALOG_INTEL_CAP (log the event as initial intel), false once it exceeds the cap
+     * (caller suppresses the per-packet row; this emits an `info_flood` rollup on the first suppression and
+     * at most once per window thereafter). Dedicated map, LRU-bounded so a spoofed-source rotation can't grow
+     * memory. NEVER touches $floodState (call-admission only).
+     */
+    private function recordOffDialogInfo(string $ip): bool
+    {
+        $now = microtime(true);
+
+        if (!isset($this->infoFloodState[$ip])) {
+            if (count($this->infoFloodState) >= self::CALL_BUCKET_MAX_IPS) {
+                $oldestKey = null;
+                $oldestAt = INF;
+                foreach ($this->infoFloodState as $k => $s) {
+                    if ($s['lastLog'] < $oldestAt) {
+                        $oldestAt = $s['lastLog'];
+                        $oldestKey = $k;
+                    }
+                }
+                if ($oldestKey !== null) {
+                    unset($this->infoFloodState[$oldestKey]);
+                }
+            }
+            $this->infoFloodState[$ip] = ['count' => 1, 'since' => gmdate('c'), 'lastLog' => $now, 'lastLoggedCount' => 0];
+
+            return true; // first off-dialog INFO from this source: log as intel
+        }
+
+        $st = &$this->infoFloodState[$ip];
+        $st['count']++;
+        if ($st['count'] <= self::INFO_OFFDIALOG_INTEL_CAP) {
+            return true; // still within the intel cap: log
+        }
+
+        // Flood tail: suppress the per-packet event. Emit a rollup on the FIRST suppression (so the
+        // incident's onset is visible) and once per FLOOD_ROLLUP_SECS window thereafter.
+        if ($st['lastLoggedCount'] < $st['count'] && ($st['lastLoggedCount'] === 0 || ($now - $st['lastLog']) >= self::FLOOD_ROLLUP_SECS)) {
+            $st['lastLog'] = $now;
+            $this->emitInfoFloodRollup($ip);
+        }
+
+        return false;
+    }
+
+    /** Emit one off-dialog INFO flood rollup. Never reportable (a bare UDP INFO's source is unverifiable —
+     *  FP-0247). served=1: unlike a dropped call_flood, the INFO itself is still 200-OK'd. */
+    private function emitInfoFloodRollup(string $ip): void
+    {
+        $st = &$this->infoFloodState[$ip];
+        $st['lastLoggedCount'] = $st['count'];
+        $this->logEvent([
+            'proto' => 'sip',
+            'method' => 'SIP',
+            'event' => 'info_flood',
+            'ip' => $ip,
+            'port' => $this->currentPeerPort,
+            'path' => "SIP off-dialog INFO flood: {$st['count']} INFO from {$ip} since {$st['since']} (DTMF logging suppressed beyond first " . self::INFO_OFFDIALOG_INTEL_CAP . ')',
+            'matched' => 1,
+            'served' => 1,
+            'reportable' => false,
+        ]);
+    }
+
     private function sessionKey(string $callId, string $peerIp, int $peerPort): string
     {
         return $callId . '@' . $peerIp . ':' . $peerPort;
@@ -2103,6 +2180,11 @@ final class SipServer
             }
             $s->dtmfDigits .= $digit;
             $streaming = $s->isStreaming();
+        } elseif (!$this->recordOffDialogInfo($peerIp)) {
+            // FP-0218: bare/off-dialog INFO beyond the per-source intel cap — the flood tail is suppressed
+            // (collapsed to an info_flood rollup by recordOffDialogInfo), not one DB row per packet. The INFO
+            // is still 200-OK'd by the dispatch caller, so wire behavior is unchanged (easy-connect intact).
+            return;
         }
 
         $this->logEvent([

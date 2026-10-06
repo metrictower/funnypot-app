@@ -572,6 +572,36 @@ final class SipServerSecurityTest extends TestCase
         }
     }
 
+    public function test_off_dialog_info_flood_is_bounded_not_one_row_per_packet(): void
+    {
+        // FP-0218: a bare/off-dialog INFO flood from one source must NOT write one DTMF row per packet.
+        $logged = [];
+        $server = new SipServer(new SipConfig(rtpPort: 0), static function (array $e) use (&$logged): void {
+            $logged[] = $e;
+        });
+
+        $raw = "INFO sip:101@target SIP/2.0\r\nCall-ID: flood-info\r\nCSeq: 1 INFO\r\n"
+            . "Content-Type: application/dtmf-relay\r\nContent-Length: 10\r\n\r\nSignal=5\r\n";
+        for ($i = 0; $i < 100; $i++) {
+            $info = SipMessage::parse($raw);
+            self::assertNotNull($info);
+            $server->dispatchMessage($info, '198.51.100.44', 5060, 'udp');
+        }
+
+        $dtmf = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'dtmf'));
+        $rollup = array_values(array_filter($logged, static fn (array $e): bool => ($e['event'] ?? '') === 'info_flood'));
+
+        self::assertNotEmpty($dtmf, 'the first off-dialog INFO(s) are still logged as intel');
+        self::assertLessThanOrEqual(3, count($dtmf), '100-packet flood yields at most the intel cap of dtmf rows, not 100');
+        self::assertNotEmpty($rollup, 'the suppressed flood tail collapses to an info_flood rollup');
+        // AC1: the whole 100-packet flood must NOT write ~one row per packet — a tiny bounded total instead.
+        self::assertLessThanOrEqual(10, count($logged), 'off-dialog INFO flood is bounded (not ~100 rows)');
+        self::assertStringContainsString('INFO flood', $rollup[count($rollup) - 1]['path'], 'rollup names the incident + suppressed count');
+        foreach ($logged as $e) {
+            self::assertFalse($e['reportable'] ?? false, 'no off-dialog UDP INFO event (incl. the rollup) may be reportable');
+        }
+    }
+
     /** A bare INFO/DTMF over TCP IS reportable — the SYN-ACK proved the source is return-routable. */
     public function test_bare_info_dtmf_over_tcp_is_reportable(): void
     {
