@@ -67,7 +67,7 @@ final class PortManifestTest extends TestCase
         self::assertSame([], array_diff($m->publishes('compose'), $m->publishes('deploy')));
         self::assertLessThan(count($m->publishes('deploy')), count($m->publishes('compose')));
         self::assertSame($m->exposes(), PortManifest::sortedUnique($m->exposes()), 'EXPOSE view has no duplicates');
-        self::assertCount(40, $m->spawns(), 'one spawn line per listener process');
+        self::assertCount(41, $m->spawns(), 'one spawn line per listener process');
     }
 
     public function test_canonical_rendering_is_order_independent_and_idempotent(): void

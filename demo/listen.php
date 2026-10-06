@@ -43,6 +43,8 @@ use Funnypot\Protocol\Mssql\MssqlServer;
 use Funnypot\Protocol\Mqtt\MqttConfig;
 use Funnypot\Protocol\Mqtt\MqttServer;
 use Funnypot\Protocol\Snmp\SnmpConfig;
+use Funnypot\Protocol\Dns\DnsConfig;
+use Funnypot\Protocol\Dns\DnsServer;
 use Funnypot\Protocol\Snmp\SnmpServer;
 use Funnypot\Protocol\Ldap\LdapConfig;
 use Funnypot\Protocol\Ldap\LdapServer;
@@ -164,6 +166,13 @@ if ($protocol === 'vnc') {
 if ($protocol === 'sip') {
     $sipConfig = SipConfig::fromEnv($loadIdentity([SipIdentity::class, 'load']));
     (new SipServer($sipConfig, $log, null, null, null, $operatorBlock))->listen($bind);
+    exit(0);
+}
+
+// DNS honeypot (port 53, UDP+TCP): deceptive mirror/sinkhole answers, BIND CHAOS fingerprint, canary
+// AXFR zone, and a zero-amplification UDP clamp (reply never exceeds request). One $bind, both sockets.
+if ($protocol === 'dns') {
+    (new DnsServer(DnsConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 

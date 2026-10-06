@@ -105,6 +105,7 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn mssql       0.0.0.0:1433
     spawn mqtt        0.0.0.0:1883
     spawn snmp        0.0.0.0:161
+    spawn dns         0.0.0.0:53
     spawn ldap        0.0.0.0:389
     spawn s7comm      0.0.0.0:102
     spawn adb         0.0.0.0:5555
