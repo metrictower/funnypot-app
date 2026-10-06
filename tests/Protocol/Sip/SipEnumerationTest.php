@@ -21,6 +21,17 @@ use PHPUnit\Framework\TestCase;
  */
 final class SipEnumerationTest extends TestCase
 {
+    // FP-0483: UDP is capture-only by default; these cases assert positive SIP/2.0 wire replies, so opt in.
+    protected function setUp(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT');
+    }
+
     // --- SipConfig valid/invalid policy ---
 
     public function test_default_policy_accepts_numbers_and_allowlisted_names(): void
