@@ -207,6 +207,19 @@ path, owns and cleans its temporary storage, and exits 0 for success, 1 for meas
 argument/setup/harness/cleanup errors. Full schema,
 identity rules, limits and knobs: [`docs/ENGAGEMENT-METRICS.md`](docs/ENGAGEMENT-METRICS.md).
 
+**Prometheus `/metrics` (charting, OpenTelemetry-compatible names).** For trend/volume charting in a
+Prometheus → Grafana stack, `PrometheusMetricsRenderer` exposes the operator stats as a text-format
+exposition: `funnypot_events_total`, `funnypot_detections_total`, `funnypot_fakes_served_total`,
+`funnypot_payloads_captured_total` (counters), `funnypot_unique_source_ips` (gauge), and the bounded
+labelled series `funnypot_template_fired_total{template="…"}` + `funnypot_events_by_country_total{country="…"}`.
+It renders from the same cheap `stats()`/`widgets()` the dashboard feed uses (no full hit-store scan) and
+carries **bounded cardinality by construction** — raw source IPs are never emitted as labels (a PII +
+cardinality hazard). A starter Grafana dashboard is at
+[`demo/grafana/funnypot-overview.json`](demo/grafana/funnypot-overview.json). The scrape **endpoint** is
+operator-only and must be access-gated (trusted-peer, FP-0250 exposure-ceiling — never on the deception
+surface); that gated route is the integration step tracked in FP-0605. Example scrape config:
+`scrape_configs: [{ job_name: funnypot, metrics_path: /metrics, static_configs: [{ targets: ['admin.example:PORT'] }] }]`.
+
 Only the retention timer uses `SqliteEngagementStore::forMaintenance()` with a 3000 ms per-operation
 busy timeout; ordinary request/read instances retain 5 ms. Neither is an end-to-end cold-open deadline:
 the shared opener's earlier pragmas still use 3000 ms. A store constructed without an ID factory cannot

@@ -1,0 +1,53 @@
+{
+  "__comment": "FP-0349 starter Grafana dashboard for funnypot's Prometheus /metrics. Import via Grafana > Dashboards > New > Import, and point it at your Prometheus datasource (uid replaced on import). Metric names are the OTel-compatible funnypot_* series the PrometheusMetricsRenderer emits.",
+  "title": "funnypot — honeypot overview",
+  "uid": "funnypot-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["funnypot", "honeypot"],
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Total requests",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "funnypot_events_total", "legendFormat": "events" }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Unique source IPs",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "funnypot_unique_source_ips", "legendFormat": "ips" }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Payloads captured",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "funnypot_payloads_captured_total", "legendFormat": "captured" }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Detection rate",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "expr": "funnypot_detections_total / clamp_min(funnypot_events_total, 1)", "legendFormat": "detected/total" }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Request rate (per 5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "rate(funnypot_events_total[5m])", "legendFormat": "events" },
+        { "expr": "rate(funnypot_detections_total[5m])", "legendFormat": "detections" },
+        { "expr": "rate(funnypot_fakes_served_total[5m])", "legendFormat": "fakes served" }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Events by country (top, rate /1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [{ "expr": "topk(8, rate(funnypot_events_by_country_total[1h]))", "legendFormat": "{{country}}" }]
+    },
+    {
+      "id": 7, "type": "bargauge", "title": "Top detection templates",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 12 },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [{ "expr": "topk(12, funnypot_template_fired_total)", "legendFormat": "{{template}}" }]
+    }
+  ]
+}
