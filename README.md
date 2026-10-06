@@ -219,6 +219,19 @@ CVEs, attack classes and services this box pretends to be.
 
 ![emulation catalog toggles](docs/img/emulations.png)
 
+**Semi-blind file-write / verify trap (opt-in, `FUNNYPOT_WRITE_CAPTURE=1`).** Scanners confirm blind RCE
+by writing a sentinel to a webroot file (`echo TAG > /var/www/html/out.txt`) and then fetching it. With
+this on, that write is captured to a **bounded, TTL-expiring, memory-only ledger** (never the real disk)
+keyed by an opaque per-source scope, and a later GET of that path serves the scanner its own sentinel
+back — so the blind check "confirms". A dropped `.php` fetched **with a command** gets a persona-coherent
+PHP `disabled_functions` execution failure (present-but-inert, encouraging bypass) instead of real
+execution. Off by default: when unset, the request path is byte-identical.
+
+**WebDAV honeypot (opt-in, `FUNNYPOT_WEBDAV=1`).** An RFC-4918 WebDAV share at `/webdav/` that native
+clients (Finder, Windows WebClient, Cyberduck) and scanners can mount, browse (PROPFIND over the same
+deterministic fake filesystem the SSH shell serves), and mutate (PUT/GET/DELETE/MKCOL/MOVE/COPY/LOCK).
+Writes land in the same bounded capture ledger as above; nothing touches the real disk. Off by default.
+
 ---
 
 ## Quick start (Docker)
