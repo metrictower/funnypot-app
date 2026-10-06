@@ -234,6 +234,9 @@ final class AppConfig
         public int $attritionGlobalRows = 50000,
         /** Global logical retained-state bytes (MiB), clamped 1–64. */
         public int $attritionGlobalStateMb = 64,
+        /** FP-0467: the semi-blind file-write / verify trap (WriteCaptureStore). Opt-in, dedicated-box
+         *  only — off by default, so the handler stays byte-identical on every existing deployment. */
+        public bool $writeCapture = false,
     ) {
     }
 
@@ -460,6 +463,7 @@ final class AppConfig
             attritionMaxArtifacts: max(3, min(64, (int) $str('FUNNYPOT_ATTRITION_MAX_ARTIFACTS', '64'))),
             attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
             attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
+            writeCapture: in_array(strtolower((string) $env('FUNNYPOT_WRITE_CAPTURE')), ['1', 'on', 'true', 'yes'], true),
         );
     }
 }

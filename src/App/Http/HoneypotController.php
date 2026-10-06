@@ -18,6 +18,7 @@ use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
+use Funnypot\App\Storage\WriteCaptureTrap;
 use Funnypot\Core\RequestContext;
 use Geo;
 
@@ -41,6 +42,7 @@ final class HoneypotController
         private ?AttackClassifier $attackClassifier = null,
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
+        private ?WriteCaptureTrap $writeCaptureTrap = null,
     ) {
     }
 
@@ -295,6 +297,12 @@ final class HoneypotController
         // When a fake was served, log what it actually satisfied; else the detect() signal.
         $logged = $response !== null ? $response->satisfies : $detection;
 
+        // FP-0467: capture a semi-blind file-write stager (echo SENTINEL > /var/www/html/x.txt) so a later
+        // verify GET can serve the sentinel back. Null-safe + self-gating: off unless FUNNYPOT_WRITE_CAPTURE
+        // wired the trap, and a no-op for any non-write request. The write request still gets its normal
+        // attack-fake response above — this only records, never reflects on the write.
+        $this->writeCaptureTrap?->maybeCapture($context, $clientIp);
+
         // Fall-through only (engine matched nothing): an obvious attack payload aimed at a path we
         // have no template for would otherwise log as a plain 404 and go unreported. Classify it
         // (high-precision) so it is labelled for the dashboard and the attacker is still reported.
@@ -309,9 +317,17 @@ final class HoneypotController
         // as a dirbuster and get pinned. append() after the emit is safe (PHP runs on past output); the
         // narrow window where a fatal mid-emit loses the row is the store's standing best-effort posture.
         $decoyServed = false;
+        $captureServed = false;
         $llm = null;
         if ($response !== null) {
             ResponseEmitter::emit($response);
+        } elseif (($capture = $this->writeCaptureTrap?->maybeServe($context, $clientIp)) !== null) {
+            // FP-0467: a verify GET to a path this source earlier wrote — serve its own sentinel back so
+            // its blind write-then-fetch "confirms". Only on an engine miss, GET/HEAD-only (the trap
+            // checks), and only when the trap is wired (dedicated/isolated-origin box).
+            $this->serveDelay();
+            ResponseEmitter::emit($capture);
+            $captureServed = true;
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,
             // failed, or the responder being off) falls through to the believable plain 404.
@@ -337,7 +353,7 @@ final class HoneypotController
             'matched' => $logged->matched || $payloadClass !== null,
             'severity' => $payloadClass !== null ? AttackClassifier::severityFor($payloadClass) : $logged->highestSeverity,
             'templates' => $payloadClass !== null ? ['payload-' . $payloadClass] : array_slice($logged->templateIds(), 0, 8),
-            'served' => $response !== null || $decoyServed || $llm !== null,
+            'served' => $response !== null || $decoyServed || $captureServed || $llm !== null,
             'style' => $this->config->style,
             'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
             'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
