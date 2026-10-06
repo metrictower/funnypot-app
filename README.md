@@ -350,7 +350,9 @@ engine. The SSH server, the VoIP PBX, the TCP protocol emulators and the dashboa
 ## The deep admin panel
 
 On an admin-shaped path (`/admin`, `/panel/…`, `/dashboard`, `/manage`, `/console`, `/cp`, `/wp-admin`,
-`/phpmyadmin`, `/grafana`, …) the LLM tier serves a **deep, explorable fake corporate office panel** — the
+`/phpmyadmin`, `/grafana`, …) — **or on the root path when the request lands by bare IP** (no hostname /
+IP-literal `Host` / no SNI, i.e. a scanner that found the box by address, not DNS; FP-0049) — the LLM tier
+serves a **deep, explorable fake corporate office panel** — the
 marquee lure, built for *hours* of exploration. It renders **deterministically from a seeded skin, with no
 model call**, so it is always available (never blocked on the sidecar) and byte-identical per deploy. A
 dev-style **debug-mode banner** ("bound to `0.0.0.0`, auth off") rides every page to explain — in-narrative

@@ -68,6 +68,53 @@ final class LlmFakeResponder
         return $response;
     }
 
+    /**
+     * FP-0049: render the deep admin-panel LANDING for a request that arrived by bare IP (no hostname),
+     * even though its real path is `/` (not a panel mount). The panel is rendered for $mountPath (e.g.
+     * `/admin`) via the same deterministic skin as a normal panel nav, but the hit is LOGGED at the REAL
+     * path ($realCtx->path, i.e. `/`) with the `panel` category — never a fabricated `/admin`. Returns null
+     * (caller falls through to the normal flow) if no panel skin is wired or the body fails the sanitizer;
+     * any fault degrades to null (the only-ever-upgrade-a-404 invariant). Does not touch the byte-identical
+     * cache (a single root landing is a cheap deterministic render) or the hot respond()/attempt() path.
+     */
+    public function renderPanelLanding(RequestContext $realCtx, string $mountPath, string $clientIp): ?SynthesizedResponse
+    {
+        try {
+            $effective = clone $realCtx;
+            $effective->path = $mountPath;
+            $profile = $this->profiles->resolve($mountPath);
+            if ($profile->renderer === null || !$profile->renderer->matchesProductSkin($mountPath)) {
+                return null; // no panel skin available on this deploy
+            }
+            $fake = null;
+            if ($this->persistence !== null) {
+                $fake = new FakePersistence($this->persistence, $clientIp, $this->personaSeed);
+                $fake->capture($effective);
+            }
+            $body = $profile->renderer->render(
+                PageSlots::fromArray([]),
+                VisualPersona::fromSeed($this->personaSeed),
+                $effective,
+                $fake
+            );
+            if (!$this->sanitizer->pageBodyOk($body, true)) {
+                return null; // defensive: our own chrome should always pass
+            }
+            $response = $this->build(200, $profile->contentType, $body);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        try {
+            // Log the REAL path (`/`) but the panel CATEGORY (derived from $mountPath).
+            $this->logServed($realCtx, $clientIp, $response, $mountPath);
+        } catch (\Throwable $e) {
+            // best-effort
+        }
+
+        return $response;
+    }
+
     private function attempt(RequestContext $context, string $clientIp): ?SynthesizedResponse
     {
         $key = PathNormalizer::key($context->method, $context->path);
@@ -247,14 +294,17 @@ final class LlmFakeResponder
         return 200;
     }
 
-    private function logServed(RequestContext $context, string $clientIp, SynthesizedResponse $response): void
+    private function logServed(RequestContext $context, string $clientIp, SynthesizedResponse $response, ?string $categoryPath = null): void
     {
         // Tag deep-panel navigation as its own dashboard category ('panel') so the operator can filter all
         // fake-admin-panel activity as a unit — the same way SSH/telnet commands are filtered — instead of
         // it disappearing into the generic 'llm-fake' long tail. The logged path still drills down by
         // section (a `q` search on `/admin/bank` etc.). A non-panel LLM fake stays 'llm-fake'.
-        $profile = $this->profiles->resolve($context->path);
-        $isPanel = $profile->renderer !== null && $profile->renderer->matchesProductSkin($context->path);
+        // Category is derived from $categoryPath when given (FP-0049: a bare-IP landing renders /admin but is
+        // logged at the real path /, so the panel category must come from the render path, not the stored one).
+        $catPath = $categoryPath ?? $context->path;
+        $profile = $this->profiles->resolve($catPath);
+        $isPanel = $profile->renderer !== null && $profile->renderer->matchesProductSkin($catPath);
 
         $this->store->append([
             'ts' => gmdate('c'),

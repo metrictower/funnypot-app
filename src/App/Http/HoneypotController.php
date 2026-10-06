@@ -224,6 +224,30 @@ final class HoneypotController
         return false;
     }
 
+    /**
+     * FP-0049: true when the Host names no hostname — empty, or an IPv4/IPv6 LITERAL (optionally bracketed /
+     * with :port). `inet_pton` is authoritative: any FQDN (incl. the LE hostname and a trailing-dot name),
+     * `localhost`, or any single-label internal name fails it ⇒ NOT bare-IP, so the SNI/LE split is untouched.
+     * A bare IPv6 literal (e.g. `2001:db8::1`) contains hex letters, so NO alpha-label heuristic is used.
+     */
+    public static function isBareIpHost(string $host): bool
+    {
+        $host = trim($host);
+        if ($host === '') {
+            return true;
+        }
+        if ($host[0] === '[') {                       // [::1] or [2001:db8::1]:443
+            $end = strpos($host, ']');
+            if ($end !== false) {
+                $host = substr($host, 1, $end - 1);
+            }
+        } elseif (substr_count($host, ':') === 1) {   // host:port (v4 or FQDN); a v6 literal has >=2 colons
+            $host = substr($host, 0, (int) strpos($host, ':'));
+        }
+
+        return @inet_pton($host) !== false;
+    }
+
     /** Run the probe through the engine, log it, and emit a fake / decoy archive / believable 404. */
     public function handle(RequestContext $context, string $clientIp, string $tokenVerdict): void
     {
@@ -274,6 +298,27 @@ final class HoneypotController
         // and reported; only a plain product-detection reflection loses to the panel. Root-anchored on
         // purpose: a mount that appears deeper (/wp-admin/admin.php) belongs to a product emulator the
         // engine owns, not to us.
+        // FP-0049: a request that lands by BARE IP (no hostname / IP-literal Host / no SNI — a scanner that
+        // found the box by address, not DNS) is dropped into the deep fake admin panel ("you found the admin
+        // box"), even at the root path. A named host (incl. the LE hostname) never matches isBareIpHost, so
+        // the SNI/LE split is untouched. Yields to a genuine attack payload exactly like the mount branch
+        // below (don't mask SQLi/RCE). The landing renders the panel for /admin but logs the real path /.
+        if ($this->llmFakes !== null
+            && self::isBareIpHost($context->host)
+            && ($context->path === '/' || $context->path === '')
+            && !in_array('attack', $detection->tags(), true)
+            // Don't mask an attack the engine didn't tag on `/` but the fall-through classifier would
+            // (e.g. a ${jndi:} in the query): yield to the engine/classifier so it's still reported.
+            && ($this->attackClassifier === null || $this->attackClassifier->classify($context) === null)) {
+            $landing = $this->llmFakes->renderPanelLanding($context, '/admin', $clientIp);
+            if ($landing !== null) {
+                $this->serveDelay();
+                ResponseEmitter::emit($landing);
+
+                return;
+            }
+        }
+
         if ($this->llmFakes !== null
             && PanelRoute::mountedAtRoot($context->path)
             && !in_array('attack', $detection->tags(), true)) {
