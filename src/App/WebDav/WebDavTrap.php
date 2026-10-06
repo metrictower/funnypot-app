@@ -71,8 +71,11 @@ final class WebDavTrap
             case 'UNLOCK':
                 return $this->simple(204, '');
             case 'MOVE':
+                return $this->move($context, $scope, $path, true);
             case 'COPY':
-                return $this->simple(201, '');
+                return $this->move($context, $scope, $path, false);
+            case 'PROPPATCH':
+                return $this->proppatch($path);
             default:
                 return null; // let the normal pipeline answer non-WebDAV verbs
         }
@@ -144,6 +147,59 @@ final class WebDavTrap
             'Content-Type' => 'application/xml; charset=utf-8',
             'Lock-Token' => '<' . $token . '>',
         ], $xml, Detection::none());
+    }
+
+    /** MOVE (deleteSrc=true) / COPY (false) a captured file to the Destination, operating on the store. */
+    private function move(RequestContext $context, string $scope, string $src, bool $deleteSrc): SynthesizedResponse
+    {
+        $dest = $this->destPath($context);
+        if ($dest === null) {
+            return $this->simple(400, "Bad Request\n");
+        }
+        $hit = $this->store->verify($scope, $src);
+        if ($hit === null) {
+            return $this->simple(404, "Not Found\n");
+        }
+        $existed = $this->store->verify($scope, $dest) !== null;
+        $this->store->capture($scope, $dest, $hit['content'], $hit['content_type']);
+        if ($deleteSrc) {
+            $this->store->remove($scope, $src);
+        }
+
+        return $this->simple($existed ? 204 : 201, '');
+    }
+
+    /** PROPPATCH: pretend every requested property was set (207, all 200 OK). */
+    private function proppatch(string $path): SynthesizedResponse
+    {
+        $href = htmlspecialchars($path, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+        $xml = '<?xml version="1.0" encoding="utf-8"?>' . "\n"
+            . '<D:multistatus xmlns:D="DAV:"><D:response><D:href>' . $href . '</D:href>'
+            . '<D:propstat><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>' . "\n";
+
+        return new SynthesizedResponse(207, ['Content-Type' => 'application/xml; charset=utf-8'], $xml, Detection::none());
+    }
+
+    /** The WebDAV Destination header as a canonical path (scheme/host stripped), or null if absent/invalid. */
+    private function destPath(RequestContext $context): ?string
+    {
+        $d = trim((string) ($context->headers['Destination'] ?? ''));
+        if ($d === '') {
+            return null;
+        }
+        $d = (string) preg_replace('~^[a-z][a-z0-9+.\-]*://[^/]+~i', '', $d);
+        $d = rawurldecode($d);
+        if ($d === '' || $d[0] !== '/') {
+            return null;
+        }
+        $p = $this->canon($d);
+
+        return $this->claimsPath($p) ? $p : null;
+    }
+
+    private function claimsPath(string $p): bool
+    {
+        return $p === self::MOUNT || strncmp($p, self::MOUNT . '/', strlen(self::MOUNT) + 1) === 0;
     }
 
     private function simple(int $status, string $body): SynthesizedResponse

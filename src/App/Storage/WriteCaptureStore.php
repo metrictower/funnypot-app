@@ -162,6 +162,26 @@ final class WriteCaptureStore
         }
     }
 
+    /** Remove a source's captured file (for a WebDAV MOVE/DELETE). Fail-open to false; never throws. */
+    public function remove(string $scope, string $path): bool
+    {
+        if ($scope === '' || $path === '') {
+            return false;
+        }
+        try {
+            $db = $this->db();
+            if ($db === null) {
+                return false;
+            }
+            $del = $db->prepare('DELETE FROM captures WHERE scope = :s AND path = :p');
+            $del->execute([':s' => $scope, ':p' => $path]);
+
+            return $del->rowCount() > 0;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     private function countScope(PDO $db, string $scope, int $now): int
     {
         $st = $db->prepare('SELECT COUNT(*) FROM captures WHERE scope = :s AND expires_at >= :now');

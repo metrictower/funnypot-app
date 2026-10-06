@@ -122,6 +122,51 @@ final class WebDavTrapTest extends TestCase
         self::assertStringContainsString('opaquelocktoken:', $r->headers['Lock-Token'] ?? '');
     }
 
+    public function test_move_relocates_a_captured_file(): void
+    {
+        $t = $this->trap();
+        $t->handle($this->req('PUT', '/webdav/a.txt', 'payload'), '10.0.0.1');
+        $mv = $t->handle($this->req('MOVE', '/webdav/a.txt', '', ['Destination' => 'http://x.test/webdav/b.txt']), '10.0.0.1');
+        self::assertNotNull($mv);
+        self::assertContains($mv->status, [201, 204]);
+        self::assertSame('payload', $t->handle($this->req('GET', '/webdav/b.txt'), '10.0.0.1')->body, 'dest has the content');
+        self::assertSame(404, $t->handle($this->req('GET', '/webdav/a.txt'), '10.0.0.1')->status, 'src is gone after MOVE');
+    }
+
+    public function test_copy_duplicates_a_captured_file(): void
+    {
+        $t = $this->trap();
+        $t->handle($this->req('PUT', '/webdav/a.txt', 'dup'), '10.0.0.1');
+        $t->handle($this->req('COPY', '/webdav/a.txt', '', ['Destination' => '/webdav/c.txt']), '10.0.0.1');
+        self::assertSame('dup', $t->handle($this->req('GET', '/webdav/c.txt'), '10.0.0.1')->body);
+        self::assertSame('dup', $t->handle($this->req('GET', '/webdav/a.txt'), '10.0.0.1')->body, 'src still present after COPY');
+    }
+
+    public function test_move_missing_source_is_404(): void
+    {
+        $r = $this->trap()->handle($this->req('MOVE', '/webdav/nope.txt', '', ['Destination' => '/webdav/x.txt']), '10.0.0.1');
+        self::assertSame(404, $r->status);
+    }
+
+    public function test_move_without_destination_is_400(): void
+    {
+        $t = $this->trap();
+        $t->handle($this->req('PUT', '/webdav/a.txt', 'x'), '10.0.0.1');
+        self::assertSame(400, $t->handle($this->req('MOVE', '/webdav/a.txt'), '10.0.0.1')->status);
+    }
+
+    public function test_proppatch_pretends_success(): void
+    {
+        $r = $this->trap()->handle($this->req('PROPPATCH', '/webdav/a.txt', '<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><Z:x xmlns:Z="z:">1</Z:x></D:prop></D:set></D:propertyupdate>'), '10.0.0.1');
+        self::assertNotNull($r);
+        self::assertSame(207, $r->status);
+        self::assertStringContainsString('HTTP/1.1 200 OK', $r->body);
+        $prev = libxml_use_internal_errors(true);
+        $doc = simplexml_load_string($r->body);
+        libxml_use_internal_errors($prev);
+        self::assertNotFalse($doc);
+    }
+
     public function test_propfind_depth_0_returns_only_the_collection(): void
     {
         $t = $this->trap();
