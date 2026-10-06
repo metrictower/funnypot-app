@@ -149,19 +149,41 @@ final class SmtpSessionTest extends TestCase
         self::assertStringStartsWith('503', $s->feed('RCPT TO:<d@e.f>'));
     }
 
-    public function testOversizeMessageIsRejected(): void
+    public function testMessageUnderAdvertisedSizeIsAccepted(): void
+    {
+        // EHLO advertises SIZE 10240000; a ~2 MB message is well under it and must NOT be 552'd.
+        $s = $this->sess();
+        self::assertStringContainsString('SIZE 10240000', $s->feed('EHLO x'));
+        $s->feed('MAIL FROM:<a@b.c>');
+        $s->feed('RCPT TO:<d@e.f>');
+        $s->feed('DATA');
+        $chunk = str_repeat('A', 4096);
+        for ($i = 0; $i < 500; $i++) { // ~2 MB, under the advertised 10 MB
+            self::assertSame('', $s->feed($chunk));
+        }
+        self::assertStringStartsWith('250 2.0.0 Ok: queued as ', $s->feed('.'));
+    }
+
+    public function testOversizeMessageIsRejectedAndClosed(): void
     {
         $s = $this->sess();
         $s->feed('EHLO x');
         $s->feed('MAIL FROM:<a@b.c>');
         $s->feed('RCPT TO:<d@e.f>');
         $s->feed('DATA');
-        $chunk = str_repeat('A', 4096);
-        for ($i = 0; $i < 300; $i++) { // ~1.2 MiB > 1 MiB ceiling
-            self::assertSame('', $s->feed($chunk));
+        $chunk = str_repeat('A', 8192);
+        $hit552 = false;
+        for ($i = 0; $i < 1400; $i++) { // ~11 MB > 10240000 ceiling
+            $r = $s->feed($chunk);
+            if ($r !== '') {
+                self::assertStringStartsWith('552', $r); // refused mid-stream, not after a dot
+                $hit552 = true;
+                break;
+            }
         }
-        self::assertStringStartsWith('552', $s->feed('.'));
-        self::assertCount(0, $s->messages()); // oversize message is not retained
+        self::assertTrue($hit552, 'expected a 552 once the body crossed the advertised SIZE');
+        self::assertTrue($s->closed());           // connection dropped (bounds a no-dot flood)
+        self::assertCount(0, $s->messages());      // oversize message is not retained
     }
 
     /** End-to-end through the emulator: engine:smtp dispatch, byte stream in, intel via onRequest. */
@@ -191,16 +213,78 @@ final class SmtpSessionTest extends TestCase
         self::assertTrue($s->close);
     }
 
-    public function testQueueIdIsDeterministicPerSeed(): void
+    public function testQueueIdVariesPerConnectionNonce(): void
     {
-        $mk = function (): string {
-            $s = new SmtpSession(777, 'h');
+        $mk = function (string $nonce): string {
+            $s = new SmtpSession(777, 'h', $nonce);
             $s->feed('EHLO x');
             $s->feed('MAIL FROM:<a@b.c>');
             $s->feed('RCPT TO:<d@e.f>');
             $s->feed('DATA');
             return $s->feed('.');
         };
-        self::assertSame($mk(), $mk()); // same seed -> same queue id
+        // Same seed+nonce -> deterministic (unit-test reproducibility).
+        self::assertSame($mk('n1'), $mk('n1'));
+        // Different per-connection nonce (what the emulator injects) -> different queue id, so two
+        // connections from one source IP (identical seed) never reuse an id — no real MTA does.
+        self::assertNotSame($mk('n1'), $mk('n2'));
+    }
+
+    public function testNestedMailIsRejected(): void
+    {
+        $s = $this->sess();
+        $s->feed('EHLO x');
+        self::assertStringStartsWith('250', $s->feed('MAIL FROM:<a@b.c>'));
+        self::assertStringStartsWith('503', $s->feed('MAIL FROM:<x@y.z>')); // nested MAIL
+    }
+
+    public function testAuthRequiresGreetingAndNoTransaction(): void
+    {
+        // AUTH before HELO/EHLO -> 503 (Postfix only offers AUTH after EHLO).
+        $s1 = $this->sess();
+        self::assertStringStartsWith('503', $s1->feed('AUTH LOGIN'));
+
+        // AUTH mid-transaction -> 503.
+        $s2 = $this->sess();
+        $s2->feed('EHLO x');
+        $s2->feed('MAIL FROM:<a@b.c>');
+        self::assertStringStartsWith('503', $s2->feed('AUTH LOGIN'));
+
+        // AUTH after EHLO, no transaction -> proceeds to the 334 challenge.
+        $s3 = $this->sess();
+        $s3->feed('EHLO x');
+        self::assertStringStartsWith('334', $s3->feed('AUTH LOGIN'));
+    }
+
+    public function testStarttlsIsAnUnknownVerbNot454(): void
+    {
+        // STARTTLS is not advertised; answering it as a known-but-unavailable verb (454) would be a
+        // presence tell. It must read as an unrecognized command.
+        $s = $this->sess();
+        $s->feed('EHLO x');
+        $reply = $s->feed('STARTTLS');
+        self::assertStringStartsWith('502', $reply);
+        self::assertStringNotContainsString('454', $reply);
+    }
+
+    /** L4: a DATA body longer than the command cap must still be accepted (not force-closed). */
+    public function testLargeBodyIsNotTruncatedByRequestCap(): void
+    {
+        $emulator = new ProtocolEmulator(['framing' => 'line', 'engine' => 'smtp'], null, 7);
+        $s = new ProtocolSession(7);
+        $emulator->banner($s);
+        $emulator->feed("EHLO scanner\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<d@e.f>\r\nDATA\r\n", $s);
+
+        // 900 body lines — well past the 500 command cap. Feed line by line.
+        $wire = '';
+        for ($i = 0; $i < 900; $i++) {
+            $wire .= 'spam body line ' . $i . "\r\n";
+        }
+        $out = $emulator->feed($wire, $s);
+        self::assertSame('', $out);             // server stays silent during the body
+        self::assertFalse($s->close);            // NOT force-closed mid-body
+
+        $end = $emulator->feed(".\r\n", $s);
+        self::assertStringStartsWith('250 2.0.0 Ok: queued as ', $end); // full message accepted
     }
 }

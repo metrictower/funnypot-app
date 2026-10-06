@@ -38,11 +38,15 @@ final class SmtpSession
 
     // Bounds — a hostile client must not grow memory or loop us. The emulator also caps total
     // requests and raw buffer; these cap what this engine itself retains.
-    private const MAX_RCPT = 100;          // recipients per message before 452
-    private const MAX_BODY_BYTES = 1048576; // 1 MiB message ceiling before 552
-    private const MAX_BODY_KEEP = 65536;    // bytes of body actually retained for intel
-    private const MAX_MESSAGES = 10;        // completed messages retained per connection
-    private const MAX_AUTH = 50;            // harvested auth attempts retained per connection
+    private const MAX_RCPT = 100;            // recipients per message before 452
+    // Message ceiling == the SIZE value advertised in EHLO, so a message under the advertised
+    // limit is never rejected (a contradiction a scanner reads as a tell). Only MAX_BODY_KEEP of
+    // it is ever retained in memory, so the 10 MB ceiling costs no memory.
+    private const MAX_BODY_BYTES = 10240000; // == EHLO "SIZE 10240000"; past it -> 552 + close
+    private const MAX_BODY_KEEP = 65536;     // bytes of body actually retained for intel
+    private const MAX_FIELD_KEEP = 512;      // cap on a retained address / credential string
+    private const MAX_MESSAGES = 10;         // completed messages retained per connection
+    private const MAX_AUTH = 50;             // harvested auth attempts retained per connection
 
     private string $phase = self::P_GREET;
     private string $authStage = self::A_NONE;
@@ -54,7 +58,6 @@ final class SmtpSession
     private array $rcptTo = [];
     private string $body = '';
     private int $bodyBytes = 0;
-    private bool $bodyOverflow = false;
 
     private string $pendingAuthUser = '';
 
@@ -71,8 +74,18 @@ final class SmtpSession
 
     public function __construct(
         private int $seed = 0,
-        private string $host = 'mail.example.com'
+        private string $host = 'mail.example.com',
+        // Per-connection nonce folded into the queue id so two connections from the same source
+        // (whose $seed is identical) never produce the same id — no real MTA reuses a queue id.
+        // Defaults to '' for deterministic unit tests; the emulator injects a random value.
+        private string $nonce = ''
     ) {
+    }
+
+    /** True while collecting a DATA body (so the caller need not count body lines as commands). */
+    public function inData(): bool
+    {
+        return $this->phase === self::P_DATA;
     }
 
     /** Bytes to send the instant the connection opens. */
@@ -164,6 +177,9 @@ final class SmtpSession
                 if ($this->phase === self::P_GREET) {
                     return '503 5.5.1 Error: send HELO/EHLO first' . "\r\n";
                 }
+                if ($this->phase === self::P_MAIL || $this->phase === self::P_RCPT) {
+                    return '503 5.5.1 Error: nested MAIL command' . "\r\n";
+                }
                 if (stripos($args, 'FROM:') !== 0) {
                     return '501 5.5.4 Syntax: MAIL FROM:<address>' . "\r\n";
                 }
@@ -195,7 +211,6 @@ final class SmtpSession
                 $this->phase = self::P_DATA;
                 $this->body = '';
                 $this->bodyBytes = 0;
-                $this->bodyOverflow = false;
 
                 return '354 End data with <CR><LF>.<CR><LF>' . "\r\n";
 
@@ -220,9 +235,9 @@ final class SmtpSession
             case 'HELP':
                 return '214 2.0.0 See https://www.postfix.org/' . "\r\n";
 
-            case 'STARTTLS':
-                // Not advertised and not serviceable: refuse so the client stays in plaintext.
-                return '454 4.7.0 TLS not available due to temporary reason' . "\r\n";
+            // STARTTLS is intentionally NOT handled here: it is not advertised in EHLO, so a server
+            // without TLS answers it as an unknown verb (502 via default). Answering 454 ("try
+            // later") would instead confirm the verb exists — a presence tell. Falls through.
 
             case 'QUIT':
                 $this->closed = true;
@@ -261,17 +276,33 @@ final class SmtpSession
     {
         $raw = trim($raw);
         if (preg_match('/<([^>]*)>/', $raw, $m) === 1) {
-            return $m[1];
+            return $this->capField($m[1]);
         }
         // No angle brackets: take the first whitespace-delimited token (drop ESMTP params).
         $sp = strpos($raw, ' ');
 
-        return $sp === false ? $raw : substr($raw, 0, $sp);
+        return $this->capField($sp === false ? $raw : substr($raw, 0, $sp));
+    }
+
+    /** Cap a retained address/credential string so a hostile client can't retain unbounded bytes. */
+    private function capField(string $s): string
+    {
+        return strlen($s) > self::MAX_FIELD_KEEP ? substr($s, 0, self::MAX_FIELD_KEEP) : $s;
     }
 
     /** Begin an AUTH exchange. Supports inline `AUTH PLAIN <b64>`, and staged LOGIN/PLAIN. */
     private function beginAuth(string $args): string
     {
+        // Postfix only offers AUTH after EHLO and not inside a mail transaction. Matching that
+        // sequencing is a realism win and costs no harvest: a client that intends to authenticate
+        // learns AUTH is available only from the EHLO reply, so it EHLOs first anyway.
+        if ($this->phase === self::P_GREET) {
+            return '503 5.5.1 Error: send HELO/EHLO first' . "\r\n";
+        }
+        if ($this->phase === self::P_MAIL || $this->phase === self::P_RCPT) {
+            return '503 5.5.1 Error: MAIL transaction in progress' . "\r\n";
+        }
+
         $sp = strpos($args, ' ');
         $mech = strtoupper($sp === false ? $args : substr($args, 0, $sp));
         $initial = $sp === false ? '' : trim(substr($args, $sp + 1));
@@ -344,6 +375,8 @@ final class SmtpSession
 
     private function recordAuth(string $user, string $pass, string $mechanism): void
     {
+        $user = $this->capField($user);
+        $pass = $this->capField($pass);
         if (count($this->authAttempts) < self::MAX_AUTH) {
             $this->authAttempts[] = ['user' => $user, 'pass' => $pass, 'mechanism' => $mechanism];
         }
@@ -366,9 +399,16 @@ final class SmtpSession
 
         $this->bodyBytes += strlen($line) + 2; // + CRLF
         if ($this->bodyBytes > self::MAX_BODY_BYTES) {
-            $this->bodyOverflow = true;
+            // Past the advertised SIZE: refuse and drop the connection. Doing it here (not after the
+            // terminating dot) bounds a body that never sends a dot — the caller stops counting body
+            // lines as commands, so this is the backstop against an endless no-dot DATA flood.
+            $this->resetTransaction();
+            $this->phase = self::P_READY;
+            $this->closed = true;
+
+            return '552 5.3.4 Error: message too big for system' . "\r\n";
         }
-        if (!$this->bodyOverflow && strlen($this->body) < self::MAX_BODY_KEEP) {
+        if (strlen($this->body) < self::MAX_BODY_KEEP) {
             $this->body .= $line . "\r\n";
         }
 
@@ -377,7 +417,6 @@ final class SmtpSession
 
     private function finishMessage(): string
     {
-        $overflow = $this->bodyOverflow;
         $from = $this->mailFrom;
         $rcpt = $this->rcptTo;
         $bytes = $this->bodyBytes;
@@ -385,10 +424,6 @@ final class SmtpSession
 
         $this->resetTransaction();
         $this->phase = self::P_READY;
-
-        if ($overflow) {
-            return '552 5.3.4 Error: message too big for system' . "\r\n";
-        }
 
         $id = $this->queueId();
         if (count($this->messages) < self::MAX_MESSAGES) {
@@ -406,15 +441,15 @@ final class SmtpSession
         $this->rcptTo = [];
         $this->body = '';
         $this->bodyBytes = 0;
-        $this->bodyOverflow = false;
     }
 
-    /** Deterministic, Postfix-style long queue id (seed-derived so it is stable per connection). */
+    /** Postfix-style long queue id. Varies per message (counter) and per connection (nonce), so no
+     *  two connections — even from one source IP, whose $seed is identical — ever collide. */
     private function queueId(): string
     {
         $this->msgCounter++;
         $alphabet = '0123456789ABCDFGHJKLMNPQRSTVWXYZ';
-        $h = hash('sha256', $this->seed . '|smtp-queue|' . $this->msgCounter);
+        $h = hash('sha256', $this->seed . '|' . $this->nonce . '|smtp-queue|' . $this->msgCounter);
         $out = '4'; // Postfix long queue ids commonly begin with the epoch-base radix digit
         for ($i = 0; $i < 10; $i++) {
             $out .= $alphabet[hexdec($h[$i * 2] . $h[$i * 2 + 1]) % strlen($alphabet)];

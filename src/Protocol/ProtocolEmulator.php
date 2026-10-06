@@ -165,7 +165,14 @@ final class ProtocolEmulator
         $engine = $this->smtpEngine($s);
         $out = '';
         foreach ($this->codec->extract($s->buffer) as $line) {
-            $s->requests++;
+            // A DATA body line is not a command: counting it against MAX_REQUESTS would truncate a
+            // large (but legitimate) message the honeypot wants to capture whole. The body is bounded
+            // by the engine's own byte ceiling (552 + close past it), so the request cap stays a
+            // backstop for command-loop abuse only.
+            $inData = $engine->inData();
+            if (!$inData) {
+                $s->requests++;
+            }
             $response = $engine->feed($line);
             $out .= $response;
             if ($onRequest !== null) {
@@ -177,7 +184,7 @@ final class ProtocolEmulator
             if ($engine->closed()) {
                 $s->close = true;
             }
-            if ($s->close || $s->requests >= self::MAX_REQUESTS) {
+            if ($s->close || (!$inData && $s->requests >= self::MAX_REQUESTS)) {
                 $s->close = true;
                 break;
             }
@@ -189,7 +196,10 @@ final class ProtocolEmulator
     private function smtpEngine(ProtocolSession $s): SmtpSession
     {
         if (!$s->engineState instanceof SmtpSession) {
-            $s->engineState = new SmtpSession($s->seed, $this->hostId()->hostname());
+            // A random per-connection nonce so the queue id never repeats across connections (the
+            // per-attacker seed alone would, since it is stable per source IP).
+            $nonce = bin2hex(random_bytes(6));
+            $s->engineState = new SmtpSession($s->seed, $this->hostId()->hostname(), $nonce);
         }
 
         return $s->engineState;

@@ -9,4 +9,6 @@ framing: line
 # as an obvious tell. The engine also harvests AUTH credentials and captures the message body.
 # It NEVER stores or relays real mail (no open relay) and NEVER executes anything.
 engine: smtp
-banner: "220 mail.example.com ESMTP Postfix (Ubuntu)\r\n"
+# No `banner:` here — the engine emits its own 220 greeting from this box's seeded hostname, so
+# the SMTP banner host matches the hostname the telnet/ssh prompt and uname show (cross-protocol
+# coherence). A hardcoded banner host would contradict them.

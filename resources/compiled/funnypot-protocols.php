@@ -831,8 +831,7 @@ db0:keys=3,expires=0,avg_ttl=0',
       1 => 'smtp',
       2 => 'mail',
     ),
-    'banner' => '220 mail.example.com ESMTP Postfix (Ubuntu)
-',
+    'banner' => '',
     'framing' => 'line',
     'rules' => 
     array (
