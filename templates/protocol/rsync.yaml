@@ -1,3 +1,5 @@
+# SUPERSEDED AT RUNTIME by the coded src/Protocol/Rsync (FP-0164) — port 873 dispatches to RsyncServer,
+# not this stub. Retained so CatalogCompiler keeps the service-rsync toggle/advertisement; rules/banner below are dead.
 protocol: rsync
 listen: [873]
 severity: medium

@@ -43,6 +43,8 @@ use Funnypot\Protocol\Mssql\MssqlServer;
 use Funnypot\Protocol\Mqtt\MqttConfig;
 use Funnypot\Protocol\Mqtt\MqttServer;
 use Funnypot\Protocol\Snmp\SnmpConfig;
+use Funnypot\Protocol\Rsync\RsyncConfig;
+use Funnypot\Protocol\Rsync\RsyncServer;
 use Funnypot\Protocol\Snmp\SnmpServer;
 use Funnypot\Protocol\Ldap\LdapConfig;
 use Funnypot\Protocol\Ldap\LdapServer;
@@ -187,6 +189,13 @@ if ($protocol === 'smb') {
 // full attacker command while staying 100% inert. FUNNYPOT_MSSQL_MODE=low restores the deny path.
 if ($protocol === 'mssql') {
     (new MssqlServer(MssqlConfig::fromEnv($personaMaterial()), $log))->run($bind);
+    exit(0);
+}
+
+// rsync daemon honeypot (port 873): coded module enumeration + access + arg capture (supersedes the
+// templates/protocol/rsync.yaml stub at runtime). Inert, zero-disk; binary file transfer is FP-0608.
+if ($protocol === 'rsync') {
+    (new RsyncServer(RsyncConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 
