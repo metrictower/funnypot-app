@@ -19,6 +19,7 @@ use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\App\Storage\WriteCaptureTrap;
+use Funnypot\App\Emulation\CmdiExecutionPhaseTrap;
 use Funnypot\Core\RequestContext;
 use Geo;
 
@@ -43,6 +44,7 @@ final class HoneypotController
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
         private ?WriteCaptureTrap $writeCaptureTrap = null,
+        private ?CmdiExecutionPhaseTrap $cmdiExecTrap = null,
     ) {
     }
 
@@ -266,6 +268,30 @@ final class HoneypotController
         // runs respond + gate-open + isolated-origin (below), the posture this decoy is scoped to.
         $this->sleepDecoy?->maybeDelay($context, $clientIp);
 
+        // FP-0531: the stateful Commix cmdi execution-phase oracle. A follow-up whose tag pair this source
+        // earlier CONFIRMED (bound below) gets its recon output bracketed in those tags — served BEFORE the
+        // engine so it pre-empts the stateless cmdi oracle's unbracketed answer (the scanner needs the tags
+        // around the output to extract it). Null-safe + self-gating: off unless FUNNYPOT_CMDI_EXEC_PHASE
+        // wired the trap, and null for any non-follow-up / unbound request.
+        $execPhase = $this->cmdiExecTrap?->maybeExecute($context, $clientIp);
+        if ($execPhase !== null) {
+            $this->serveDelay();
+            ResponseEmitter::emit($execPhase);
+            $this->store->append([
+                'ts' => gmdate('c'), 'ip' => $clientIp, 'method' => $context->method,
+                'path' => substr($context->path, 0, 200), 'ua' => substr($context->headers['User-Agent'] ?? '', 0, 160),
+                'matched' => true, 'severity' => 'critical', 'templates' => ['cmdi-exec-phase'],
+                'served' => true, 'style' => $this->config->style,
+                'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
+                'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
+                'log4shell' => null, 'honeytoken' => $tokenVerdict !== 'off' ? $tokenVerdict : null,
+                'geo' => $this->geo->lookup($clientIp), 'known_attacker' => $this->known($clientIp),
+            ]);
+            $this->maybeReport(true, $clientIp, $context, 'cmdi');
+
+            return;
+        }
+
         // The honeypot's own admin panel (/admin, /dashboard, … mounted at the path root, and every
         // sub-path) is a deep-engagement lure and must be served by the panel emulator and logged as
         // 'panel'. The engine's nuclei-reflection corpus also matches these bare mount segments and would
@@ -302,6 +328,11 @@ final class HoneypotController
         // wired the trap, and a no-op for any non-write request. The write request still gets its normal
         // attack-fake response above — this only records, never reflects on the write.
         $this->writeCaptureTrap?->maybeCapture($context, $clientIp);
+
+        // FP-0531: bind this source's Commix tag pair on an arithmetic CONFIRM probe (the engine serves the
+        // confirm sum above; this only records the tags for a later execute follow-up). Null-safe + no-op
+        // for a non-confirm request.
+        $this->cmdiExecTrap?->maybeBind($context, $clientIp);
 
         // Fall-through only (engine matched nothing): an obvious attack payload aimed at a path we
         // have no template for would otherwise log as a plain 404 and go unreported. Classify it

@@ -395,7 +395,15 @@ $writeCaptureTrap = $config->writeCapture
         new \Funnypot\App\Storage\WriteCaptureStore(\Funnypot\App\Storage\WriteCaptureStore::defaultPath($config->dbPath))
     )
     : null;
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $writeCaptureTrap);
+// FP-0531: the stateful Commix cmdi execution-phase oracle (opt-in, dedicated box). Seed off the deploy
+// identity so recon output (hostname/uname) is per-deploy consistent. Off unless FUNNYPOT_CMDI_EXEC_PHASE.
+$cmdiExecTrap = $config->cmdiExecPhase
+    ? new \Funnypot\App\Emulation\CmdiExecutionPhaseTrap(
+        new \Funnypot\App\Emulation\CmdiSessionStore(\Funnypot\App\Emulation\CmdiSessionStore::defaultPath($config->dbPath)),
+        (int) (hexdec(substr(hash('sha256', (string) ($config->poweredBy ?? '') . '|cmdi-exec'), 0, 8)))
+    )
+    : null;
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $writeCaptureTrap, $cmdiExecTrap);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
