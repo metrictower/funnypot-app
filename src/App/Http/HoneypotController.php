@@ -67,7 +67,9 @@ final class HoneypotController
      */
     public static function serveDelayFor(AppConfig $config): void
     {
-        $ms = $config->latencyMs + ($config->jitterMs > 0 ? random_int(0, $config->jitterMs) : 0);
+        // FP-0354: the delay DISTRIBUTION (latencyMs + U(0,jitterMs)) lives in ServeJitter so its
+        // non-zero bounded CoV is unit-testable without sleeping; this keeps the usleep.
+        $ms = ServeJitter::delayMs($config->latencyMs, $config->jitterMs);
         if ($ms > 0) {
             usleep($ms * 1000);
         }
