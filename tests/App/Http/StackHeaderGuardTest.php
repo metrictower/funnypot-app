@@ -10,14 +10,15 @@ use PHPUnit\Framework\TestCase;
 final class StackHeaderGuardTest extends TestCase
 {
     /** @return array{set: array<string,string>, removed: string[]} */
-    private function drive(string $banner): array
+    private function drive(string $banner, ?string $currentServer = null): array
     {
         $set = [];
         $removed = [];
         StackHeaderGuard::apply(
             static function (string $name, string $value) use (&$set): void { $set[$name] = $value; },
             static function (string $name) use (&$removed): void { $removed[] = $name; },
-            $banner
+            $banner,
+            $currentServer
         );
 
         return ['set' => $set, 'removed' => $removed];
@@ -58,6 +59,37 @@ final class StackHeaderGuardTest extends TestCase
             'Referrer-Policy',
         ] as $keep) {
             self::assertNotContains($keep, StackHeaderGuard::FAMILY, "{$keep} must NOT be stripped");
+        }
+    }
+
+    public function test_forces_server_when_absent_or_real_stack(): void
+    {
+        // Absent (admin/404/error/fault paths) -> forced to the persona banner.
+        self::assertSame('nginx/9.9.9', $this->drive('nginx/9.9.9', null)['set']['Server'] ?? null);
+        // The honeypot's OWN real stack (edge nginx, php-fpm/Apache SAPI) -> replaced.
+        foreach (['nginx', 'nginx/1.24.0', 'Apache/2.4.41 (Ubuntu)', 'PHP/8.1.27'] as $real) {
+            $r = $this->drive('nginx/9.9.9', $real);
+            self::assertSame('nginx/9.9.9', $r['set']['Server'] ?? null, "real stack '{$real}' must be replaced");
+        }
+    }
+
+    public function test_preserves_a_core_device_persona_server(): void
+    {
+        // A core template's per-product Server (poly-stack device deception) must be LEFT intact —
+        // forcing one box banner there would clobber the `part: server` detection witness.
+        foreach (['boa', 'RomPager/4.07 UPnP/1.0', 'Microsoft-IIS/10.0', 'webswing.org', 'Router Web', 'KM-MFP'] as $device) {
+            $r = $this->drive('nginx/9.9.9', $device);
+            self::assertArrayNotHasKey('Server', $r['set'], "device banner '{$device}' must be preserved, not forced");
+        }
+    }
+
+    public function test_is_real_stack_server_classifier(): void
+    {
+        foreach (['nginx', 'nginx/1.0', 'Apache', 'Apache/2.4 (Ubuntu)', 'PHP/8.1'] as $real) {
+            self::assertTrue(StackHeaderGuard::isRealStackServer($real), "'{$real}' is the real stack");
+        }
+        foreach (['boa', 'RomPager/4.07', 'Microsoft-IIS/10.0', 'webswing.org', 'Router Web', 'nginxish-device'] as $persona) {
+            self::assertFalse(StackHeaderGuard::isRealStackServer($persona), "'{$persona}' is a persona/device banner");
         }
     }
 

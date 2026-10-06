@@ -67,24 +67,52 @@ final class StackHeaderGuard
             self::apply(
                 static fn (string $name, string $value): mixed => \header($name . ': ' . $value),
                 static fn (string $name): mixed => \header_remove($name),
-                self::$serverBanner ?? self::DEFAULT_SERVER
+                self::$serverBanner ?? self::DEFAULT_SERVER,
+                self::currentServerHeader()
             );
         });
     }
 
     /**
-     * The pure normalize step: force Server to $banner, strip the family. Driven by injected callables
-     * so it is unit-testable (tests pass recording mocks; register() passes header()/header_remove()).
+     * The pure normalize step, driven by injected callables so it is unit-testable (tests pass recording
+     * mocks; register() passes header()/header_remove()). It:
+     *  - forces `Server` to $banner ONLY when the current value is absent or is the honeypot's OWN real
+     *    stack (nginx/Apache/PHP-shaped). A core template's device banner (boa, RomPager, KM-MFP, a
+     *    Microsoft-IIS persona, …) is LEFT intact — forcing one box banner there would clobber per-
+     *    product `part: server` deception on the poly-stack surface; the real leak is only on the
+     *    admin/404/error/fault paths that set no Server at all; and
+     *  - strips the known stack-identifier family (never functional/persona headers; no allowlist).
      *
      * @param callable(string,string):mixed $setHeader
      * @param callable(string):mixed        $removeHeader
      */
-    public static function apply(callable $setHeader, callable $removeHeader, string $banner): void
+    public static function apply(callable $setHeader, callable $removeHeader, string $banner, ?string $currentServer = null): void
     {
-        $setHeader('Server', $banner !== '' ? $banner : self::DEFAULT_SERVER);
+        if ($currentServer === null || self::isRealStackServer($currentServer)) {
+            $setHeader('Server', $banner !== '' ? $banner : self::DEFAULT_SERVER);
+        }
         foreach (self::FAMILY as $name) {
             $removeHeader($name);
         }
+    }
+
+    /** Is $server the honeypot's OWN real stack (so it must be replaced), vs a deliberate device/persona
+     *  banner (left intact)? The real leak is the edge nginx or the php-fpm/Apache SAPI. */
+    public static function isRealStackServer(string $server): bool
+    {
+        return (bool) \preg_match('~^(?:nginx|apache|php)(?:[/ ]|$)~i', trim($server));
+    }
+
+    /** The Server value PHP currently has queued for this response, or null if none. */
+    private static function currentServerHeader(): ?string
+    {
+        foreach (\headers_list() as $line) {
+            if (\stripos($line, 'Server:') === 0) {
+                return trim(substr($line, 7));
+            }
+        }
+
+        return null;
     }
 
     /** Reset the one-time registration guard + banner (tests only). */

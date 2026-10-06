@@ -245,11 +245,13 @@ funnypot must never emit a real stack-identifying header on any surface — a `S
 and unmask the box. This is enforced belt-and-suspenders:
 
 - **Application (belt):** the front controller clears PHP's `expose_php` default `X-Powered-By` and
-  registers a flush-time normalizer (`StackHeaderGuard`) that forces `Server` to a persona banner and
-  strips the stack-identifier family (`X-AspNet-Version`, `X-Runtime`, `Via`, …) on **every** path,
-  including the pre-identity fault 404s. It does **not** allowlist, so the product-specific headers the
-  deception templates emit (`WWW-Authenticate` for the panel 401 oracles, `Allow`, `Accept-Ranges`, …)
-  survive. Set `FUNNYPOT_SERVER_BANNER` to the persona `Server` value (default `nginx/1.27.2`, coherent
+  registers a flush-time normalizer (`StackHeaderGuard`) that sets `Server` to a persona banner where
+  the honeypot's own stack would otherwise leak (admin/404/error/fault paths, or a bare edge
+  `nginx`/`Apache`/`PHP` value) and strips the stack-identifier family (`X-AspNet-Version`, `X-Runtime`,
+  `Via`, …) on **every** path, including the pre-identity fault 404s. It leaves a deception template's
+  per-product `Server` banner (a `boa`/`RomPager`/IIS device persona on the poly-stack surface) intact,
+  and it does **not** allowlist, so the product-specific headers the templates emit (`WWW-Authenticate`
+  for the panel 401 oracles, `Allow`, `Accept-Ranges`, …) survive. Set `FUNNYPOT_SERVER_BANNER` to the persona `Server` value (default `nginx/1.27.2`, coherent
   with the believable-404 body — if you set a non-nginx banner, update that 404 body to match).
 - **Edge (suspenders):** because the app runs as php-fpm behind `fastcgi_pass`, add to the nginx vhost
   `fastcgi_hide_header X-Powered-By; fastcgi_hide_header Server;` and set the same persona banner with
