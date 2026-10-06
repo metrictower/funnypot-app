@@ -13,6 +13,15 @@ declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
 
+// FP-0375 (stack-header invariant, belt): clear expose_php's startup X-Powered-By default (the persona
+// override below re-adds it on the deception surfaces; AI-API/Docker leave it absent), then register
+// the flush-time normalizer BEFORE any surface emits — so it also covers the pre-identity 414 /
+// identity-fault 404 closures. The normalizer forces Server to the persona/operator banner and strips
+// the stack-identifier family; it does not allowlist, so core persona headers (WWW-Authenticate, Allow,
+// …) survive. The edge config (fastcgi_hide_header + more_set_headers) is the suspenders.
+header_remove('X-Powered-By');
+\Funnypot\App\Http\StackHeaderGuard::register((string) (getenv('FUNNYPOT_SERVER_BANNER') ?: ''));
+
 use Funnypot\Core\Ai\ModelCatalog;
 use Funnypot\App\AiApi\AiApiRouter;
 use Funnypot\App\AiApi\AiChatHandler;

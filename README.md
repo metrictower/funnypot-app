@@ -238,6 +238,25 @@ docker build -f demo/Dockerfile -t funnypot . && docker run --rm \
   -p 80:80 -p 443:443 -p 8080:8080 -p 2222:2222 funnypot
 ```
 
+### Stack-header hygiene (never leak the real stack)
+
+funnypot must never emit a real stack-identifying header on any surface — a `Server: nginx` or
+`X-Powered-By: PHP/<real>` lets an attacker cross-reference the true stack against the claimed service
+and unmask the box. This is enforced belt-and-suspenders:
+
+- **Application (belt):** the front controller clears PHP's `expose_php` default `X-Powered-By` and
+  registers a flush-time normalizer (`StackHeaderGuard`) that forces `Server` to a persona banner and
+  strips the stack-identifier family (`X-AspNet-Version`, `X-Runtime`, `Via`, …) on **every** path,
+  including the pre-identity fault 404s. It does **not** allowlist, so the product-specific headers the
+  deception templates emit (`WWW-Authenticate` for the panel 401 oracles, `Allow`, `Accept-Ranges`, …)
+  survive. Set `FUNNYPOT_SERVER_BANNER` to the persona `Server` value (default `nginx/1.27.2`, coherent
+  with the believable-404 body — if you set a non-nginx banner, update that 404 body to match).
+- **Edge (suspenders):** because the app runs as php-fpm behind `fastcgi_pass`, add to the nginx vhost
+  `fastcgi_hide_header X-Powered-By; fastcgi_hide_header Server;` and set the same persona banner with
+  the headers-more module (`more_set_headers "Server: <persona>";`) — `server_tokens off;` alone still
+  emits a bare `Server: nginx`. Set PHP `expose_php = Off`. The belt holds if the edge is
+  mis-provisioned; the edge holds if a surface bypasses the front controller.
+
 Open <http://localhost:8080> for the dashboard, then act like an attacker: point a scanner, curl, or an
 `ssh` or `telnet` client at it and watch the hits land. Mount `/app/demo/storage` on a volume (compose
 does) so the install identity — and with it the persona, the fake filesystem and the decoy TLS cert —
