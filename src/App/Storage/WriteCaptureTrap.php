@@ -41,25 +41,40 @@ final class WriteCaptureTrap
     }
 
     /**
-     * Map a captured filesystem write path to the URL path a verify GET would use: strip a known webroot
-     * prefix, collapse `..`/`.`, force a single leading slash. A path already outside any webroot (e.g.
-     * `/tmp/x`) is returned canonicalised as-is (a GET to it still 404s, so it simply never verifies).
+     * Map a captured filesystem write path to the URL path a verify GET would use, or null if no verify
+     * GET could ever reach it. Only a file UNDER a known webroot is HTTP-servable: a real webserver never
+     * serves `/tmp/x` or `/etc/passwd`, so a write there is not captured (serving it back would be a tell —
+     * the trap would 200 any absolute path the source "wrote"). A write AT the webroot dir itself (not a
+     * file under it) is likewise not servable. The FS path is canonicalised FIRST so a `..` traversal
+     * resolves within it, THEN the webroot prefix is stripped.
      */
-    public function urlPathFor(string $fsPath): string
+    public function urlPathFor(string $fsPath): ?string
     {
-        // Canonicalise the full FS path FIRST so a `..` traversal resolves within it, THEN strip a known
-        // webroot prefix to get the URL path a verify GET uses.
-        $p = $this->canonicalise('/' . ltrim(trim($fsPath), '/'));
+        $raw = trim($fsPath);
+        if ($raw === '') {
+            return null;
+        }
+        $isAbsolute = $raw[0] === '/';
+        $p = $this->canonicalise('/' . ltrim($raw, '/'));
+
+        if (!$isAbsolute) {
+            // A relative write resolves against the process cwd, which for a dropped webshell is the
+            // webroot — so it maps directly to that URL path (e.g. `echo X > shell.php` → `/shell.php`).
+            return ($p === '/' ) ? null : $p;
+        }
+
         foreach (self::WEBROOTS as $root) {
             if ($p === $root) {
-                return '/';
+                return null; // a write AT the docroot dir is not a servable file
             }
             if (strncmp($p, $root . '/', strlen($root) + 1) === 0) {
-                return substr($p, strlen($root));
+                $url = substr($p, strlen($root));
+
+                return ($url === '' || $url === '/') ? null : $url;
             }
         }
 
-        return $p;
+        return null; // absolute path outside every known webroot — not HTTP-reachable, never capture
     }
 
     /** Record a write-stager if the request carries one. No-op for a non-write (extractor returns null). */
@@ -73,6 +88,9 @@ final class WriteCaptureTrap
             return;
         }
         $urlPath = $this->urlPathFor($write['path']);
+        if ($urlPath === null) {
+            return; // the write target is not HTTP-reachable (outside any webroot) — nothing to verify
+        }
         $this->store->capture($this->scopeFor($clientIp), $urlPath, $write['content'], $this->contentTypeFor($urlPath));
     }
 

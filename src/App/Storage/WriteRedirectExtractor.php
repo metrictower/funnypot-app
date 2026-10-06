@@ -44,12 +44,12 @@ final class WriteRedirectExtractor
 
         // echo/printf <content> > path  |  echo/printf <content> >> path
         // content is an optionally-quoted run up to the redirect operator.
-        if (\preg_match('~\b(?:echo|printf)\s+(?:-[a-zA-Z]+\s+)?(?P<content>"[^"]{0,8192}"|\'[^\']{0,8192}\'|[^>|]{1,8192}?)\s*>>?\s*(?P<path>[^\s;&|>]{1,1024})~s', $command, $m) === 1) {
+        if (\preg_match('~\b(?:echo|printf)\s+(?:-[a-zA-Z]+\s+)?(?P<content>"[^"]{0,8192}"|\'[^\']{0,8192}\'|[^>|]{1,8192}?)\s*>>?\s*(?P<path>"[^"]{1,1024}"|\'[^\']{1,1024}\'|[^\s;&|>]{1,1024})~s', $command, $m) === 1) {
             return self::literal($m['content'], $m['path']);
         }
 
         // echo/printf <content> | tee [-a] path
-        if (\preg_match('~\b(?:echo|printf)\s+(?P<content>"[^"]{0,8192}"|\'[^\']{0,8192}\'|[^|]{1,8192}?)\|\s*tee\s+(?:-a\s+)?(?P<path>[^\s;&|>]{1,1024})~s', $command, $m) === 1) {
+        if (\preg_match('~\b(?:echo|printf)\s+(?P<content>"[^"]{0,8192}"|\'[^\']{0,8192}\'|[^|]{1,8192}?)\|\s*tee\s+(?:-a\s+)?(?P<path>"[^"]{1,1024}"|\'[^\']{1,1024}\'|[^\s;&|>]{1,1024})~s', $command, $m) === 1) {
             return self::literal($m['content'], $m['path']);
         }
 

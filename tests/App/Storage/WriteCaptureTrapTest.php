@@ -74,7 +74,28 @@ final class WriteCaptureTrapTest extends TestCase
             'nested'       => ['/var/www/html/uploads/x.txt', '/uploads/x.txt'],
             'dotdot'       => ['/var/www/html/../html/c.txt', '/c.txt'],
             'relative'     => ['./verify.html', '/verify.html'],
-            'outside'      => ['/tmp/x.sh', '/tmp/x.sh'],
+            'bare-relative' => ['shell.php', '/shell.php'],
+        ];
+    }
+
+    /** @dataProvider nonServablePaths */
+    public function test_non_webroot_paths_are_not_captured(string $fsPath): void
+    {
+        // A real webserver serves only files under a docroot; an absolute write elsewhere (or AT the
+        // docroot dir itself) must map to null so the trap never 200s a path no server would serve.
+        self::assertNull($this->trap()->urlPathFor($fsPath));
+    }
+
+    /** @return array<string,array{0:string}> */
+    public function nonServablePaths(): array
+    {
+        return [
+            'tmp'        => ['/tmp/x.sh'],
+            'etc-passwd' => ['/etc/passwd'],
+            'traversal'  => ['/var/www/html/../../../etc/passwd'],
+            'bare-root'  => ['/var/www/html'],
+            'bare-root-slash' => ['/var/www/html/'],
+            'empty'      => ['   '],
         ];
     }
 

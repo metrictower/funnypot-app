@@ -32,6 +32,16 @@ final class WriteRedirectExtractorTest extends TestCase
         self::assertSame(WriteRedirectExtractor::KIND_LITERAL, $r['kind']);
     }
 
+    public function test_quoted_path_with_space_is_captured_whole(): void
+    {
+        // The path group must accept a quoted path; it previously truncated at the first space.
+        $r = WriteRedirectExtractor::extract('echo VULN > "/var/www/html/a b.php"');
+        self::assertNotNull($r);
+        self::assertSame('/var/www/html/a b.php', $r['path']);
+        self::assertSame('VULN', $r['content']);
+        self::assertSame(WriteRedirectExtractor::KIND_LITERAL, $r['kind']);
+    }
+
     public function test_append_redirect_and_printf(): void
     {
         $r = WriteRedirectExtractor::extract('printf pwned >> ./verify.html');
