@@ -119,6 +119,8 @@ final class AttackerHeat
         if (isset($this->sources[$source])) {
             return;
         }
+        // Evict the least-recently-OBSERVED source (reads don't refresh `last`): a quiet source cools and
+        // is dropped first, which is the intended write-driven aging, not read-driven LRU.
         if (count($this->sources) >= self::MAX_SOURCES) {
             $oldestKey = null;
             $oldestAt = INF;

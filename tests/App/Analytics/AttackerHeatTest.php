@@ -98,4 +98,49 @@ final class AttackerHeatTest extends TestCase
         }
         self::assertLessThanOrEqual(4096, $h->trackedSources());
     }
+
+    public function test_lru_evicts_the_oldest_not_the_newest(): void
+    {
+        // Fill to cap, then one more source: the OLDEST (src-0) must be evicted, a recent one survives.
+        $h = $this->heat(1e9); // negligible decay so survival is observable via heat()
+        for ($i = 0; $i < 4096; $i++) {
+            $this->now += 0.001;
+            $h->observe('src-' . $i, 'honeytoken');
+        }
+        $this->now += 0.001;
+        $h->observe('fresh', 'decoy'); // forces one eviction
+        self::assertSame(0.0, $h->heat('src-0'), 'oldest source was evicted');
+        self::assertGreaterThan(0.0, $h->heat('src-4095'), 'a recent source survived');
+        self::assertGreaterThan(0.0, $h->heat('fresh'));
+    }
+
+    public function test_negative_clock_does_not_grow_heat(): void
+    {
+        $h = $this->heat(300.0);
+        $h->observe('n.n.n.n', 'honeytoken'); // 5.0
+        $this->now -= 100.0;                    // clock jumps backward
+        self::assertSame(5.0, $h->heat('n.n.n.n'), 'negative elapsed is clamped; heat never grows');
+    }
+
+    public function test_nonpositive_half_life_disables_decay_without_error(): void
+    {
+        foreach (array(0.0, -5.0) as $hl) {
+            $h = $this->heat($hl);
+            $h->observe('z.z.z.z', 'honeytoken'); // 5.0
+            $this->now += 10000.0;
+            self::assertSame(5.0, $h->heat('z.z.z.z'), "halfLife {$hl}: no decay, no div-by-zero/NaN");
+        }
+    }
+
+    public function test_heat_read_does_not_mutate_stored_value(): void
+    {
+        $h = $this->heat(300.0);
+        $h->observe('r.r.r.r', 'attack_class'); // 3.0
+        $this->now += 300.0;                     // one half-life
+        // Two reads at the same clock are stable, and neither writes back the decay...
+        self::assertEqualsWithDelta(1.5, $h->heat('r.r.r.r'), 1e-9);
+        self::assertEqualsWithDelta(1.5, $h->heat('r.r.r.r'), 1e-9);
+        // ...so a later observe() decays the ORIGINAL 3.0 once (to 1.5) + adds, not a double-decayed value.
+        self::assertSame(4.5, $h->observe('r.r.r.r', 'attack_class'));
+    }
 }
