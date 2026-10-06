@@ -23,6 +23,12 @@ final class MinecraftConfig
     ) {
     }
 
+    /** Non-negative hash (masks crc32's sign bit so the modulo is 32/64-bit safe). */
+    private static function h(string $m): int
+    {
+        return \crc32($m) & 0x7FFFFFFF;
+    }
+
     public static function fromEnv(string $installPersonaMaterial): self
     {
         $seed = \getenv('FUNNYPOT_MC_SEED') ?: $installPersonaMaterial;
@@ -32,13 +38,13 @@ final class MinecraftConfig
             ['Paper 1.20.4', 765], ['Paper 1.20.1', 763], ['Spigot 1.19.4', 762],
             ['Paper 1.21.1', 767], ['Fabric 1.20.2', 764],
         ];
-        [$name, $proto] = $builds[\crc32('ver:' . $seed) % \count($builds)];
+        [$name, $proto] = $builds[self::h('ver:' . $seed) % \count($builds)];
 
         $motds = ['Private server', 'Welcome', 'Members only', 'Survival realm', 'Community server'];
-        $motd = $motds[\crc32('motd:' . $seed) % \count($motds)];
+        $motd = $motds[self::h('motd:' . $seed) % \count($motds)];
 
-        $max = 20 + (\crc32('max:' . $seed) % 80);           // 20..99
-        $online = \crc32('on:' . $seed) % (int) \max(1, $max / 2); // < half
+        $max = 20 + (self::h('max:' . $seed) % 80);           // 20..99
+        $online = self::h('on:' . $seed) % (int) \max(1, $max / 2); // < half
 
         return new self(
             versionName: $name,
@@ -62,7 +68,7 @@ final class MinecraftConfig
         $n = \min(3, \max(0, $online));
         $out = [];
         for ($i = 0; $i < $n; $i++) {
-            $name = $pool[\crc32('p' . $i . ':' . $seed) % \count($pool)];
+            $name = $pool[self::h('p' . $i . ':' . $seed) % \count($pool)];
             $out[] = ['name' => $name, 'id' => self::seededUuid($seed . ':' . $i . ':' . $name)];
         }
 

@@ -106,7 +106,8 @@ final class Log4ShellTrapTest extends TestCase
         $patterns = [
             '/\bfsockopen\s*\(/', '/\bpfsockopen\s*\(/', '/\bstream_socket_client\s*\(/', '/\bcurl_\w+\s*\(/',
             '/\bldap_[a-z]+\s*\(/', '/\bdns_get_record\s*\(/', '/\bcheckdnsrr\s*\(/', '/\bgetmxrr\s*\(/',
-            '/\bgethostby\w+\s*\(/', '/\bget_headers\s*\(/',
+            '/\bgethostby\w+\s*\(/', '/\bget_headers\s*\(/', '/\bfile_get_contents\s*\(/', '/\bfopen\s*\(/',
+            '/\breadfile\s*\(/',
         ];
         foreach (glob($dir . '/*.php') ?: [] as $file) {
             $src = (string) file_get_contents($file);
