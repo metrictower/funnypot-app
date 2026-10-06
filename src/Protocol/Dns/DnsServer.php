@@ -142,10 +142,7 @@ final class DnsServer
 
             // UNCONDITIONAL final anti-amplification clamp — the single chokepoint. If a reply is somehow
             // larger than the request (no responder branch should produce this), drop it entirely.
-            $bytes = $r['bytes'];
-            if (\strlen($bytes) > $requestLen) {
-                $bytes = '';
-            }
+            $bytes = self::clampReply($r['bytes'], $requestLen);
             if ($bytes === '') {
                 $this->log($r['event'], $ip, $port, $query, false);
                 continue;
@@ -273,6 +270,16 @@ final class DnsServer
             'path' => "DNS fault ({$where}): " . $e->getMessage(),
             'reportable' => false,
         ]);
+    }
+
+    /**
+     * The unconditional UDP anti-amplification clamp as a pure function (so it is unit-testable without a
+     * socket): a reply strictly larger than the request it answers is dropped to '' — the honeypot can
+     * never emit more UDP bytes than it received, whatever a responder branch produced.
+     */
+    public static function clampReply(string $reply, int $requestLen): string
+    {
+        return \strlen($reply) > $requestLen ? '' : $reply;
     }
 
     /** @return array{0:string,1:int} */
