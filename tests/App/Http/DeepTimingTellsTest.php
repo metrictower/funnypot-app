@@ -80,12 +80,27 @@ final class DeepTimingTellsTest extends TestCase
 
     public function test_every_listener_bounds_connections(): void
     {
-        $ref = new \ReflectionClass(Listener::class);
-        foreach (['MAX_CONNS', 'PER_IP_CONNS', 'IDLE_TIMEOUT'] as $cap) {
-            self::assertTrue($ref->hasConstant($cap), "Listener must define {$cap}");
-            self::assertGreaterThan(0, $ref->getConstant($cap), "{$cap} must be a positive bound");
+        // The template-protocol Listener AND the bespoke servers that run their own accept loop must
+        // each cap concurrent + per-IP connections (idle_accept). Covering the bespoke servers too
+        // (not just Listener) closes the gap where a removed/inverted cap in one would go uncaught.
+        $servers = [
+            Listener::class,
+            \Funnypot\Protocol\Tr069\Tr069Server::class,
+            \Funnypot\Protocol\Rtsp\RtspServer::class,
+            \Funnypot\Protocol\Winrm\WinrmServer::class,
+        ];
+        foreach ($servers as $class) {
+            $ref = new \ReflectionClass($class);
+            foreach (['MAX_CONNS', 'PER_IP_CONNS', 'IDLE_TIMEOUT'] as $cap) {
+                self::assertTrue($ref->hasConstant($cap), "{$class} must define {$cap}");
+                self::assertGreaterThan(0, $ref->getConstant($cap), "{$class}::{$cap} must be a positive bound");
+            }
+            // One source can't monopolise the accept loop: per-IP cap well below the global cap.
+            self::assertLessThan(
+                $ref->getConstant('MAX_CONNS'),
+                $ref->getConstant('PER_IP_CONNS'),
+                "{$class} per-IP cap must be below the global cap"
+            );
         }
-        // The per-IP cap must be well below the global cap (one source can't monopolise the loop).
-        self::assertLessThan($ref->getConstant('MAX_CONNS'), $ref->getConstant('PER_IP_CONNS'));
     }
 }
