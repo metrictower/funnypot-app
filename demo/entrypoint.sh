@@ -68,6 +68,12 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     # within the cap. Each backgrounded subshell snapshots its own proto/bind.
     # The spawn lines below are a VIEW of demo/ports.json: `php scripts/check-ports.php` fails on drift
     # or on a port nginx also listens on.
+    #
+    # FP-0483 — UDP REFLECTION POSTURE: every UDP listener (SNMP/NTP/IPMI/STUN/CoAP/BACnet/SIP+RTP) runs
+    # CAPTURE-ONLY by default — it parses + logs each probe (all intel kept) but emits ZERO bytes, so the
+    # port can't be catalogued or abused as a spoofed-source reflector (AWS-AUP-safe). To let UDP ACTUALLY
+    # REPLY (richer deception) set FUNNYPOT_UDP_REFLECT=1 — but ONLY on an isolated, non-internet-exposed
+    # deployment, since any open UDP responder is a reflector regardless of its amplification factor.
     HEALTHY_S="${FUNNYPOT_LISTENER_HEALTHY_S:-60}"
     BACKOFF_MAX_S="${FUNNYPOT_LISTENER_BACKOFF_MAX_S:-60}"
     spawn() {
