@@ -51,6 +51,13 @@ final class HmacCohortAssigner implements CohortAssigner
         if (PHP_INT_SIZE !== 8) {
             return ExperimentDecision::baseline(BaselineReason::PLATFORM_UNSUPPORTED);
         }
+        // The counter re-hash appends NUL + a 1-byte counter to the message; the collision-free framing
+        // relies on a fixed-length subject key as the trailing field. The only producer (subjectKey())
+        // returns a 32-byte raw HMAC — reject anything else so a future non-conforming caller can't
+        // introduce a cross-subject ambiguity.
+        if (strlen($subjectKey) !== 32 || strlen($experimentKey) < 32) {
+            return ExperimentDecision::baseline(BaselineReason::ASSIGNER_FAULT);
+        }
         $t = $definition->totalWeight();
         if ($t < 1) {
             return ExperimentDecision::baseline(BaselineReason::ASSIGNER_FAULT);

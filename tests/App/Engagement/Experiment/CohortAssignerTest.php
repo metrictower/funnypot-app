@@ -106,7 +106,7 @@ final class CohortAssignerTest extends TestCase
             return str_ends_with($msg, "\x00\x01") ? $acceptZero : $allReject;
         };
         $a = new HmacCohortAssigner($hmac);
-        $d = $a->assign($def, 'key', 'subject');
+        $d = $a->assign($def, str_repeat('K', 32), str_repeat('S', 32));
         self::assertTrue($d->enrolled);
         self::assertSame('a', $d->variantId);
         self::assertGreaterThanOrEqual(2, count($calls), 'must have re-hashed with a counter after all 8 words rejected');
@@ -117,7 +117,7 @@ final class CohortAssignerTest extends TestCase
         $def = $this->def([1, 2]); // t=3
         $allReject = str_repeat("\xFF", 32);
         $a = new HmacCohortAssigner(static fn (string $k, string $m): string => $allReject);
-        $d = $a->assign($def, 'key', 'subject');
+        $d = $a->assign($def, str_repeat('K', 32), str_repeat('S', 32));
         self::assertFalse($d->enrolled);
         self::assertSame(BaselineReason::SAMPLING_EXHAUSTED, $d->reason);
         self::assertNull($d->experimentId, 'a baseline decision carries no experiment fields');
@@ -131,8 +131,18 @@ final class CohortAssignerTest extends TestCase
             $word = pack('N', $point); // first word == $point (< limit)
             $digest = $word . str_repeat("\x00", 28);
             $a = new HmacCohortAssigner(static fn (string $k, string $m): string => $digest);
-            self::assertSame($expected, $a->assign($def, 'k', 's')->variantId, "point {$point}");
+            self::assertSame($expected, $a->assign($def, str_repeat('K', 32), str_repeat('S', 32))->variantId, "point {$point}");
         }
+    }
+
+    public function test_non_conforming_subject_key_is_rejected_to_baseline(): void
+    {
+        $def = $this->def([1, 1]);
+        $a = new HmacCohortAssigner();
+        // A subject key that is not a 32-byte raw HMAC must not be assigned (fixed-length framing invariant).
+        $d = $a->assign($def, str_repeat('K', 32), 'short');
+        self::assertFalse($d->enrolled);
+        self::assertSame(BaselineReason::ASSIGNER_FAULT, $d->reason);
     }
 
     public function test_subject_key_is_domain_separated_and_keyed(): void
