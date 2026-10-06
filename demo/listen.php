@@ -38,6 +38,8 @@ use Funnypot\Protocol\Rdp\RdpConfig;
 use Funnypot\Protocol\Rdp\RdpServer;
 use Funnypot\Protocol\Smb\SmbConfig;
 use Funnypot\Protocol\Smb\SmbServer;
+use Funnypot\Protocol\Fpm\FcgiConfig;
+use Funnypot\Protocol\Fpm\FcgiServer;
 use Funnypot\Protocol\Mssql\MssqlConfig;
 use Funnypot\Protocol\Mssql\MssqlServer;
 use Funnypot\Protocol\Mqtt\MqttConfig;
@@ -187,6 +189,13 @@ if ($protocol === 'smb') {
 // full attacker command while staying 100% inert. FUNNYPOT_MSSQL_MODE=low restores the deny path.
 if ($protocol === 'mssql') {
     (new MssqlServer(MssqlConfig::fromEnv($personaMaterial()), $log))->run($bind);
+    exit(0);
+}
+
+// PHP-FPM FastCGI honeypot (port 9000): poses as an exposed misconfigured FPM daemon; decodes FastCGI
+// records, captures PHP_VALUE/STDIN code-execution attempts (quarantined, never run), answers inertly.
+if ($protocol === 'fpm') {
+    (new FcgiServer(FcgiConfig::fromEnv($personaMaterial()), $log))->run($bind);
     exit(0);
 }
 

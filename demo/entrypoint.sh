@@ -103,6 +103,7 @@ if [ "${FUNNYPOT_PROTOCOLS:-1}" != "0" ]; then
     spawn rdp         0.0.0.0:3389
     spawn smb         0.0.0.0:445
     spawn mssql       0.0.0.0:1433
+    spawn fpm         0.0.0.0:9000
     spawn mqtt        0.0.0.0:1883
     spawn snmp        0.0.0.0:161
     spawn ldap        0.0.0.0:389
