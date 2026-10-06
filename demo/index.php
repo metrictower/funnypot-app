@@ -395,7 +395,14 @@ $writeCaptureTrap = $config->writeCapture
         new \Funnypot\App\Storage\WriteCaptureStore(\Funnypot\App\Storage\WriteCaptureStore::defaultPath($config->dbPath))
     )
     : null;
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $writeCaptureTrap);
+// FP-0200: the WebDAV honeypot at /webdav/ (opt-in, dedicated box). Reuses the FP-0467 WriteCaptureStore,
+// so a WebDAV PUT and an HTTP write-capture share one bounded ledger. Off unless FUNNYPOT_WEBDAV.
+$webDavTrap = $config->webdav
+    ? new \Funnypot\App\WebDav\WebDavTrap(
+        new \Funnypot\App\Storage\WriteCaptureStore(\Funnypot\App\Storage\WriteCaptureStore::defaultPath($config->dbPath))
+    )
+    : null;
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $writeCaptureTrap, $webDavTrap);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds

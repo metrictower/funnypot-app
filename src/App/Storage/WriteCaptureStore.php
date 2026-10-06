@@ -127,6 +127,41 @@ final class WriteCaptureStore
         }
     }
 
+    /**
+     * List a source's unexpired captured files (path + size + type + time), for a WebDAV PROPFIND so an
+     * attacker sees its own dropped files listed. Fail-open to [] (caller shows only the canned root).
+     *
+     * @return list<array{path:string,size:int,content_type:string,captured_at:int}>
+     */
+    public function listForScope(string $scope): array
+    {
+        if ($scope === '') {
+            return [];
+        }
+        try {
+            $db = $this->db();
+            if ($db === null) {
+                return [];
+            }
+            $now = ($this->clock)();
+            $sel = $db->prepare('SELECT path, LENGTH(content) AS size, content_type, captured_at FROM captures WHERE scope = :s AND expires_at >= :now ORDER BY captured_at DESC LIMIT ' . self::MAX_FILES_PER_SCOPE);
+            $sel->execute([':s' => $scope, ':now' => $now]);
+            $out = [];
+            foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $out[] = [
+                    'path' => (string) $row['path'],
+                    'size' => (int) $row['size'],
+                    'content_type' => (string) $row['content_type'],
+                    'captured_at' => (int) $row['captured_at'],
+                ];
+            }
+
+            return $out;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
     private function countScope(PDO $db, string $scope, int $now): int
     {
         $st = $db->prepare('SELECT COUNT(*) FROM captures WHERE scope = :s AND expires_at >= :now');

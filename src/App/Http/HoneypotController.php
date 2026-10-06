@@ -19,6 +19,7 @@ use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\App\Storage\WriteCaptureTrap;
+use Funnypot\App\WebDav\WebDavTrap;
 use Funnypot\Core\RequestContext;
 use Geo;
 
@@ -43,6 +44,7 @@ final class HoneypotController
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
         private ?WriteCaptureTrap $writeCaptureTrap = null,
+        private ?WebDavTrap $webDavTrap = null,
     ) {
     }
 
@@ -239,6 +241,29 @@ final class HoneypotController
             self::serveBelievable404();
 
             return;
+        }
+
+        // FP-0200: the WebDAV honeypot owns /webdav/ and its own verbs (OPTIONS/PROPFIND/PUT/MKCOL/…) which
+        // the HTTP engine does not model — handle it before the engine. Null-safe + off unless FUNNYPOT_WEBDAV
+        // wired the trap; a non-/webdav request isn't claimed, so the normal pipeline is unaffected.
+        if ($this->webDavTrap !== null && $this->webDavTrap->claims($context)) {
+            $dav = $this->webDavTrap->handle($context, $clientIp);
+            if ($dav !== null) {
+                $this->serveDelay();
+                ResponseEmitter::emit($dav);
+                $this->store->append([
+                    'ts' => gmdate('c'), 'ip' => $clientIp, 'method' => $context->method,
+                    'path' => substr($context->path, 0, 200), 'ua' => substr($context->headers['User-Agent'] ?? '', 0, 160),
+                    'matched' => true, 'severity' => 'medium', 'templates' => ['webdav'],
+                    'served' => true, 'style' => $this->config->style,
+                    'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
+                    'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
+                    'log4shell' => null, 'honeytoken' => $tokenVerdict !== 'off' ? $tokenVerdict : null,
+                    'geo' => $this->geo->lookup($clientIp), 'known_attacker' => $this->known($clientIp),
+                ]);
+
+                return;
+            }
         }
 
         // The emulation catalog's on/off choices become the engine's deny-set + corpus flag.

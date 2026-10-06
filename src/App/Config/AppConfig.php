@@ -237,6 +237,8 @@ final class AppConfig
         /** FP-0467: the semi-blind file-write / verify trap (WriteCaptureStore). Opt-in, dedicated-box
          *  only — off by default, so the handler stays byte-identical on every existing deployment. */
         public bool $writeCapture = false,
+        /** FP-0200: the RFC-4918 WebDAV honeypot at /webdav/ (reuses WriteCaptureStore). Opt-in. */
+        public bool $webdav = false,
     ) {
     }
 
@@ -464,6 +466,7 @@ final class AppConfig
             attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
             attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
             writeCapture: in_array(strtolower((string) $env('FUNNYPOT_WRITE_CAPTURE')), ['1', 'on', 'true', 'yes'], true),
+            webdav: in_array(strtolower((string) $env('FUNNYPOT_WEBDAV')), ['1', 'on', 'true', 'yes'], true),
         );
     }
 }

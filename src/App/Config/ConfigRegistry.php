@@ -110,6 +110,7 @@ final class ConfigRegistry
             'protocols_enabled' => ['field' => 'protocolsEnabled', 'env' => 'FUNNYPOT_PROTOCOLS', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Features', 'live' => false, 'secret' => false],
             'blocklist_enabled' => ['field' => 'blocklistEnabled', 'env' => 'FUNNYPOT_BLOCKLIST', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'write_capture' => ['field' => 'writeCapture', 'env' => 'FUNNYPOT_WRITE_CAPTURE', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
+            'webdav' => ['field' => 'webdav', 'env' => 'FUNNYPOT_WEBDAV', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'abuseipdb_report' => ['field' => 'abuseIpdbReport', 'env' => 'FUNNYPOT_ABUSEIPDB_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'threatintel_report' => ['field' => 'threatIntelReport', 'env' => 'FUNNYPOT_THREATINTEL_REPORT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
             'llm_enabled' => ['field' => 'llmEnabled', 'env' => 'FUNNYPOT_LLM', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Features', 'live' => false, 'secret' => false],
