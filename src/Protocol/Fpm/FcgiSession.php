@@ -24,6 +24,9 @@ final class FcgiSession
     /** @var callable(string, array<string,string>):?string|null  (payload, params) => stored path|null */
     private $quarantine;
 
+    /** Incomplete-record buffer ceiling: a single record maxes ~65.8KB, so a buffer past this is hostile. */
+    private const INBUF_CAP = 131072;
+
     private string $inbuf = '';
 
     /** Active request state. FPM default is non-multiplexed, so we track one request at a time. */
@@ -59,6 +62,10 @@ final class FcgiSession
         $this->inbuf .= $bytes;
         [$records, $consumed] = FastCgiRecord::decode($this->inbuf);
         $this->inbuf = \substr($this->inbuf, $consumed);
+        // A record that never completes must not grow the buffer unbounded (throws -> server closes conn).
+        if (\strlen($this->inbuf) > self::INBUF_CAP) {
+            throw new \RuntimeException('FastCGI: inbound record buffer exceeded cap');
+        }
 
         $out = '';
         foreach ($records as $rec) {
