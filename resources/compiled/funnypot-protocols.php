@@ -836,88 +836,9 @@ db0:keys=3,expires=0,avg_ttl=0',
     'framing' => 'line',
     'rules' => 
     array (
-      0 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'EHLO',
-        ),
-        'send' => '250-mail.example.com
-250-PIPELINING
-250-SIZE 10240000
-250 8BITMIME
-',
-      ),
-      1 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'HELO',
-        ),
-        'send' => '250 mail.example.com
-',
-      ),
-      2 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'MAIL',
-        ),
-        'send' => '250 2.1.0 Ok
-',
-      ),
-      3 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'RCPT',
-        ),
-        'send' => '250 2.1.5 Ok
-',
-      ),
-      4 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'DATA',
-        ),
-        'send' => '354 End data with <CR><LF>.<CR><LF>
-',
-      ),
-      5 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'RSET',
-        ),
-        'send' => '250 2.0.0 Ok
-',
-      ),
-      6 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'NOOP',
-        ),
-        'send' => '250 2.0.0 Ok
-',
-      ),
-      7 => 
-      array (
-        'match' => 
-        array (
-          'prefix' => 'QUIT',
-        ),
-        'send' => '221 2.0.0 Bye
-',
-        'close' => true,
-      ),
     ),
-    'default' => 
-    array (
-      'send' => '502 5.5.2 Error: command not recognized
-',
-    ),
+    'default' => NULL,
+    'engine' => 'smtp',
   ),
   'ssh' => 
   array (

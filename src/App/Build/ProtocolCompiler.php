@@ -20,6 +20,8 @@ use Symfony\Component\Yaml\Yaml;
 final class ProtocolCompiler
 {
     private const FRAMINGS = ['line', 'resp', 'raw'];
+    /** Protocols whose per-connection conversation is driven by a code state machine, not the flat rules. */
+    private const ENGINES = ['smtp'];
     private const MAX_RESPONSE_BYTES = 16384;
 
     /**
@@ -83,6 +85,16 @@ final class ProtocolCompiler
             'rules' => $rules,
             'default' => $default,
         ];
+
+        // Optional stateful engine: the emulator drives a code state machine for this protocol
+        // (SMTP's DATA-body collection, AUTH harvest) instead of the flat rule list.
+        if (isset($doc['engine'])) {
+            $engine = (string) $doc['engine'];
+            if (!in_array($engine, self::ENGINES, true)) {
+                throw new RuntimeException("Protocol template {$file}: engine must be one of " . implode(', ', self::ENGINES) . ".");
+            }
+            $out['engine'] = $engine;
+        }
 
         // Optional interactive fake-shell (accept-all login then a canned command shell).
         if (isset($doc['shell'])) {

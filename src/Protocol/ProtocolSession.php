@@ -17,6 +17,11 @@ final class ProtocolSession
     public int $requests = 0;
     public bool $close = false;
 
+    // Per-connection state machine for a protocol declaring `engine:` (e.g. SMTP). The emulator is
+    // shared across connections, so a protocol too stateful for the flat rule list keeps its state
+    // object here. Null until the first byte of such a protocol creates it.
+    public ?object $engineState = null;
+
     // Shell state (used only by protocols with a `shell` block): login -> password -> shell.
     public string $phase = 'login';
     public string $user = '';

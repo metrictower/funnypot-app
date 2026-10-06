@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Protocol;
 
 use Funnypot\Protocol\Shell\FakeShell;
+use Funnypot\Protocol\Smtp\SmtpSession;
 use Funnypot\Core\Template\DirectiveRenderer;
 
 /**
@@ -56,6 +57,11 @@ final class ProtocolEmulator
         if (isset($this->protocol['shell'])) {
             $id = $this->hostId();
             return "\xff\xfb\x01\xff\xfb\x03\r\n" . $id->distroPretty() . "\r\n" . $id->hostname() . ' login: ';
+        }
+
+        // A stateful engine (e.g. SMTP) emits its own greeting, coherent with this box's hostname.
+        if (($this->protocol['engine'] ?? '') === 'smtp') {
+            return $this->smtpEngine($s)->banner();
         }
 
         return $this->injectHost($this->renderer->render((string) ($this->protocol['banner'] ?? ''), [], $s->seed));
@@ -124,6 +130,13 @@ final class ProtocolEmulator
             return $this->interactiveFeed($s, $onRequest);
         }
 
+        // Stateful engine (e.g. SMTP): line-framed, but each line is interpreted against the
+        // connection's conversation state, not a flat rule list — so `DATA` collects a body until a
+        // lone dot instead of answering every body line with "command not recognized".
+        if (($this->protocol['engine'] ?? '') === 'smtp') {
+            return $this->engineFeed($s, $onRequest);
+        }
+
         $out = '';
         foreach ($this->codec->extract($s->buffer) as $request) {
             $s->requests++;
@@ -139,6 +152,47 @@ final class ProtocolEmulator
         }
 
         return $out;
+    }
+
+    /**
+     * Drive a stateful line engine (SMTP): extract complete lines, feed each to the per-connection
+     * state machine, and log both the raw line and any decoded intel (harvested creds, completed
+     * messages) via $onRequest. The engine owns its line endings, so its reply is written verbatim
+     * (no codec wrap). The incomplete tail stays buffered for the next chunk.
+     */
+    private function engineFeed(ProtocolSession $s, ?callable $onRequest): string
+    {
+        $engine = $this->smtpEngine($s);
+        $out = '';
+        foreach ($this->codec->extract($s->buffer) as $line) {
+            $s->requests++;
+            $response = $engine->feed($line);
+            $out .= $response;
+            if ($onRequest !== null) {
+                $onRequest($line, $response);
+                foreach ($engine->drainIntel() as $event) {
+                    $onRequest($event, '');
+                }
+            }
+            if ($engine->closed()) {
+                $s->close = true;
+            }
+            if ($s->close || $s->requests >= self::MAX_REQUESTS) {
+                $s->close = true;
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    private function smtpEngine(ProtocolSession $s): SmtpSession
+    {
+        if (!$s->engineState instanceof SmtpSession) {
+            $s->engineState = new SmtpSession($s->seed, $this->hostId()->hostname());
+        }
+
+        return $s->engineState;
     }
 
     /** Whether this session is streaming the taunt animation (drives the loop's frame timer). */
