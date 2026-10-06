@@ -20,12 +20,19 @@ use PHPUnit\Framework\TestCase;
  * nuclei-templates/network/honeypot/*.yaml. Re-read the named template if a string here ever
  * needs re-verifying — do not paraphrase from memory.
  *
- * Of the 13 templates in that directory, only four target a service funnypot emulates (redis,
- * ssh, ftp, smtp). The rest — dionaea-mysql/smb/mqtt-honeypot-detect, adbhoney-honeypot-{cnxn,
- * shell}-detect, conpot-siemens-honeypot-detect, cpppo-ethernetip-cip-honeypot,
- * gaspot-honeypot-detect, snap7-honeypot-default-config — probe MySQL, SMB, MQTT, Android ADB,
- * Siemens S7comm/CIP, and Veeder-Root gas-pump-controller protocols funnypot has no emulator
- * for, so they are out of scope: there is nothing on our side for them to detect or evade.
+ * SCOPE (corrected, FP-0371 — the prior docstring falsely claimed funnypot had no MySQL/SMB/MQTT/
+ * ADB/S7comm/EtherNet-IP emulator; all of those now exist, so those detectors are IN scope):
+ *  - Covered by the static sweep + behavioral probe below, because they are TEMPLATE protocols
+ *    (templates/protocol/*.yaml, driven through ProtocolTemplateSet): redis, ssh, ftp, smtp, and now
+ *    mysql (dionaea-mysql-honeypot-detect) and ethernet-ip (cpppo-ethernetip-cip-honeypot).
+ *  - NOT yet covered here, because they are BESPOKE code servers (src/Protocol/{Smb,Mqtt,Adb,S7comm})
+ *    with their own Server/Session API, which neither the ProtocolTemplateSet static sweep nor the
+ *    behavioral probe can drive: dionaea-smb/mqtt-honeypot-detect, adbhoney-honeypot-{cnxn,shell}-detect,
+ *    conpot-siemens-honeypot-detect, snap7-honeypot-default-config. These need a per-server live-probe
+ *    mechanism — tracked in FP-0604. They are believed clean (each emulator's own test asserts its
+ *    persona), but are not yet asserted against the detector tells HERE.
+ *  - Genuinely out of scope: gaspot-honeypot-detect (Veeder-Root gas-pump controller) — funnypot has
+ *    no such emulator, so there is nothing to detect.
  */
 final class ProtocolHoneypotEvasionTest extends TestCase
 {
@@ -67,7 +74,39 @@ final class ProtocolHoneypotEvasionTest extends TestCase
                 ['Protocol major versions differ.', 'bad version 1337'],
                 'nuclei-templates/network/honeypot/cowrie-ssh-honeypot-detect.yaml',
             ],
+            // FP-0371: MySQL + EtherNet-IP ARE funnypot template emulators (the old docstring wrongly
+            // excluded them). Dionaea's MySQL honeypot is fingerprinted by the static greeting
+            // version 5.7.16 AND the fixed scramble salt "aaaaaaaa"; funnypot's greeting is 8.0.36 with
+            // a varied salt, so neither tell may appear in its served bytes.
+            'dionaea-mysql-honeypot-detect' => [
+                'mysql',
+                ['5.7.16', 'aaaaaaaa'],
+                'nuclei-templates/network/honeypot/dionaea-mysql-honeypot-detect.yaml',
+            ],
+            // cpppo's EtherNet-IP honeypot ships the default CIP product name "1756-L61/B"; funnypot's
+            // identity is a "1769-" CompactLogix, so the "1756-L61" signature must never appear.
+            'cpppo-ethernetip-cip-honeypot' => [
+                'ethernet-ip',
+                ['1756-L61/B', '1756-L61'],
+                'nuclei-templates/network/honeypot/cpppo-ethernetip-cip-honeypot.yaml',
+            ],
         ];
+    }
+
+    /**
+     * Non-vacuity / gate-bite: the sweep must actually INSPECT served bytes, so an "absent" assertion
+     * is meaningful rather than passing on empty content. Prove it by confirming the sweep sees a string
+     * that genuinely IS in the mysql greeting, and that it would FLAG a planted tell.
+     */
+    public function test_static_sweep_actually_inspects_served_bytes(): void
+    {
+        $strings = $this->allSendableStrings($this->compiledProtocol('mysql'));
+        $joined = implode("\n", $strings);
+        self::assertStringContainsString('mysql_native_password', $joined, 'the sweep must see the real greeting');
+        self::assertStringContainsString('8.0.36', $joined, 'funnypot presents 8.0.36, not the dionaea 5.7.16');
+        // Gate-bite: if a dionaea tell were present, the assertion used by the sweep would catch it.
+        $planted = $joined . "\n" . '5.7.16';
+        self::assertStringContainsString('5.7.16', $planted); // the matcher the sweep relies on fires on the tell
     }
 
     /**
