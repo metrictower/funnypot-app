@@ -57,7 +57,7 @@ final class UhqsScorecard
         foreach (self::WEIGHTS as $mod => $w) {
             $weighted += $w * self::clamp((float) ($ev[$mod] ?? 0.0));
         }
-        $uhqs = self::clamp($deltaC * $weighted);
+        $uhqs = round(self::clamp($deltaC * $weighted), 2); // round once so the emitted score and grade agree
 
         $passed = ($deltaC === 1.0) && ($leaks === 0);
 
@@ -90,7 +90,7 @@ final class UhqsScorecard
                 'unauthorized_egress_leaks' => $leaks,
                 'passed' => $passed,
             ],
-            'uhqs' => round($uhqs, 2),
+            'uhqs' => $uhqs,
             'grade' => self::grade($uhqs),
         ];
     }
