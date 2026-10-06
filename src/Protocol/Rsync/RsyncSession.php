@@ -63,7 +63,7 @@ final class RsyncSession
             $line = \substr($this->inbuf, 0, $nl);
             $this->inbuf = \substr($this->inbuf, $nl + 1);
             if (\strlen($line) > self::MAX_LINE) {
-                $out .= $this->error('protocol startup error (bad session)');
+                $out .= $this->error('protocol startup error');
                 break;
             }
             $out .= $this->onLine(\rtrim($line, "\r"));
@@ -81,8 +81,12 @@ final class RsyncSession
             case self::STATE_AWAIT_VERSION:
                 // Expect the client echoing "@RSYNCD: <version>". Anything else = a bad session.
                 if (\strncmp($line, '@RSYNCD:', 8) !== 0) {
-                    return $this->error('protocol startup error (bad session)');
+                    return $this->error('protocol startup error');
                 }
+                // Deliberate leniency: a real proto-31+ daemon rejects a reply that omits the digest name
+                // list, but the honeypot proceeds anyway to lure MORE scanners (the easy-connect philosophy —
+                // capture over strict fidelity). Normal `rsync host::` clients send the digest, so the
+                // real-tool path is unaffected; only a malformed probe sees the difference.
                 $this->clientVersion = \trim(\substr($line, 8));
                 $this->state = self::STATE_AWAIT_COMMAND;
 
@@ -102,9 +106,10 @@ final class RsyncSession
     {
         if ($line === '' || $line === '#list') {
             // Module enumeration: name TAB description, then EXIT.
+            // Real rsyncd space-pads the module name to a column, then TAB, then the comment.
             $out = '';
             foreach ($this->config->modules as $name => $desc) {
-                $out .= $name . "\t" . $desc . "\n";
+                $out .= \str_pad($name, 15) . "\t" . $desc . "\n";
             }
             $out .= "@RSYNCD: EXIT\n";
             $this->close = true;

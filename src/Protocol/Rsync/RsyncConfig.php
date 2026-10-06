@@ -23,13 +23,14 @@ final class RsyncConfig
     {
         $seed = \getenv('FUNNYPOT_RSYNC_SEED') ?: $installPersonaMaterial;
 
-        // Version from a small pool of plausible modern rsync protocol banners.
-        $versions = ['31.0', '30.0'];
-        $version = $versions[self::h('ver:' . $seed) % \count($versions)];
+        // Protocol 31+ only: the daemon-greeting digest list is a proto-31 feature, so a proto-30 persona
+        // would have to greet with a BARE banner. Keep every persona proto-31+ so the advertised digest list
+        // is always byte-faithful to a real daemon (a 3.0.x bare-banner persona is not worth the branch).
+        $version = ['31.0', '32.0'][self::h('ver:' . $seed) % 2];
 
         return new self(
             version: $version,
-            digests: $version === '30.0' ? 'sha1 md5 md4' : 'sha512 sha256 sha1 md5 md4',
+            digests: 'sha512 sha256 sha1 md5 md4',
             modules: self::deriveModules($seed)
         );
     }

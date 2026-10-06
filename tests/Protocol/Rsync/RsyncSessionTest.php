@@ -39,8 +39,8 @@ final class RsyncSessionTest extends TestCase
         $out = $s->receive("@RSYNCD: 31.0\n");  // client version reply
         self::assertSame('', $out);
         $out = $s->receive("#list\n");
-        self::assertStringContainsString("backup\tProduction server backups\n", $out);
-        self::assertStringContainsString("www\tWeb source\n", $out);
+        self::assertMatchesRegularExpression("/^backup\\s+\tProduction server backups\$/m", $out);
+        self::assertMatchesRegularExpression("/^www\\s+\tWeb source\$/m", $out);
         self::assertStringContainsString("@RSYNCD: EXIT\n", $out);
         self::assertTrue($s->close);
         self::assertSame('rsync_module_list', $logged[0]['event']);
@@ -86,7 +86,7 @@ final class RsyncSessionTest extends TestCase
         $logged = [];
         $s = $this->session($logged);
         $out = $s->receive("GET / HTTP/1.1\n"); // not an @RSYNCD reply
-        self::assertStringContainsString('@ERROR: protocol startup error (bad session)', $out);
+        self::assertStringContainsString('@ERROR: protocol startup error', $out);
         self::assertTrue($s->close);
     }
 
