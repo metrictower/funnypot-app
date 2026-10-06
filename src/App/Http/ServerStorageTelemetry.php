@@ -27,11 +27,18 @@ final class ServerStorageTelemetry
 
     /** @var callable(string):array{free:?int,total:?int} */
     private $diskProbe;
+    /** @var callable():int */
+    private $clock;
 
     public function __construct(
         private string $storageBase,
         private string $dbPath,
-        ?callable $diskProbe = null
+        ?callable $diskProbe = null,
+        // The authed feed polls every few seconds; the directory walk below stats every recordings +
+        // quarantine file each time. Cache the result for this many seconds (a tiny JSON file) so a
+        // recordings flood can't turn each poll into a stat storm. 0 disables the cache (tests).
+        private int $cacheTtl = 15,
+        ?callable $clock = null
     ) {
         $this->diskProbe = $diskProbe ?? static function (string $path): array {
             $free = @\disk_free_space($path);
@@ -42,6 +49,7 @@ final class ServerStorageTelemetry
                 'total' => \is_float($total) ? (int) $total : null,
             ];
         };
+        $this->clock = $clock ?? static fn (): int => \time();
     }
 
     /**
@@ -50,6 +58,27 @@ final class ServerStorageTelemetry
      *   quarantine_bytes:int,quarantine_count:int,low_disk:bool}
      */
     public function collect(): array
+    {
+        if ($this->cacheTtl > 0) {
+            $cached = $this->readCache();
+            if ($cached !== null) {
+                return $cached;
+            }
+            $fresh = $this->computeFresh();
+            $this->writeCache($fresh);
+
+            return $fresh;
+        }
+
+        return $this->computeFresh();
+    }
+
+    /**
+     * @return array{disk_free_bytes:?int,disk_total_bytes:?int,disk_used_percent:?int,
+     *   recordings_bytes:int,recordings_count:int,database_bytes:int,
+     *   quarantine_bytes:int,quarantine_count:int,low_disk:bool}
+     */
+    private function computeFresh(): array
     {
         $recordings = $this->dirFootprint($this->storageBase . '/recordings');
         $quarantine = $this->dirFootprint($this->storageBase . '/quarantine');
@@ -79,6 +108,58 @@ final class ServerStorageTelemetry
             'quarantine_count' => $quarantine['count'],
             'low_disk' => self::isLowDisk($free, $total),
         ];
+    }
+
+    private function cachePath(): string
+    {
+        // In storageBase itself — NOT under recordings/ or quarantine/, so the footprint never counts it.
+        return $this->storageBase . '/.fp-telemetry-cache.json';
+    }
+
+    /**
+     * Return the cached telemetry if it is younger than the TTL, else null. Fail-open: any read/parse
+     * error or a stale/missing cache returns null (the caller recomputes).
+     *
+     * @return array<string,int|bool|null>|null
+     */
+    private function readCache(): ?array
+    {
+        $path = $this->cachePath();
+        if (!\is_file($path)) {
+            return null;
+        }
+        $raw = @\file_get_contents($path);
+        if ($raw === false) {
+            return null;
+        }
+        $doc = \json_decode($raw, true);
+        if (!\is_array($doc) || !isset($doc['ts'], $doc['data']) || !\is_int($doc['ts']) || !\is_array($doc['data'])) {
+            return null;
+        }
+        if ((($this->clock)() - $doc['ts']) >= $this->cacheTtl) {
+            return null; // stale
+        }
+
+        /** @var array<string,int|bool|null> */
+        return $doc['data'];
+    }
+
+    /** @param array<string,int|bool|null> $data best-effort; a write failure is silently ignored. */
+    private function writeCache(array $data): void
+    {
+        $json = \json_encode(['ts' => ($this->clock)(), 'data' => $data], JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            return;
+        }
+        if (!\is_dir($this->storageBase)) {
+            return;
+        }
+        $tmp = $this->cachePath() . '.' . \getmypid() . '.tmp';
+        if (@\file_put_contents($tmp, $json, LOCK_EX) === false) {
+            return;
+        }
+        @\chmod($tmp, 0600);
+        @\rename($tmp, $this->cachePath()); // atomic replace so a concurrent reader never sees a partial
     }
 
     /**

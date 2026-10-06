@@ -55,7 +55,7 @@ final class DashboardServerStatsTest extends TestCase
         $db = $base . '/hits.sqlite';
         $this->writeFile($db, 1234);
 
-        $t = new ServerStorageTelemetry($base, $db, $this->probe(10_000_000_000, 100_000_000_000));
+        $t = new ServerStorageTelemetry($base, $db, $this->probe(10_000_000_000, 100_000_000_000), 0);
         $s = $t->collect();
 
         self::assertSame(150, $s['recordings_bytes']);
@@ -72,7 +72,7 @@ final class DashboardServerStatsTest extends TestCase
     public function test_used_percent_and_all_keys_present(): void
     {
         $base = $this->tmpBase();
-        $t = new ServerStorageTelemetry($base, $base . '/none.sqlite', $this->probe(25_000_000_000, 100_000_000_000));
+        $t = new ServerStorageTelemetry($base, $base . '/none.sqlite', $this->probe(25_000_000_000, 100_000_000_000), 0);
         $s = $t->collect();
         foreach ([
             'disk_free_bytes', 'disk_total_bytes', 'disk_used_percent', 'recordings_bytes',
@@ -87,10 +87,10 @@ final class DashboardServerStatsTest extends TestCase
 
     public function test_low_disk_true_under_2gb_even_when_percent_is_fine(): void
     {
-        // 1 GiB free of a 1 TiB disk: 0.1% used-wise fine on fraction? No — fraction is 0.1% free < 15%.
-        // Use a huge disk so the FRACTION is healthy but the ABSOLUTE free is under 2 GiB.
-        $free = 1_000_000_000;            // ~0.93 GiB, under the 2 GiB floor
-        $total = 1_000_000_000_000_000;   // ~0.9 PiB, so fraction is tiny-but-that's-also-<15%
+        // Isolate the 2 GiB FLOOR from the 15% fraction: 1.5 GiB free of a 4 GiB disk = 37.5% free
+        // (a HEALTHY fraction), so only the absolute-floor branch can make this low.
+        $free = 1_610_612_736;   // 1.5 GiB, under the 2 GiB floor
+        $total = 4_294_967_296;  // 4 GiB -> 37.5% free, well above 15%
         self::assertTrue(ServerStorageTelemetry::isLowDisk($free, $total));
     }
 
@@ -114,10 +114,37 @@ final class DashboardServerStatsTest extends TestCase
         self::assertFalse(ServerStorageTelemetry::isLowDisk(100, 0));
     }
 
+    public function test_ttl_cache_serves_stale_within_ttl_then_recomputes(): void
+    {
+        $base = $this->tmpBase();
+        $this->writeFile($base . '/recordings/a.wav', 100);
+        $this->tmp[] = $base . '/.fp-telemetry-cache.json';
+
+        $now = 1000;
+        $clock = static function () use (&$now): int { return $now; };
+        $mk = fn (): ServerStorageTelemetry => new ServerStorageTelemetry(
+            $base,
+            $base . '/none.sqlite',
+            $this->probe(50_000_000_000, 100_000_000_000),
+            15,
+            $clock
+        );
+
+        self::assertSame(100, $mk()->collect()['recordings_bytes']); // computes + caches at t=1000
+
+        $this->writeFile($base . '/recordings/b.wav', 250); // footprint really becomes 350
+
+        $now = 1005; // within the 15s TTL -> cached value
+        self::assertSame(100, $mk()->collect()['recordings_bytes']);
+
+        $now = 1020; // past the TTL -> recompute
+        self::assertSame(350, $mk()->collect()['recordings_bytes']);
+    }
+
     public function test_missing_storage_dirs_degrade_to_zero_not_fault(): void
     {
         $base = sys_get_temp_dir() . '/fp0209-missing-' . bin2hex(random_bytes(6));
-        $t = new ServerStorageTelemetry($base, $base . '/x.sqlite', $this->probe(null, null));
+        $t = new ServerStorageTelemetry($base, $base . '/x.sqlite', $this->probe(null, null), 0);
         $s = $t->collect();
         self::assertSame(0, $s['recordings_bytes']);
         self::assertSame(0, $s['quarantine_count']);
