@@ -50,6 +50,52 @@ final class UdpReflectionInvariantTest extends TestCase
 
     private const OID_SYS_DESCR = '1.3.6.1.2.1.1.1.0';
 
+    // FP-0483: UDP is capture-only by DEFAULT, so the bucket/grant tests in this file (which assert
+    // udpResponseAllowed() GRANTS) must opt into reply mode. The capture-only cases clear it themselves.
+    protected function setUp(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT'); // clear — never leak the flag across cases/files
+    }
+
+    /**
+     * FP-0483 kill-switch: in capture-only mode (the default — env cleared) udpResponseAllowed() returns
+     * false for every UDP server, so the gated sendto is skipped. The inbound is still parsed (outbuf is
+     * still BUILT — the gate lives in the socket run() loop, not processInbound) so intel is preserved; we
+     * assert the choke-point contract, not outbuf-emptiness.
+     *
+     * @dataProvider serverFrameProvider
+     */
+    public function test_capture_only_default_suppresses_reply(callable $serverFactory): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT'); // clear -> capture-only (the deployed default)
+        $server = $serverFactory();
+        $allow = new \ReflectionMethod($server, 'udpResponseAllowed');
+        $allow->setAccessible(true);
+        // The choke-point contract: no UDP reply is admitted, so every server's run()-loop sendto is
+        // skipped. (Intel is preserved because parse+log run before this gate; outbuf-build timing varies
+        // per server and is NOT asserted here — the gate is the invariant.)
+        self::assertFalse($allow->invoke($server, '203.0.113.7'), 'capture-only: no UDP reply admitted');
+    }
+
+    /**
+     * With reply explicitly opted in, the gate grants (the depleted-bucket seed admits the first calls).
+     *
+     * @dataProvider serverFrameProvider
+     */
+    public function test_reflect_opt_in_restores_reply(callable $serverFactory): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+        $server = $serverFactory();
+        $allow = new \ReflectionMethod($server, 'udpResponseAllowed');
+        $allow->setAccessible(true);
+        self::assertTrue($allow->invoke($server, '203.0.113.8'), 'opt-in: first reply admitted');
+    }
+
     // ---- §4a: test_response_never_exceeds_request --------------------------------------------
 
     /**

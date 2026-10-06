@@ -20,6 +20,17 @@ final class SipEgressBudgetTest extends TestCase
 {
     private const RATIO = 3.0;
 
+    // FP-0483: UDP is capture-only by default; this suite exercises the opt-in reply/egress-budget path.
+    protected function setUp(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT');
+    }
+
     // ---- helpers --------------------------------------------------------------------------------
 
     private function boundServer(?SipConfig $config = null): SipServer

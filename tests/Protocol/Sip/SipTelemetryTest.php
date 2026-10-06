@@ -16,6 +16,17 @@ use PHPUnit\Framework\TestCase;
  */
 final class SipTelemetryTest extends TestCase
 {
+    // FP-0483: UDP is capture-only by default; the F4 bucket-drain test asserts the opt-in reply path.
+    protected function setUp(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT');
+    }
+
     public function test_user_agent_and_tool_are_attributed_and_logged(): void
     {
         $logged = [];

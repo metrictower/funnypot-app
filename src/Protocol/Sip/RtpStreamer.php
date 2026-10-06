@@ -90,6 +90,13 @@ class RtpStreamer
      */
     public function sendPacket(SipSession $s, string $audioPayload): bool
     {
+        // FP-0483 reflection kill-switch: in capture-only mode (the default) emit no RTP and bind no media
+        // port at all — checked before activateDialog() below. (Moot in practice: RTP needs an ACK, which
+        // needs the SIP 100/180/200 that capture-only already suppresses — defence-in-depth.)
+        if (!\Funnypot\Protocol\UdpReflect::enabled()) {
+            return false;
+        }
+
         // Anti-Reflection Check (B1): Media destination MUST match the signaling source IP
         if ($s->remoteRtpIp === '' || $s->remoteRtpIp !== $s->peerIp || $s->remoteRtpPort <= 0) {
             return false;

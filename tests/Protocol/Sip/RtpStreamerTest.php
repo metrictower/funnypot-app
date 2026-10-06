@@ -10,6 +10,17 @@ use PHPUnit\Framework\TestCase;
 
 final class RtpStreamerTest extends TestCase
 {
+    // FP-0483: RTP media is suppressed in capture-only (the default); this suite tests the reply path.
+    protected function setUp(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT=1');
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('FUNNYPOT_UDP_REFLECT');
+    }
+
     public function test_rtp_header_structure(): void
     {
         // First packet: marker bit = true

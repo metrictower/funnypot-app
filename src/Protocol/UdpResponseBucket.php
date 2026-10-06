@@ -86,6 +86,13 @@ trait UdpResponseBucket
      */
     private function udpResponseAllowed(string $ip): bool
     {
+        // FP-0483 reflection kill-switch: in capture-only mode (the default) NO UDP reply is emitted — a
+        // silent port can't be catalogued or abused as a reflector. Returns before the bucket so capture-only
+        // burns no token and the opt-in reply path's amp-cap/bucket accounting is untouched.
+        if (!UdpReflect::enabled()) {
+            return false;
+        }
+
         $now = microtime(true);
         $this->udpResponseBucketEnsure($ip, $now);
 
