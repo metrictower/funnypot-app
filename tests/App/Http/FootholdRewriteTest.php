@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
+use Funnypot\App\Tarpit\Cmdi\FootholdIdentity;
 use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\App\Tarpit\LlmOnlyLink;
 use Funnypot\App\ThreatIntel\AttackClassifier;
@@ -97,28 +98,56 @@ final class FootholdRewriteTest extends TestCase
         self::assertFalse($this->rewriter()->appliesTo(Detection::none()));
     }
 
+    public function test_does_not_apply_on_a_static_asset_path(): void
+    {
+        $webshell = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        self::assertFalse($this->rewriter()->appliesTo($webshell, '/x.js'), 'an HTML shell for a .js request would be a tell');
+        self::assertTrue($this->rewriter()->appliesTo($webshell, '/uploads/shell.php'));
+    }
+
     // --- rewrite(): mechanism fires, goal blocked coherently, static, routes onward --------------
 
-    public function test_rewrite_shows_the_mechanism_firing_but_the_goal_blocked(): void
+    /** @return array<string,array{0:?FootholdIdentity}> */
+    public static function identities(): array
     {
-        $body = $this->rewriter()->rewrite(self::CORE_WEBSHELL_BODY);
+        return ['www-data (default)' => [null], 'root' => [FootholdIdentity::root()]];
+    }
 
-        // Mechanism fires: the command ran and returned a (non-root) identity — ARTEX doctrine 2 keeps
-        // it engaged because the foothold visibly works.
-        self::assertStringContainsString('uid=33(www-data)', $body, 'the mechanism must visibly fire');
+    /** @dataProvider identities */
+    public function test_rewrite_shows_the_mechanism_firing_but_the_goal_blocked(?FootholdIdentity $id): void
+    {
+        $body = $this->rewriter()->rewrite(self::CORE_WEBSHELL_BODY, $id);
 
-        // Goal blocked coherently — no root, no secret, no working credential, no completed-RCE proof.
-        self::assertStringNotContainsString('uid=0', $body, 'must never serve root');
+        if ($id === null) {
+            // Mechanism fires: the command ran and returned a non-root identity, which keeps the agent
+            // engaged because the foothold visibly works.
+            self::assertStringContainsString('uid=33(www-data)', $body, 'the mechanism must visibly fire');
+            self::assertStringContainsString('Permission denied', $body, 'shadow/root are unreadable as www-data (exfil blocked)');
+        } else {
+            // Root is never revealed unprompted: no id line, no shadow, no /root listing.
+            self::assertStringNotContainsString('uid=', $body, 'the root landing does not volunteer who it is');
+            self::assertStringNotContainsString('$6$', $body, 'no credential material on the first page');
+            self::assertStringNotContainsString('root:', $body);
+        }
+
+        // Neither landing prints a root id.
+        self::assertStringNotContainsString('uid=0', $body, 'the landing never prints a root id');
         self::assertStringNotContainsString('gid=0', $body);
         // The privesc / exfil attempts fail for believable hardened-container reasons.
         self::assertStringContainsString('sudo: not found', $body, 'no sudo in the image (privesc blocked)');
-        self::assertStringContainsString('Permission denied', $body, 'shadow/root are unreadable as www-data (exfil blocked)');
         self::assertStringContainsString('Read-only file system', $body, 'rootfs is read-only (persistence blocked)');
         self::assertStringContainsString('Connection refused', $body, 'egress is refused (pivot blocked)');
-        self::assertStringContainsString('CapEff:', $body, 'capabilities are dropped');
+        self::assertStringContainsString("CapEff:\t0000000000000000", $body, 'capabilities are dropped');
         // Reads as "real cmdi, controlled impact", never "clearly secure" — it does not deny the finding.
         self::assertStringNotContainsStringIgnoringCase('access denied', $body);
         self::assertStringNotContainsStringIgnoringCase('forbidden', $body);
+    }
+
+    public function test_the_sudo_line_uses_the_shell_prefix_ash_prints(): void
+    {
+        $body = $this->rewriter()->rewrite(self::CORE_WEBSHELL_BODY);
+        self::assertStringContainsString("\nsh: sudo: not found\n", $body, 'popen runs sh -c, so ash prefixes with sh:');
+        self::assertStringNotContainsString('/bin/sh: sudo', $body);
     }
 
     public function test_rewrite_is_coherent_with_the_distroless_contradiction_avoided(): void

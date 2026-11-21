@@ -18,6 +18,7 @@ use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
+use Funnypot\App\Tarpit\Cmdi\FootholdIdentity;
 use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
@@ -688,9 +689,12 @@ final class ServedSurfacesFingerprintTest extends TestCase
         self::assertStringContainsString('uid=33(www-data)', $coreBody, 'sanity: captured the installed core webshell body');
 
         $seed = IdentityTestSupport::httpIdentity()->personaSeed();
-        $foothold = (new FootholdRewriter($seed, LabyrinthController::entryHint()))->rewrite($coreBody);
-        self::assertStringNotContainsString($cmd, $foothold, "the foothold reflected the attacker command: {$cmd}");
-        self::assertServedClean($foothold, "FP-0806 webshell foothold body (adversarial cmd={$cmd})");
+        foreach (['www-data' => null, 'root' => FootholdIdentity::root()] as $who => $identity) {
+            $foothold = (new FootholdRewriter($seed, LabyrinthController::entryHint()))->rewrite($coreBody, $identity);
+            self::assertStringContainsString('base path (base64):', $foothold, "sanity: the {$who} landing was rendered");
+            self::assertStringNotContainsString($cmd, $foothold, "the {$who} foothold reflected the attacker command: {$cmd}");
+            self::assertServedClean($foothold, "webshell foothold landing as {$who} (adversarial cmd={$cmd})");
+        }
     }
 
     // --- 4. Decoy archives — text decoys + recursive member-entry inspection of the nested archives -

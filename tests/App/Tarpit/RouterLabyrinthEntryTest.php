@@ -59,6 +59,7 @@ final class RouterLabyrinthEntryTest extends TestCase
         }
         $this->tmp = [];
         putenv('FUNNYPOT_TARPIT');
+        putenv('FUNNYPOT_TARPIT_CMDI_IDENTITY');
         $_GET = [];
         $_POST = [];
     }
@@ -81,6 +82,8 @@ final class RouterLabyrinthEntryTest extends TestCase
     private function router(bool $tarpitOn, int $pagesPerIpHr = 2000): array
     {
         putenv('FUNNYPOT_TARPIT=' . ($tarpitOn ? '1' : '0'));
+        // The www-data assertions below hold for any source only with the console identity pinned.
+        putenv('FUNNYPOT_TARPIT_CMDI_IDENTITY=www-data');
         $config = AppConfig::fromEnv(sys_get_temp_dir());
         self::assertSame($tarpitOn, $config->tarpitEnabled, 'the tarpit switch must match the requested posture');
 
