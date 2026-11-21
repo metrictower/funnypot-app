@@ -44,6 +44,7 @@ use Funnypot\App\Identity\HttpIdentity;
 use Funnypot\App\Identity\IdentityBootstrapException;
 use Funnypot\App\Identity\IdentityPaths;
 use Funnypot\App\Shell\ConsoleSessionStore;
+use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\App\Http\AttritionController;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
@@ -386,9 +387,17 @@ if ($config->sleepDecoy) {
     );
     $sleepDecoy = new SleepDecoy($sleepBudget, $config, new AttackClassifier());
 }
+// FP-0806: deny the terminal quick win. When the tarpit is on, a fired cmdi/webshell decoy's served
+// body is rewritten into a non-terminal locked-down-container foothold that points onward to the
+// labyrinth (LabyrinthController::entryHint() — the SAME base64 breadcrumb GET recon carries), so an AI
+// pentester keeps pivoting instead of declaring the goal met. Gated on $config->tarpitEnabled (available
+// here; $labyrinth is not built until the tarpit block far below), so null ⇒ served bytes unchanged.
+$footholdRewriter = $config->tarpitEnabled
+    ? new FootholdRewriter($personaSeed, LabyrinthController::entryHint())
+    : null;
 // The engine Config factory carries the identity's private render salt + visible persona material, so
 // the template tier resolves the SAME PersonaIdentity the app pages show (and the same X-Powered-By).
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $footholdRewriter);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds

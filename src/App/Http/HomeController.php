@@ -40,11 +40,14 @@ final class HomeController
         private AppConfig $config,
         private string $assetsDir,
         private ?Blocklist $blocklist = null,
-        /** FP-0245b: an LLM-only labyrinth ENTRY hint (an HTML comment carrying a base64 path + a
-         *  construct instruction), planted on the login-SUCCESS funnel below ONLY when the tarpit is
-         *  on (the composition root passes LabyrinthController::entryHint() then, else null). It is NOT
-         *  a plain href and NOT in robots, so a crawler cannot discover the maze; an LLM that submitted
-         *  the login decodes it. A crawler never POSTs, so it never even sees this response. */
+        /** FP-0245b / FP-0806: an LLM-only labyrinth ENTRY hint (an HTML comment carrying a base64 path +
+         *  a construct instruction), planted ONLY when the tarpit is on (the composition root passes
+         *  LabyrinthController::entryHint() then, else null). It rides BOTH the GET `/` page ({@see page()})
+         *  — the surface a reasoning agent reads during ordinary recon — and the login-SUCCESS POST
+         *  ({@see login()}). It is NOT a plain href and NOT in robots, so a `href`-regex crawler finds
+         *  nothing to follow and the maze stays crawler-undiscoverable; an LLM decodes the base64 root.
+         *  (FP-0806 moved the hint onto GET `/` because a GET-recon agent never POSTs the login and so
+         *  never saw the POST-only hint; containment is TarpitBudget, not path obscurity.) */
         private ?string $labyrinthEntryHint = null,
         /** FP-0295: the REAL operator login is overlaid on this decoy. When present, a POST whose
          *  username exactly matches {@see AppConfig::$adminUser} is verified against it (Argon2id);
@@ -112,7 +115,13 @@ final class HomeController
             . '<title>' . htmlspecialchars($title) . '</title>'
             . '<style>' . $this->baseCss() . $skin . '</style>'
             // Lure 1: a leaked internal URL in an HTML comment — scanners scrape comments for endpoints.
+            // (A dumb-bot lure, deliberately a plain path; it does NOT itself fire the webshell — that
+            // needs an independent cmdi probe — it just draws a probe onto honeypot surface.)
             . "\n<!-- TODO: retire the legacy admin console at /admin/root/html once the SSO migration completes -->\n"
+            // FP-0806: the LLM-only labyrinth entry hint now also rides GET `/` (a base64 path in an HTML
+            // comment), so a reasoning agent doing GET recon can reconstruct the maze root. Armed only when
+            // the tarpit is on; a `href`-regex crawler finds no followable link, so the maze stays hidden.
+            . ($this->labyrinthEntryHint ?? '')
             . '</head><body>'
             . '<main class=card><h1>Sign in</h1>' . $body . '</main>'
             // Lure 2: an invisible off-screen link only a DOM crawler follows; a sighted user never sees it.

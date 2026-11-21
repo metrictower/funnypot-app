@@ -12,6 +12,7 @@ use Funnypot\App\Http\HoneypotController;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\Router;
+use Funnypot\App\Tarpit\LlmOnlyLink;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\ConfigStore;
 use Funnypot\App\Storage\SqliteHitStore;
@@ -245,22 +246,28 @@ final class MisbehavingCrawlerTest extends TestCase
         }
     }
 
-    public function test_the_entry_hint_rides_only_the_login_success_funnel_never_a_get_crawl(): void
+    public function test_the_entry_hint_rides_get_recon_as_an_unfollowable_base64_comment(): void
     {
+        // FP-0806: the entry hint now rides the GET `/` recon surface (the page a reasoning agent reads
+        // during ordinary recon), not only the login POST — a GET-recon agent never POSTs the login, so
+        // the POST-only hint was unreachable to it. It stays crawler-undiscoverable: a base64 path inside
+        // an HTML comment, so a pure `href|src` regex extractor finds NOTHING to follow while an LLM
+        // decodes the root. (Earlier this method relied on a grep accident — the hint carries the spaced
+        // "audit archive", never the hyphenated path — which is no proof of the real crawler-safety.)
         $router = $this->router();
-
-        // A crawler is GET-only and never submits credentials, so it never sees the entry hint.
         $getHome = $this->fetch($router, '/', 'GET');
-        self::assertStringNotContainsString('audit-archive', $getHome, 'the GET front door must not carry the entry hint');
 
-        // Positive control: the login-SUCCESS response (a POST an LLM makes) DOES carry the hint — as an
-        // HTML comment (no href), so it is LLM-constructable yet invisible to a regex link extractor.
-        $_POST = ['username' => 'admin', 'password' => 'hunter2'];
-        $postLogin = $this->fetch($router, '/', 'POST', '198.51.100.60');
-        $mazeHrefs = array_filter(self::extractHrefs($postLogin), static fn (string $h): bool => str_contains($h, 'audit-archive'));
-        self::assertSame([], $mazeHrefs, 'the entry hint is never a followable href');
-        self::assertSame(1, preg_match('~base64\):\s*([A-Za-z0-9+/=]+)~', $postLogin, $m), 'login-success carries the base64 entry hint');
+        // Positive: GET `/` carries the base64 entry hint inside an HTML comment, decoding to the root.
+        self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $getHome, $m),
+            'GET / carries the base64 entry hint inside an HTML comment');
         self::assertSame('/admin/audit-archive', base64_decode($m[1]), 'the hint decodes to the labyrinth root');
+
+        // Crawler-safety: no followable link into the maze, and the plain maze path never appears verbatim
+        // (only the base64 + the deliberately spaced "audit archive" prose do).
+        self::assertFalse(LlmOnlyLink::containsFollowableLink($m[0]), 'the hint region carries no href/src');
+        $mazeHrefs = array_filter(self::extractHrefs($getHome), static fn (string $h): bool => str_contains($h, 'audit-archive'));
+        self::assertSame([], $mazeHrefs, 'the GET-recon hint is never a followable href');
+        self::assertStringNotContainsString('/admin/audit-archive', $getHome, 'no plain maze path leaks on GET /');
     }
 
     // --- the LLM contrast: reasoning descends past depth 8 -----------------------------------------
@@ -356,31 +363,30 @@ final class MisbehavingCrawlerTest extends TestCase
         }
 
         self::assertNotEmpty($visited, 'the crawler ran');
-        self::assertArrayHasKey('/login', $visited, 'the crawler did GET the corporate login form (the GET seam has no hint)');
+        self::assertArrayHasKey('/login', $visited, 'the crawler did GET the corporate login form (the base64-comment hint there is not a followable link)');
         foreach (array_keys($visited) as $p) {
             self::assertFalse(str_starts_with($p, LabyrinthController::ENTRY_BASE));
         }
     }
 
-    public function test_stealth_entry_hint_rides_only_the_corporate_login_post_never_a_get_crawl(): void
+    public function test_stealth_entry_hint_rides_get_recon_as_an_unfollowable_base64_comment(): void
     {
+        // FP-0806 (stealth analogue): the stealth corporate front now plants the hint on every page it
+        // renders, so BOTH GET recon surfaces — the `/` homepage and the `/login` form — carry it, as a
+        // base64 HTML comment a `href|src` crawler cannot follow but an LLM decodes. (Previously it rode
+        // only the login POST, which a GET-only recon agent never reaches.)
         $router = $this->router('stealth');
 
-        // A crawler is GET-only. Neither the corporate homepage nor the GET login form carries the hint.
-        $getHome = $this->fetch($router, '/', 'GET');
-        self::assertStringNotContainsString('audit-archive', $getHome, 'the stealth GET homepage must not carry the entry hint');
-        $getLogin = $this->fetch($router, '/login', 'GET');
-        self::assertStringNotContainsString('audit-archive', $getLogin, 'the stealth GET login form must not carry the entry hint');
-
-        // Positive control: the credential-submission (POST /login) response DOES carry the hint — as an
-        // HTML comment (no href into the maze), so it is LLM-constructable yet invisible to a link extractor.
-        $_POST = ['username' => 'admin', 'password' => 'hunter2'];
-        $postLogin = $this->fetch($router, '/login', 'POST', '198.51.100.70');
-        $mazeHrefs = array_filter(self::extractHrefs($postLogin), static fn (string $h): bool => str_contains($h, 'audit-archive'));
-        self::assertSame([], $mazeHrefs, 'the stealth entry hint is never a followable href');
-        // The hint's base path lives in an HTML comment, never in a href/src attribute.
-        self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $postLogin, $m), 'stealth login-success carries the base64 entry hint inside an HTML comment');
-        self::assertSame('/admin/audit-archive', base64_decode($m[1]), 'the stealth hint decodes to the labyrinth root');
+        foreach (['/', '/login'] as $recon) {
+            $body = $this->fetch($router, $recon, 'GET');
+            self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $body, $m),
+                "stealth GET {$recon} carries the base64 entry hint inside an HTML comment");
+            self::assertSame('/admin/audit-archive', base64_decode($m[1]), "the hint on {$recon} decodes to the labyrinth root");
+            self::assertFalse(LlmOnlyLink::containsFollowableLink($m[0]), "the hint region on {$recon} carries no href/src");
+            $mazeHrefs = array_filter(self::extractHrefs($body), static fn (string $h): bool => str_contains($h, 'audit-archive'));
+            self::assertSame([], $mazeHrefs, "the GET-recon hint on {$recon} is never a followable href");
+            self::assertStringNotContainsString('/admin/audit-archive', $body, "no plain maze path leaks on GET {$recon}");
+        }
     }
 
     public function test_stealth_llm_shaped_navigator_reconstructs_the_links_and_descends_past_depth_8(): void

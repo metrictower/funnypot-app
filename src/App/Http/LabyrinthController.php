@@ -34,7 +34,8 @@ use Throwable;
  *     listed in robots.txt, a sitemap, or a nofollow directive (robots.txt is advisory-only and, as the
  *     operator learned, an ATTRACTANT — a Baidu bot read a Disallow line as a target list). The ENTRY is
  *     not a plain href on any page and not in robots: it is only CONSTRUCTABLE from an LLM-only hint
- *     ({@see entryHint()}) planted on the login-success funnel (a base64 path in an HTML comment). Every
+ *     ({@see entryHint()}) planted on the GET `/` recon surface and the login funnel (a base64 path in
+ *     an HTML comment; FP-0806 added the GET-recon surface so a GET-only agent reaches it too). Every
  *     INTERIOR link is emitted through {@see LlmOnlyLink} (prose compute step, base64/hex decode,
  *     comment-split URL) — a `href="…"` regex extractor finds NOTHING to follow, so a dumb crawler
  *     seeded from every robots Disallow entry gets a bounded frontier and cannot descend. An LLM that
@@ -57,7 +58,7 @@ use Throwable;
 final class LabyrinthController
 {
     /** The labyrinth root prefix. Not linked anywhere a crawler can reach it; the entry is only ever
-     *  LLM-constructable (base64 in a login-success HTML comment). NB: this constant is public in an
+     *  LLM-constructable (base64 in an HTML comment on GET `/` and the login funnel). NB: this constant is public in an
      *  open-source repo, so a funnypot-aware scanner could GET it by name — the real containment is the
      *  off-by-default master switch + the per-IP/global TarpitBudget caps, never obscurity of the path. */
     public const ENTRY_BASE = '/admin/audit-archive';
@@ -127,10 +128,11 @@ final class LabyrinthController
 
     /**
      * The LLM-only ENTRY hint — an HTML comment carrying the labyrinth root as base64 plus a construct
-     * instruction. The composition root plants this on the login-success funnel (HomeController) ONLY
-     * when the tarpit is on. A `href` regex finds nothing; a bare-URL scraper gets a fragment with no
-     * base; an LLM that "logged in" decodes the base64 and appends the page segment. Static + pure so a
-     * test can assert it contains no followable link and is absent from robots.
+     * instruction. The composition root plants this on the GET `/` recon surface and the login funnel
+     * (HomeController/CorporateController) ONLY when the tarpit is on, and on the rewritten webshell
+     * foothold ({@see \Funnypot\App\Tarpit\FootholdRewriter}). A `href` regex finds nothing; a bare-URL
+     * scraper gets a fragment with no base; an LLM that reads the page decodes the base64 and appends the
+     * page segment. Static + pure so a test can assert it contains no followable link and is absent from robots.
      */
     public static function entryHint(): string
     {

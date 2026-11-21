@@ -91,11 +91,22 @@ so a deep page does no more work than page 1 — the infinite-ness lives in the 
 the size of one). Its hard rule is that it is **crawler-undiscoverable and LLM-only-constructable**: it
 is **never** listed in robots.txt or a sitemap (robots.txt is advisory-only and, as the operator learned
 from a Baidu self-DoS, an *attractant* — never a boundary), its entry is only constructable from an
-LLM-only hint on the login-success funnel, and every interior link is emitted through `LlmOnlyLink`
-(a prose compute step, a base64/hex path to decode, or a whitespace-split path in an HTML comment) so an
-`href`-regex crawler finds nothing to follow — only an agent that reads and reasons descends. Every hit
-is gated by `TarpitBudget` first (the only per-IP guard on this gate-exempt route), and it is mounted
-only when `FUNNYPOT_TARPIT` is on.
+LLM-only hint — a base64 path in an HTML comment on the GET `/` recon surface and the login funnel
+(FP-0806 put it on GET `/` so an agent doing ordinary GET recon, which never POSTs a login, still reaches
+it) — and every interior link is emitted through `LlmOnlyLink` (a prose compute step, a base64/hex path
+to decode, or a whitespace-split path in an HTML comment) so an `href`-regex crawler finds nothing to
+follow — only an agent that reads and reasons descends. Every hit is gated by `TarpitBudget` first (the
+only per-IP guard on this gate-exempt route), and it is mounted only when `FUNNYPOT_TARPIT` is on.
+
+To stop a single foothold from ending the engagement, the cmdi/webshell quick-win decoy is **non-terminal**
+(`src/App/Tarpit/FootholdRewriter.php`, wired in `HoneypotController` when the tarpit is on): its served
+body is rewritten into a believable low-privilege, locked-down-container shell — the command mechanism
+fires (`id` → `uid=33(www-data)`) but privilege-escalation and exfil fail for real reasons (no sudo,
+dropped capabilities, read-only rootfs, no egress), the admin/DB goal lives behind the gateway, and a
+mounted deploy-config artifact points onward to the **same** labyrinth entry the GET-recon breadcrumb
+does. The body is static (never echoes the attacker's command), leaves the logged/reported verdict at
+`critical`, and is a no-op when the tarpit is off or if a future funnypot-core change makes the webshell
+template non-terminal itself (FP-0800 coordination).
 
 Alongside it are the **front-loaded context-polluters** (`src/App/Http/PolluterController.php`, under
 `/admin/export/*`): four synthetic "leaked export" artifacts an AI attacker pays dearly to ingest while

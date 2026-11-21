@@ -18,6 +18,7 @@ use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
+use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\Core\RequestContext;
 use Geo;
 
@@ -41,6 +42,10 @@ final class HoneypotController
         private ?AttackClassifier $attackClassifier = null,
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
+        /** FP-0806: when the tarpit is on, rewrites a fired cmdi/webshell quick-win body into a
+         *  non-terminal locked-down-container foothold that points onward to the labyrinth, so an AI
+         *  pentester keeps pivoting instead of declaring the goal met. Null ⇒ served bytes unchanged. */
+        private ?FootholdRewriter $footholdRewriter = null,
     ) {
     }
 
@@ -311,6 +316,14 @@ final class HoneypotController
         $decoyServed = false;
         $llm = null;
         if ($response !== null) {
+            // FP-0806: deny the terminal quick win. A fired cmdi/webshell decoy would otherwise read as a
+            // completed RCE and end an AI pentester's engagement; rewrite ONLY its served body into a
+            // believable low-priv foothold that routes onward to the labyrinth. $response->satisfies is
+            // left intact on purpose, so the hit still logs/reports as a critical probe below — only the
+            // bytes change. Null rewriter (tarpit off) or a non-terminal core template ⇒ no-op.
+            if ($this->footholdRewriter !== null && $this->footholdRewriter->appliesTo($response->satisfies)) {
+                $response->body = $this->footholdRewriter->rewrite($response->body);
+            }
             ResponseEmitter::emit($response);
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,

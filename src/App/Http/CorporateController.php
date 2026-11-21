@@ -33,13 +33,15 @@ final class CorporateController
         private AppConfig $config,
         private string $assetsDir,
         private ?Blocklist $blocklist = null,
-        /** FP-0245e: the same LLM-only labyrinth ENTRY hint HomeController carries in public mode (an
-         *  HTML comment with a base64 root + a construct instruction), planted on the STEALTH
-         *  credential-submission (login POST) response below ONLY when the tarpit is on — the composition
-         *  root passes LabyrinthController::entryHint() then, else null. Stealth serves / and /login here,
-         *  so without this the merged labyrinth is inert in a stealth deployment. It is NOT a plain href
-         *  and NOT in robots/sitemap, so a crawler cannot discover the maze; a GET-only crawler never
-         *  POSTs, so it never even sees this response; an LLM that submitted the login decodes it. */
+        /** FP-0245e / FP-0806: the same LLM-only labyrinth ENTRY hint HomeController carries (an HTML
+         *  comment with a base64 root + a construct instruction), planted ONLY when the tarpit is on — the
+         *  composition root passes LabyrinthController::entryHint() then, else null. It rides every page
+         *  this stealth front renders via {@see page()} — the GET `/` homepage and the GET/POST `/login`
+         *  surfaces — so a GET-recon agent (which never POSTs) can still reconstruct the maze root.
+         *  (FP-0806 moved the hint onto the GET recon surfaces; before, it rode only the login POST and a
+         *  GET-only agent never saw it.) It is NOT a plain href and NOT in robots/sitemap, so a
+         *  `href`-regex crawler finds nothing to follow; an LLM decodes the base64 root. Containment is
+         *  TarpitBudget, not path obscurity. */
         private ?string $labyrinthEntryHint = null,
         /** FP-0295: the REAL operator login overlaid on the stealth /login, mirroring HomeController's
          *  public-mode overlay. When present, a POST whose username exactly matches
@@ -67,7 +69,6 @@ final class CorporateController
     {
         header('Content-Type: text/html; charset=utf-8');
         $error = '';
-        $hint = '';
         if ($method === 'POST') {
             $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
             $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
@@ -91,13 +92,10 @@ final class CorporateController
 
             $this->log($clientIp, 'POST', '/login', 'login', 'high', 'globex-login', 'user=' . $user . ' pass=' . $pass);
             $error = '<p class=err>Invalid username or password.</p>';
-            // FP-0245e: the LLM-only labyrinth entry hint rides the credential-submission (POST) response
-            // — the stealth analogue of HomeController's public login-success funnel. A crawler is GET-only
-            // so never reaches this branch; the hint is an HTML comment (no href), so a regex link
-            // extractor finds nothing to follow, while an LLM that "logged in" decodes the base64 root.
-            $hint = $this->labyrinthEntryHint ?? '';
         }
-        echo $this->page('Sign in — Globex Corporation', $this->loginForm($error)) . $hint;
+        // FP-0806: the labyrinth entry hint is planted by page() on every rendered surface (homepage +
+        // GET/POST login), so a GET-recon agent sees it too — no separate POST-only append here.
+        echo $this->page('Sign in — Globex Corporation', $this->loginForm($error));
     }
 
     /**
@@ -137,7 +135,12 @@ final class CorporateController
 
         return "<!doctype html><html lang=en><head><meta charset=utf-8>"
             . "<meta name=viewport content='width=device-width,initial-scale=1'>"
-            . '<title>' . htmlspecialchars($title) . "</title><style>{$css}</style></head><body>"
+            . '<title>' . htmlspecialchars($title) . "</title><style>{$css}</style>"
+            // FP-0806: the LLM-only labyrinth entry hint (a base64 path in an HTML comment) rides every
+            // stealth page — including the GET recon surfaces — so a reasoning agent can reconstruct the
+            // maze root. Armed only when the tarpit is on; a `href`-regex crawler finds no link to follow.
+            . ($this->labyrinthEntryHint ?? '')
+            . "</head><body>"
             . "<header class=nav><div class=brand>GLOBEX<span>CORP</span></div>"
             . "<nav><a href='#products'>Products</a><a href='#solutions'>Solutions</a>"
             . "<a href='#about'>About</a><a href='#careers'>Careers</a><a href='/login'>Sign in</a></nav></header>"

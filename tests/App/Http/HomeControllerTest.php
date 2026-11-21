@@ -7,7 +7,9 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HomeController;
+use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\LlmOnlyLink;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 3) . '/demo/lib/geo.php';
@@ -73,6 +75,28 @@ final class HomeControllerTest extends TestCase
         // Then funnelled into the no-auth admin-panel decoy — not re-rendered with an inline error.
         self::assertStringContainsString('/admin/access-login', $html);
         self::assertStringNotContainsString('Invalid username or password', $html);
+    }
+
+    // --- FP-0806: the labyrinth entry hint rides GET / recon ---
+
+    public function test_get_index_carries_the_labyrinth_entry_hint_only_when_armed(): void
+    {
+        $geo = new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
+        $config = AppConfig::fromEnv(sys_get_temp_dir());
+
+        // Armed (tarpit on): the composition root wires LabyrinthController::entryHint() into the field.
+        $armed = new HomeController(new HomeSpy(), $geo, $config, sys_get_temp_dir(), null, LabyrinthController::entryHint());
+        $html = $this->render(fn () => $armed->index());
+        self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $html, $m),
+            'GET / carries the base64 entry hint inside an HTML comment');
+        self::assertSame('/admin/audit-archive', base64_decode($m[1]), 'the hint decodes to the maze root');
+        // Crawler-safe: the hint is no followable link, and the plain maze path never appears verbatim.
+        self::assertFalse(LlmOnlyLink::containsFollowableLink($m[0]), 'the hint region carries no href/src');
+        self::assertStringNotContainsString('/admin/audit-archive', $html, 'the maze path never leaks as plain text');
+
+        // Disarmed (tarpit off): the default controller (null hint) carries nothing.
+        $disarmed = $this->render(fn () => $this->controller(new HomeSpy())->index());
+        self::assertStringNotContainsString('base path (base64):', $disarmed, 'no hint when the tarpit is off');
     }
 
     // --- FP-0295: the real operator login overlaid on the decoy ---

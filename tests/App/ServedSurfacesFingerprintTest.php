@@ -17,6 +17,9 @@ use Funnypot\App\Http\CorporateController;
 use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\Http\LabyrinthController;
+use Funnypot\App\Tarpit\FootholdRewriter;
+use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\App\Llm\LlmClient;
 use Funnypot\App\Llm\LlmOutputSanitizer;
@@ -612,6 +615,82 @@ final class ServedSurfacesFingerprintTest extends TestCase
         $body = $this->render(fn () => $honeypot->robots());
         self::assertStringContainsString('Disallow:', $body, 'sanity: still the real robots.txt, not vacuously empty');
         self::assertServedClean($body, 'HoneypotController::robots()');
+    }
+
+    // --- 3g. FP-0806 webshell FOOTHOLD rewrite (app-authored body, so it joins this app's gate) -----
+
+    /**
+     * FP-0806 makes the served `attack-webshell-panel` body APP-authored (FootholdRewriter), so unlike
+     * the core template it replaces, it is THIS repo's fingerprint responsibility. It is also the one
+     * served surface here fed attacker-controlled input (the `cmd=` probe), so each adversarial payload
+     * must (a) never be reflected into the static body and (b) leave no leak-IN/leak-OUT signature —
+     * including when the payload itself IS detector vocabulary or a CRS-rule-shaped number.
+     *
+     * @return array<string,array{0:string}>
+     */
+    public static function adversarialCommands(): array
+    {
+        return [
+            'xss' => ['<script>alert(1)</script>'],
+            'shell-chain' => ['id;cat /etc/passwd'],
+            'subshell' => ['$(curl http://169.254.169.254/)'],
+            'detector-vocab' => ['OWASP_CRS ModSecurity SecRule'],
+            'crs-rule-number' => ['942100'],
+            'own-vocab-echo' => ['honeypot decoy tarpit bait funnypot'],
+        ];
+    }
+
+    /** Fire the webshell cleanly (cmd=id, so the template reliably wins) through the real engine and
+     *  return the served body. $rewriter null = the unmodified installed core body; non-null = the
+     *  app-authored foothold. */
+    private function serveWebshell(?FootholdRewriter $rewriter): string
+    {
+        $dir = sys_get_temp_dir() . '/fp-0806-foothold-' . bin2hex(random_bytes(6));
+        @mkdir($dir, 0777, true);
+        $this->cleanupPaths[] = $dir;
+        $config = AppConfig::fromEnv($dir);
+        $geo = new \Geo($dir . '/no-geo');
+        $controller = new HoneypotController(
+            new NoopHitStore(), $geo, $config, dirname(__DIR__, 2) . '/demo/decoys',
+            IdentityTestSupport::coreConfigFactory(),
+            null, null, null, null, new AttackClassifier(), null, null, $rewriter,
+        );
+        // A non-index path (so the webshell template wins over index.php's phpMyAdmin match) with a
+        // benign cmd=id — the payload is exercised separately below, where it cannot change core routing.
+        $ctx = new RequestContext('GET', '/uploads/shell.php', 'cmd=id', ['User-Agent' => 'curl/8.0'], null);
+
+        return $this->render(fn () => $controller->handle($ctx, '203.0.113.80', 'off'));
+    }
+
+    public function test_webshell_foothold_served_body_carries_no_fingerprint_signature(): void
+    {
+        $seed = IdentityTestSupport::httpIdentity()->personaSeed();
+        $body = $this->serveWebshell(new FootholdRewriter($seed, LabyrinthController::entryHint()));
+        self::assertStringContainsString('uid=33(www-data)', $body, 'sanity: the app-authored foothold was served');
+        self::assertStringContainsString('base path (base64):', $body, 'sanity: the onward maze pointer is present');
+        self::assertServedClean($body, 'FP-0806 webshell foothold served body');
+    }
+
+    /**
+     * No-reflection on the real served surface. The foothold body is produced SOLELY by FootholdRewriter
+     * from the engine's STATIC core body + persona — it takes no request input — so no HTTP payload can be
+     * reflected. Feed the ACTUAL installed core webshell body (captured via a benign fire) to the rewriter
+     * and confirm each adversarial payload is absent and the body stays fingerprint-clean, including when
+     * the payload itself IS detector vocabulary or a CRS-rule-shaped number. (Routing the payload through
+     * the full engine is pointless here: XSS/LFI content matches OTHER core templates — core's routing,
+     * not this app-authored surface's fingerprint concern.)
+     *
+     * @dataProvider adversarialCommands
+     */
+    public function test_webshell_foothold_never_reflects_adversarial_input(string $cmd): void
+    {
+        $coreBody = $this->serveWebshell(null);
+        self::assertStringContainsString('uid=33(www-data)', $coreBody, 'sanity: captured the installed core webshell body');
+
+        $seed = IdentityTestSupport::httpIdentity()->personaSeed();
+        $foothold = (new FootholdRewriter($seed, LabyrinthController::entryHint()))->rewrite($coreBody);
+        self::assertStringNotContainsString($cmd, $foothold, "the foothold reflected the attacker command: {$cmd}");
+        self::assertServedClean($foothold, "FP-0806 webshell foothold body (adversarial cmd={$cmd})");
     }
 
     // --- 4. Decoy archives — text decoys + recursive member-entry inspection of the nested archives -

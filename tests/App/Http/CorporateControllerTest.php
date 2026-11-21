@@ -7,7 +7,9 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\CorporateController;
+use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\LlmOnlyLink;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 3) . '/demo/lib/geo.php';
@@ -48,6 +50,34 @@ final class CorporateControllerTest extends TestCase
         $corp = new CorporateController($store, $geo, $config, $dir, null, null, $auth);
 
         return [$corp, $auth, rtrim($config->dashboardPath, '/')];
+    }
+
+    // --- FP-0806: the labyrinth entry hint rides the stealth GET recon surfaces ---
+
+    public function test_get_recon_surfaces_carry_the_entry_hint_only_when_armed(): void
+    {
+        $dir = sys_get_temp_dir() . '/fp-0806-corp-' . uniqid();
+        @mkdir($dir, 0777, true);
+        $config = AppConfig::fromEnv($dir);
+        $geo = new \Geo($dir . '/no-geo');
+
+        // Armed: the stealth front plants the hint on every rendered page (homepage + GET/POST login).
+        $armed = new CorporateController(new CorpHitSpy(), $geo, $config, $dir, null, LabyrinthController::entryHint());
+        foreach ([
+            'homepage' => fn () => $armed->homepage(),
+            'login-get' => fn () => $armed->login('GET', '203.0.113.9'),
+        ] as $label => $call) {
+            $html = $this->render($call);
+            self::assertSame(1, preg_match('~<!--[^>]*base path \(base64\):\s*([A-Za-z0-9+/=]+)~', $html, $m),
+                "stealth {$label} carries the base64 entry hint inside an HTML comment");
+            self::assertSame('/admin/audit-archive', base64_decode($m[1]), "the {$label} hint decodes to the maze root");
+            self::assertFalse(LlmOnlyLink::containsFollowableLink($m[0]), "the {$label} hint region carries no href/src");
+            self::assertStringNotContainsString('/admin/audit-archive', $html, "{$label}: the maze path never leaks as plain text");
+        }
+
+        // Disarmed: null hint carries nothing on the GET homepage.
+        $disarmed = new CorporateController(new CorpHitSpy(), $geo, $config, $dir, null, null);
+        self::assertStringNotContainsString('base path (base64):', $this->render(fn () => $disarmed->homepage()), 'no hint when the tarpit is off');
     }
 
     public function test_get_renders_the_login_form(): void
