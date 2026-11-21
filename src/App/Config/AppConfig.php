@@ -234,6 +234,10 @@ final class AppConfig
         public int $attritionGlobalRows = 50000,
         /** Global logical retained-state bytes (MiB), clamped 1–64. */
         public int $attritionGlobalStateMb = 64,
+        /** FP-0808 fake-infra-wiki tarpit: hard per-doc byte cap (KB) for the generated INFRASTRUCTURE-NOTES.md
+         *  and its sub-docs. ~256 KB is a plausible real export and fully ingestible = maximal context
+         *  pollution; a defensive backstop on top of the fixed render budget. Rides the tarpit master switch. */
+        public int $infraDocCapKb = 256,
     ) {
     }
 
@@ -460,6 +464,9 @@ final class AppConfig
             attritionMaxArtifacts: max(3, min(64, (int) $str('FUNNYPOT_ATTRITION_MAX_ARTIFACTS', '64'))),
             attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
             attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
+            // FP-0808 fake-infra-wiki tarpit per-doc byte cap (KB), clamped 16–4096 so a bad env value can
+            // neither starve the doc nor unbound our egress; rides the tarpit master switch.
+            infraDocCapKb: max(16, min(4096, (int) $str('FUNNYPOT_INFRA_DOC_CAP_KB', '256'))),
         );
     }
 }

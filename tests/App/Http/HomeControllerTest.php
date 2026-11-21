@@ -7,7 +7,9 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\HomeController;
+use Funnypot\App\Http\InfraDocController;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\LlmOnlyLink;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 3) . '/demo/lib/geo.php';
@@ -55,6 +57,35 @@ final class HomeControllerTest extends TestCase
         self::assertStringContainsString("href='/admin/root/link'", $html, 'lure 2: invisible off-screen link');
         self::assertStringContainsString("action='/admin/root/post'", $html, 'lure 3: hidden form');
         self::assertStringContainsString('display:none', $html);
+    }
+
+    // --- FP-0808: the infra-wiki breadcrumb on the GET recon surface ---
+
+    public function test_infra_doc_breadcrumb_present_only_when_the_tarpit_is_on_and_is_unfollowable(): void
+    {
+        $geo = new \Geo(sys_get_temp_dir() . '/fp-no-geo-' . uniqid());
+        $config = AppConfig::fromEnv(sys_get_temp_dir());
+
+        // OFF: the hint is null ⇒ the recon surface carries no breadcrumb (byte-identical to today).
+        $off = new HomeController(new HomeSpy(), $geo, $config, sys_get_temp_dir());
+        $offHtml = $this->render(fn () => $off->index());
+        self::assertStringNotContainsString(base64_encode(InfraDocController::TOP_PATHS[0]), $offHtml, 'off ⇒ no breadcrumb');
+
+        // ON: the composition root passes the breadcrumb; it appears, is an HTML comment, has no href, and
+        // decodes to the doc path. A GET-only crawler sees nothing to follow; a reasoning agent decodes it.
+        $on = new HomeController(new HomeSpy(), $geo, $config, sys_get_temp_dir(), null, null, null, InfraDocController::breadcrumb());
+        $onHtml = $this->render(fn () => $on->index());
+        self::assertStringContainsString(base64_encode(InfraDocController::TOP_PATHS[0]), $onHtml, 'on ⇒ breadcrumb planted');
+        self::assertSame(1, preg_match('~<!--[^>]*base64\):\s*([A-Za-z0-9+/=]+)~', $onHtml, $m), 'breadcrumb is an HTML comment');
+        self::assertSame(InfraDocController::TOP_PATHS[0], base64_decode($m[1]), 'the breadcrumb decodes to the doc path');
+        self::assertSame(
+            0,
+            preg_match('~(?:href|src)\s*=\s*"?[^"\']*INFRASTRUCTURE~i', $onHtml),
+            'no plain href/src resolves to the infra doc'
+        );
+        self::assertStringNotContainsString('funnypot', strtolower($onHtml), 'no branding leaks with the breadcrumb on');
+        // The login form still renders (the breadcrumb does not disturb the page).
+        self::assertStringContainsString("method=post action='/'", $onHtml);
     }
 
     public function test_credential_post_is_captured_then_funnels_to_the_admin_panel(): void

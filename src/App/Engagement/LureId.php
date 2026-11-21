@@ -19,13 +19,14 @@ final class LureId
     public const POLLUTER_HOSTILE = 'polluter_hostile';
     public const POLLUTER_SHADOW = 'polluter_shadow';
     public const ATTRITION_EXPORT = 'attrition_export';
+    public const INFRA_DOC = 'infra_doc';
 
     /** @return list<string> */
     public static function all(): array
     {
         return [
             self::LABYRINTH, self::POLLUTER_CONFIG, self::POLLUTER_LOG, self::POLLUTER_HOSTILE, self::POLLUTER_SHADOW,
-            self::ATTRITION_EXPORT,
+            self::ATTRITION_EXPORT, self::INFRA_DOC,
         ];
     }
 

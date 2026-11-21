@@ -47,6 +47,12 @@ final class CorporateController
          *  dashboard path; every other credential is the "invalid" re-render decoy. Null (or an empty
          *  adminUser) disables it. */
         private ?AdminAuth $adminAuth = null,
+        /** FP-0808: the crawler-unfollowable breadcrumb to the fake infrastructure-wiki tarpit (an HTML
+         *  comment with a base64 doc path), planted on the stealth GET `/` recon surface (the corporate
+         *  homepage) ONLY when the tarpit is on — the composition root passes InfraDocController::breadcrumb()
+         *  then, else null. Not a plain href, not in robots; a reasoning agent decodes it, a crawler cannot.
+         *  Null ⇒ absent, so the stealth front is byte-identical to today when the tarpit is off. */
+        private ?string $infraDocHint = null,
     ) {
     }
 
@@ -137,7 +143,11 @@ final class CorporateController
 
         return "<!doctype html><html lang=en><head><meta charset=utf-8>"
             . "<meta name=viewport content='width=device-width,initial-scale=1'>"
-            . '<title>' . htmlspecialchars($title) . "</title><style>{$css}</style></head><body>"
+            . '<title>' . htmlspecialchars($title) . "</title><style>{$css}</style>"
+            // FP-0808: the infra-wiki breadcrumb on the stealth GET recon surface — a crawler-unfollowable
+            // HTML comment; null ⇒ nothing, so OFF is byte-identical. A reasoning agent decodes the path.
+            . ($this->infraDocHint ?? '')
+            . "</head><body>"
             . "<header class=nav><div class=brand>GLOBEX<span>CORP</span></div>"
             . "<nav><a href='#products'>Products</a><a href='#solutions'>Solutions</a>"
             . "<a href='#about'>About</a><a href='#careers'>Careers</a><a href='/login'>Sign in</a></nav></header>"

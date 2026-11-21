@@ -51,6 +51,13 @@ final class HomeController
          *  a match mints a real session and redirects to the dashboard. Null (or an empty adminUser)
          *  disables the overlay — the form is then a pure decoy. */
         private ?AdminAuth $adminAuth = null,
+        /** FP-0808: the crawler-unfollowable breadcrumb to the fake infrastructure-wiki tarpit (an HTML
+         *  comment carrying the doc path as base64 + a construct instruction), planted on the GET `/`
+         *  recon surface below ONLY when the tarpit is on (the composition root passes
+         *  InfraDocController::breadcrumb() then, else null). It is NOT a plain href and NOT in robots, so a
+         *  crawler cannot discover the doc; a reasoning agent reading the page decodes it. Null ⇒ absent, so
+         *  the recon surface is byte-identical to today when the tarpit is off. */
+        private ?string $infraDocHint = null,
     ) {
     }
 
@@ -113,6 +120,9 @@ final class HomeController
             . '<style>' . $this->baseCss() . $skin . '</style>'
             // Lure 1: a leaked internal URL in an HTML comment — scanners scrape comments for endpoints.
             . "\n<!-- TODO: retire the legacy admin console at /admin/root/html once the SSO migration completes -->\n"
+            // FP-0808: the infra-wiki breadcrumb rides the GET recon surface (a crawler-unfollowable HTML
+            // comment; null ⇒ nothing, so OFF is byte-identical). A reasoning agent decodes the base64 path.
+            . ($this->infraDocHint ?? '')
             . '</head><body>'
             . '<main class=card><h1>Sign in</h1>' . $body . '</main>'
             // Lure 2: an invisible off-screen link only a DOM crawler follows; a sighted user never sees it.

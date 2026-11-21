@@ -47,6 +47,7 @@ use Funnypot\App\Shell\ConsoleSessionStore;
 use Funnypot\App\Http\AttritionController;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\Http\InfraDocController;
 use Funnypot\App\Http\LabyrinthController;
 use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Http\Router;
@@ -459,6 +460,7 @@ $dashboard = new DashboardController($store, $geo, $config, __DIR__ . '/assets',
 $labyrinth = null;
 $polluter = null;
 $attrition = null;
+$infraDoc = null;
 if ($config->tarpitEnabled) {
     $tarpitBudget = new TarpitBudget(
         $config->tarpitDbPath,
@@ -510,6 +512,22 @@ if ($config->tarpitEnabled) {
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
     // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
     $polluter = new PolluterController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
+    // FP-0808 fake infrastructure-wiki tarpit — shares the SAME TarpitBudget (one slot pool + ledger
+    // across the whole tarpit surface, so the ~256 KB top doc is charged/guarded like every other tarpit
+    // hit) and the same persona seed (coherent fakes). Cross-links the polluter exports + the labyrinth so
+    // the three tarpits form one interconnected goose chase. Off (null) when the tarpit is off ⇒ the Router
+    // never mounts the seam and the .md doc paths fall through to the honeypot (byte-identical to today).
+    $infraDoc = new InfraDocController(
+        $store,
+        $geo,
+        $tarpitBudget,
+        $personaSeed,
+        $config->infraDocCapKb,
+        $blocklist,
+        null,
+        $engagementRecorder,
+        [PolluterController::CONFIG_PATH, PolluterController::LOG_PATH, LabyrinthController::ENTRY_BASE],
+    );
 }
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When
@@ -517,12 +535,14 @@ if ($config->tarpitEnabled) {
 // FP-0295: the composition root hands HomeController the SAME $adminAuth, so the real operator login is
 // overlaid on the public "/" decoy — a username-gated Argon2id verify that, on success, mints the real
 // session (cookie scoped to $adminBase = funnypotPath here) and redirects to the dashboard.
-$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth);
+// FP-0808: when the tarpit is on, the GET `/` recon surface also carries the crawler-unfollowable infra-wiki
+// breadcrumb (null otherwise, so OFF is byte-identical). $infraDoc !== null iff the tarpit master switch is on.
+$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth, $infraDoc !== null ? InfraDocController::breadcrumb() : null);
 // The stealth-mode corporate front (fronts / and /login when FUNNYPOT_MODE=stealth). FP-0245e: it carries
 // the SAME LLM-only labyrinth entry hint on its credential-submission (login POST) response when the
 // tarpit is on, so the deep-engagement decoy engages in a stealth deployment too — never a href, never in
 // robots. Off (null) otherwise, exactly like HomeController, so nothing plants the hint when the tarpit is off.
-$corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth);
+$corporate = new CorporateController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth, $infraDoc !== null ? InfraDocController::breadcrumb() : null);
 // Streaming web terminal for the fleet console — its own POST route, gate-exempt (ahead of the catch-all).
 // Same persona seed + the same install filesystem key as the SSH/telnet shell (so a host's web console ==
 // its shell), and a SEPARATE session-MAC key for its cookie — both from the web bundle, never from the
@@ -586,4 +606,4 @@ if ($config->dockerApiEnabled) {
 // the typed seam a future core fake-data API (FP-0129) binds to. It never throws into the request path.
 $effectiveServiceProfile = \Funnypot\App\Service\EffectiveServiceProfileReader::profileFromEnvironment(__DIR__);
 
-(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter, $attrition))->dispatch($context, $clientIp, $tokenVerdict);
+(new Router($config, $honeypot, $dashboard, $corporate, $home, $aiApi, $console, $download, $docker, $labyrinth, $polluter, $attrition, $infraDoc))->dispatch($context, $clientIp, $tokenVerdict);

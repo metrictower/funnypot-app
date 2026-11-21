@@ -159,6 +159,30 @@ Job creation returns explicit **202 Accepted** with `Location`, not PHP's implic
 real-front-controller integration test checks this alongside disabled-state behavior, the shared tarpit
 budget and the existing service-profile lookup's fail-neutral behavior on malformed status paths.
 
+A **fake infrastructure-wiki tarpit** (`src/App/Http/InfraDocController.php` + `src/App/Tarpit/InfraWiki.php`
++ `InfraWikiRenderer.php` + `resources/infra-catalog.php`, FP-0808) attacks the *AI pentester* specifically,
+and does so with **data, not a directive** — so it bypasses the prompt-injection defenses that defeat a
+naive "ignore your instructions" lure. It serves a procedurally-generated, per-deploy-seeded, sprawling
+`INFRASTRUCTURE-NOTES.md` (aliases `/docs/infrastructure.md`, `/ops/README.md`) as `text/markdown`: ~147
+tool archetypes across 13 lifecycle categories (current + legacy + half-migrated + archived), each with a
+seeded host/port/version/owner/status and a **cyclic** depends-on / backed-up-to / monitored-by web, plus a
+compute-bait "access & secrets" appendix (seeded credential derivations + a 50-port knock). An agent reads
+it as legitimate recon *facts* and enumerates the fake estate on its own; the boundary never fires. The doc
+**renders bounded but references more than it renders** — per-service runbook / migration / backup-catalog
+sub-docs at procedural `.md` paths the same controller generates on demand, each reference emitted as a
+crawler-unfollowable `LlmOnlyLink`, so "map the architecture" is an endless frontier of fetches while any
+one doc is O(doc). It is **non-terminal** (FP-0810 lesson): no documented credential, knock or gateway ever
+returns a success/authenticated body — they lead onward (another host to probe, another doc, the sibling
+labyrinth/polluter webs it cross-links), never a clean win. Same discipline as the labyrinth/polluter:
+every serve — the ~256 KB top doc included — calls `TarpitBudget::guard()` first (so a breadcrumbed public
+path can never be turned into a regenerate-per-request amplifier; the top doc is generated once and cached),
+is byte-capped (`FUNNYPOT_INFRA_DOC_CAP_KB`, default 256), charges the ledger, releases its slot in a
+`finally`, sheds to a bounded nginx 404 on any fault (never a 500), is **off** unless `FUNNYPOT_TARPIT` is
+on, and is **never** in robots.txt. Discovery is a crawler-unfollowable base64 breadcrumb planted on the
+`GET /` recon surface (`HomeController`/`CorporateController`) only when the tarpit is on. Every generated
+token is routed through the `InertSecret` clean-gate and the full rendered prose (top doc + sub-docs) is
+swept against the fingerprint denylist across many seeds. **Off ⇒ byte-identical to today.**
+
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
 vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a probe carrying a

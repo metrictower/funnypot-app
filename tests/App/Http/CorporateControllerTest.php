@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Http\CorporateController;
+use Funnypot\App\Http\InfraDocController;
 use Funnypot\App\Storage\HitStore;
 use PHPUnit\Framework\TestCase;
 
@@ -48,6 +49,32 @@ final class CorporateControllerTest extends TestCase
         $corp = new CorporateController($store, $geo, $config, $dir, null, null, $auth);
 
         return [$corp, $auth, rtrim($config->dashboardPath, '/')];
+    }
+
+    // --- FP-0808: the infra-wiki breadcrumb on the stealth GET recon surface ---
+
+    public function test_infra_doc_breadcrumb_present_only_when_the_tarpit_is_on(): void
+    {
+        $dir = sys_get_temp_dir() . '/fp-0808-corp-' . uniqid();
+        @mkdir($dir, 0777, true);
+        $config = AppConfig::fromEnv($dir);
+        $geo = new \Geo($dir . '/no-geo');
+        $b64 = base64_encode(InfraDocController::TOP_PATHS[0]);
+
+        // OFF: null hint ⇒ the corporate front is byte-identical to today (no breadcrumb).
+        $off = new CorporateController(new CorpHitSpy(), $geo, $config, $dir);
+        $offHtml = $this->render(fn () => $off->homepage());
+        self::assertStringNotContainsString($b64, $offHtml, 'off ⇒ no breadcrumb on the stealth front');
+
+        // ON: the breadcrumb rides the recon surface, as an HTML comment, crawler-unfollowable.
+        $on = new CorporateController(new CorpHitSpy(), $geo, $config, $dir, null, null, null, InfraDocController::breadcrumb());
+        $onHtml = $this->render(fn () => $on->homepage());
+        self::assertStringContainsString($b64, $onHtml, 'on ⇒ breadcrumb planted');
+        self::assertSame(1, preg_match('~<!--[^>]*base64\):\s*([A-Za-z0-9+/=]+)~', $onHtml, $m));
+        self::assertSame(InfraDocController::TOP_PATHS[0], base64_decode($m[1]));
+        self::assertSame(0, preg_match('~(?:href|src)\s*=\s*"?[^"\']*INFRASTRUCTURE~i', $onHtml), 'no followable link to the doc');
+        // The corporate site still renders normally.
+        self::assertStringContainsString('Globex Corporation', $onHtml);
     }
 
     public function test_get_renders_the_login_form(): void

@@ -30,6 +30,7 @@ final class Router
         private ?LabyrinthController $labyrinth = null,
         private ?PolluterController $polluter = null,
         private ?AttritionController $attrition = null,
+        private ?InfraDocController $infraDoc = null,
     ) {
     }
 
@@ -104,6 +105,14 @@ final class Router
         // hit is guarded by TarpitBudget first (the only per-IP guard on this route).
         if ($method === 'GET' && $this->polluter !== null && $this->polluter->matches($path)) {
             $this->polluter->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Fake infrastructure-wiki tarpit (FP-0808). GET-only, gate-exempt, mounted only when the tarpit
+        // master switch is on; otherwise the .md doc paths fall through to the honeypot (an engine miss ⇒
+        // 404), so OFF is byte-identical to today. Every hit is guarded by TarpitBudget first.
+        if ($method === 'GET' && $this->infraDoc !== null && $this->infraDoc->matches($path)) {
+            $this->infraDoc->handle($ctx, $clientIp);
 
             return;
         }
@@ -233,6 +242,14 @@ final class Router
         // hit is guarded by TarpitBudget first (the only per-IP guard on this route).
         if ($method === 'GET' && $this->polluter !== null && $this->polluter->matches($path)) {
             $this->polluter->handle($ctx, $clientIp);
+
+            return;
+        }
+        // Fake infrastructure-wiki tarpit (FP-0808). GET-only, gate-exempt, mounted only when the tarpit
+        // master switch is on; otherwise the .md doc paths fall through to the honeypot (an engine miss ⇒
+        // 404), so OFF is byte-identical to today. Every hit is guarded by TarpitBudget first.
+        if ($method === 'GET' && $this->infraDoc !== null && $this->infraDoc->matches($path)) {
+            $this->infraDoc->handle($ctx, $clientIp);
 
             return;
         }
