@@ -100,13 +100,36 @@ only per-IP guard on this gate-exempt route), and it is mounted only when `FUNNY
 
 To stop a single foothold from ending the engagement, the cmdi/webshell quick-win decoy is **non-terminal**
 (`src/App/Tarpit/FootholdRewriter.php`, wired in `HoneypotController` when the tarpit is on): its served
-body is rewritten into a believable low-privilege, locked-down-container shell — the command mechanism
-fires (`id` → `uid=33(www-data)`) but privilege-escalation and exfil fail for real reasons (no sudo,
-dropped capabilities, read-only rootfs, no egress), the admin/DB goal lives behind the gateway, and a
-mounted deploy-config artifact points onward to the **same** labyrinth entry the GET-recon breadcrumb
-does. The body is static (never echoes the attacker's command), leaves the logged/reported verdict at
-`critical`, and is a no-op when the tarpit is off or if a future funnypot-core change makes the webshell
-template non-terminal itself (FP-0800 coordination).
+body is rewritten into a believable locked-down-container shell — the command mechanism fires but
+privilege-escalation and exfil fail for real reasons (no sudo, dropped capabilities, read-only rootfs,
+no egress), the admin/DB goal lives behind the gateway, and a mounted deploy-config artifact points
+onward to the **same** labyrinth entry the GET-recon breadcrumb does. It leaves the logged/reported
+verdict as what the engine matched, and is a no-op when the tarpit is off or if a future funnypot-core
+change makes the webshell template non-terminal itself (FP-0800 coordination).
+
+Behind that landing sits an **interactive console** (`src/App/Tarpit/Cmdi/AdaptiveShell.php`, on by default
+under the tarpit): an agent that "fixes" its payload is kept fixing it.
+- **Ownership.** The console owns the `/admin/root/{html,post,link}` lure, webshell file names
+  (`shell.php`, `c99.php`, …) and any path where it already answered that source. There it answers
+  whatever rule the engine matched (SQLi, SSTI, XSS, LFI, cmdi), so a SQL-shaped command never flips the
+  console into a MySQL error page. Elsewhere it answers only the webshell/cmdi/LFI rules.
+- **Gates.** It runs only inside the engine's existing gates: the `attack-webshell-panel` catalog entry
+  must be on and `FUNNYPOT_CEILING` must admit `critical`. It only replaces a body the engine already
+  chose to serve, so the 404/LLM path, logging and AbuseIPDB/TI reporting are untouched.
+- **Identity.** Each source is drawn, by a keyed hash, as `www-data` or (about one in four) `root` inside
+  the same dead-end container. The header, the landing and every answer agree with it. A root landing
+  never shows `id`, shadow or `/root` unprompted.
+- **Answers.** A simple command (`id`, `cat /etc/passwd`, `ps aux`, `ip a`, `df -h`, …) gets coherent
+  output from one busybox/Alpine facts table (`FootholdFacts`), whose passwd/group/shadow match core's own
+  LFI answers byte for byte. Anything with shell syntax is lexed the way busybox ash parses `sh -c`
+  (`ShellLexer`). A real syntax error gets ash's own message. A valid compound gets a believable error that
+  blames the feature the attacker just added and never repeats the last message, or now and then a
+  useless "success". A resend replays the same answer, nothing ever executes, and no answer is progress.
+- **Reflection.** Attacker text is echoed only from the body of a non-GET request, in a small safe charset,
+  length-capped and HTML-escaped. A GET or query-string command that would need it gets the landing.
+- **Flags.** `FUNNYPOT_TARPIT_CMDI_SYNTAX=0` keeps the static landing (the A/B switch);
+  `FUNNYPOT_TARPIT_CMDI_IDENTITY=www-data|root` pins the identity for a lab run. Per-source history and an
+  attribution log live in a bounded `cmdi-shell.sqlite` (see `docs/DATA-LAYER-DECISION.md`).
 
 Alongside it are the **front-loaded context-polluters** (`src/App/Http/PolluterController.php`, under
 `/admin/export/*`): four synthetic "leaked export" artifacts an AI attacker pays dearly to ingest while

@@ -227,7 +227,8 @@ final class FootholdFacts
 
     /**
      * What a simple command prints, stdout and stderr together, as the webshell captures them.
-     * Returns null when the answer would have to echo attacker text that may not be reflected.
+     * Returns null when the answer would have to echo attacker text and the value came from a GET or
+     * a query string; attacker text outside the safe charset is never echoed at all.
      *
      * @param list<string> $argv
      */
@@ -237,7 +238,9 @@ final class FootholdFacts
         try {
             $out = $this->exec($this->expand($argv), 0);
         } catch (SlotRefused $e) {
-            return null;
+            // From a GET the caller serves the landing instead. From a body, the text only failed the
+            // charset, and the command simply prints nothing.
+            return $mayReflect ? '' : null;
         }
 
         return strlen($out) > self::MAX_OUTPUT ? substr($out, 0, self::MAX_OUTPUT) : $out;
@@ -1007,7 +1010,7 @@ final class FootholdFacts
             $abs = $this->abs($p);
             $e = $this->fs[$abs] ?? null;
             if ($e === null) {
-                $out .= 'ls: ' . $this->slotPath($p) . ": No such file or directory\n";
+                $out .= 'ls: ' . $this->slotPath($p) . ($this->underDenied($abs) ? ": Permission denied\n" : ": No such file or directory\n");
                 continue;
             }
             if ($this->type($abs) === 'd' && !$self) {
@@ -1083,6 +1086,13 @@ final class FootholdFacts
     private function read(string $applet, string $p): array
     {
         $abs = $this->abs($p);
+        if (!isset($this->fs[$abs]) && $this->underDenied($abs)) {
+            $shown = $this->slotPath($p);
+
+            return [null, $applet === 'cat' || $applet === 'less' || $applet === 'more'
+                ? "{$applet}: can't open '{$shown}': Permission denied\n"
+                : "{$applet}: {$shown}: Permission denied\n"];
+        }
         if (!isset($this->fs[$abs])) {
             $shown = $this->slotPath($p);
 
@@ -2168,6 +2178,18 @@ final class FootholdFacts
     private function denied(string $abs): bool
     {
         return !$this->id->isRoot() && (bool) ($this->fs[$this->resolve($abs)]['deny'] ?? false);
+    }
+
+    /** True when a directory above $abs cannot be entered by this identity (so even a missing path is "denied"). */
+    private function underDenied(string $abs): bool
+    {
+        for ($d = $this->parent($abs); $d !== '/'; $d = $this->parent($d)) {
+            if (isset($this->fs[$d]) && $this->denied($d)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

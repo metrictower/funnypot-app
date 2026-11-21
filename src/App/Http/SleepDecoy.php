@@ -60,28 +60,41 @@ final class SleepDecoy
      * delay — or return immediately (no delay) when any precondition fails. Safe to call on EVERY serve
      * path (served fake, panel, LLM, 404): it self-gates on the sleep structure + attack class, so a
      * benign or non-sleep request costs one regex and returns. Classifies INDEPENDENTLY of the
-     * controller's fall-through payload class (which is null on served paths — plan SHOULD-FIX 1).
+     * controller's fall-through payload class (which is null on served paths).
+     *
+     * The webshell console passes two more facts. $allow is false when its answer says the command
+     * never ran (a syntax error, a failed fork): a parse error that arrives exactly N seconds late
+     * would prove the payload executed. $seconds is set when the console's own answer ran a `sleep N`;
+     * that answer is the evidence, so the payload parse and the attack-class gate are skipped (a bare
+     * `sleep 3` carries no injection metacharacter for them to see). The slot, budget and per-request
+     * cap still apply.
+     *
+     * @return int the milliseconds actually slept (0 when none)
      */
-    public function maybeDelay(RequestContext $r, string $ip): void
+    public function maybeDelay(RequestContext $r, string $ip, bool $allow = true, ?int $seconds = null): int
     {
-        if (!$this->config->sleepDecoy) {
-            return; // off by default
+        if (!$this->config->sleepDecoy || !$allow) {
+            return 0; // off by default
         }
 
         // The WHOLE body is fail-safe: the parse + classify are pure preg (they cannot realistically
         // throw), but keeping them inside the catch makes "never a 500" airtight against future edits.
         try {
-            $seconds = SleepProbe::requestedSeconds($r);
-            if ($seconds === null) {
-                return; // no time-based structure ⇒ baseline traffic, never delayed
-            }
+            if ($seconds !== null) {
+                $seconds = max(0, min(300, $seconds));
+            } else {
+                $seconds = SleepProbe::requestedSeconds($r);
+                if ($seconds === null) {
+                    return 0; // no time-based structure ⇒ baseline traffic, never delayed
+                }
 
-            // Independent classification (NOT the controller's $payloadClass, which is null on served
-            // paths). The time-based structures are themselves sqli/rce tells, so this only ever gates
-            // OUT a probe whose structure matched but whose class is neither — "benign never delayed".
-            $class = $this->classifier->classify($r);
-            if ($class !== 'sqli' && $class !== 'rce') {
-                return;
+                // Independent classification (NOT the controller's $payloadClass, which is null on served
+                // paths). The time-based structures are themselves sqli/rce tells, so this only ever gates
+                // OUT a probe whose structure matched but whose class is neither — "benign never delayed".
+                $class = $this->classifier->classify($r);
+                if ($class !== 'sqli' && $class !== 'rce') {
+                    return 0;
+                }
             }
 
             // CONCURRENCY + PER-IP BUDGET in one seam: guard() checks overBudget() (per-IP hourly wall)
@@ -89,7 +102,7 @@ final class SleepDecoy
             // storage fault) ⇒ served immediately, no delay. The usleep runs ONLY inside the held slot.
             $slot = $this->budget->guard($ip);
             if ($slot === null) {
-                return;
+                return 0;
             }
             try {
                 $capMs = max(0, $this->config->sleepPerReqCapMs);
@@ -105,11 +118,14 @@ final class SleepDecoy
                 if ($sleptMs > 0) {
                     $this->budget->charge($ip, 0, $sleptMs, 0);
                 }
+
+                return $sleptMs;
             } finally {
                 $this->budget->release($slot);
             }
         } catch (Throwable $e) {
             // Fail-safe: any fault adds NO delay and never propagates into the serve path (never a 500).
+            return 0;
         }
     }
 }

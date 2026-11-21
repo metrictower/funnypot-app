@@ -307,7 +307,8 @@ final class FootholdFactsTest extends TestCase
         self::assertSame(CannedData::PASSWD, $f->run(['cat', '/etc/passwd'], false), 'a known file is closed-set');
 
         self::assertSame("FPCANARY7Q\n", $f->run(['echo', 'FPCANARY7Q']));
-        self::assertNull($f->run(['echo', '<b>x</b>']), 'unsafe characters never reflect');
+        self::assertSame('', $f->run(['echo', '<b>x</b>']), 'unsafe characters never reflect, even from a body');
+        self::assertNull($f->run(['echo', '<b>x</b>'], false));
         self::assertSame(str_repeat('A', FootholdFacts::ECHO_CAP) . "\n", $f->run(['echo', str_repeat('A', 300)]), 'echo is capped');
     }
 
@@ -324,6 +325,8 @@ final class FootholdFactsTest extends TestCase
         self::assertSame("ping: permission denied (are you root?)\n", self::sh(self::facts(FootholdIdentity::www()), 'ping 8.8.8.8'));
         self::assertStringContainsString('Network unreachable', self::sh(self::facts(FootholdIdentity::root()), 'ping 8.8.8.8'));
         self::assertSame("su: must be suid to work properly\n", self::sh(self::facts(FootholdIdentity::www()), 'su'));
+        self::assertSame("cat: can't open '/root/.ssh/id_rsa': Permission denied\n", self::sh(self::facts(FootholdIdentity::www()), 'cat /root/.ssh/id_rsa'), 'www-data cannot even look inside /root');
+        self::assertSame("cat: can't open '/root/.ssh/id_rsa': No such file or directory\n", self::sh(self::facts(FootholdIdentity::root()), 'cat /root/.ssh/id_rsa'), 'root finds no key');
     }
 
     public function test_output_is_deterministic_for_a_fixed_clock(): void

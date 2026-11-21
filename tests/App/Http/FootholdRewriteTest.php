@@ -244,12 +244,32 @@ final class FootholdRewriteTest extends TestCase
         return [$body, $main[0]];
     }
 
-    public function test_armed_handle_serves_the_foothold_but_keeps_the_critical_verdict(): void
+    /** @return array<string,array{0:string}> */
+    public static function landingIdentities(): array
     {
-        [$body, $row] = $this->handleWebshell($this->rewriter(IdentityTestSupport::httpIdentity()->personaSeed()));
+        return ['www-data' => ['www-data'], 'root' => ['root']];
+    }
+
+    /** @dataProvider landingIdentities */
+    public function test_armed_handle_serves_the_foothold_but_keeps_the_critical_verdict(string $who): void
+    {
+        if ($who === 'www-data') {
+            [$body, $row] = $this->handleWebshell($this->rewriter(IdentityTestSupport::httpIdentity()->personaSeed()));
+            self::assertStringContainsString('uid=33(www-data)', $body, 'mechanism fires');
+        } else {
+            // A root source behind the console: with no command the webshell shows its landing, which
+            // never reveals root unprompted.
+            $h = \Funnypot\Tests\App\Tarpit\Cmdi\ConsoleHarness::build(['pin' => 'root']);
+            try {
+                $r = $h->fetch('GET', '/uploads/shell.php', '', null, '9.9.9.9');
+            } finally {
+                $h->cleanup();
+            }
+            [$body, $row] = [$r['body'], $r['row']];
+            self::assertStringNotContainsString('uid=', $body, 'root is not revealed unprompted');
+        }
 
         // The served body is the rewritten foothold …
-        self::assertStringContainsString('uid=33(www-data)', $body, 'mechanism fires');
         self::assertStringContainsString('Connection refused', $body, 'goal blocked (no egress)');
         self::assertStringContainsString('base path (base64):', $body, 'routes onward to the maze');
         self::assertStringNotContainsString('Linux web01', $body, 'the core terminal body was replaced');

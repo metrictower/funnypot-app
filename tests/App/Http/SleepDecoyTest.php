@@ -100,6 +100,33 @@ final class SleepDecoyTest extends TestCase
         return new RequestContext('GET', '/products.php', 'id=1 AND SLEEP(' . $n . ')', [], null);
     }
 
+    // --- console turns: the shell's own answer decides ------------------------------------------------
+
+    public function test_a_console_answer_that_did_not_run_suppresses_the_delay(): void
+    {
+        $sleeps = [];
+        $decoy = new SleepDecoy($this->budget(static function (int $ms) use (&$sleeps): void {
+            $sleeps[] = $ms;
+        }, static fn (): int => 1_000_000), $this->config(), new AttackClassifier(), static fn (int $c): int => 0);
+        self::assertSame(0, $decoy->maybeDelay(self::sqliSleep(2), '198.51.100.70', false));
+        self::assertSame([], $sleeps, 'a syntax-error answer is never delayed');
+    }
+
+    public function test_console_seconds_skip_the_parse_and_class_gate_and_report_the_ms(): void
+    {
+        $sleeps = [];
+        $decoy = new SleepDecoy($this->budget(static function (int $ms) use (&$sleeps): void {
+            $sleeps[] = $ms;
+        }, static fn (): int => 1_000_000), $this->config(true, 2000), new AttackClassifier(), static fn (int $c): int => 0);
+        // A bare `sleep 1` has no injection metacharacter: neither SleepProbe nor the classifier sees it.
+        $bare = new RequestContext('POST', '/admin/root/post', '', ['Content-Type' => 'application/x-www-form-urlencoded'], 'cmd=sleep 1');
+        self::assertSame(0, $decoy->maybeDelay($bare, '198.51.100.71'), 'on its own the decoy ignores it');
+        $ms = $decoy->maybeDelay($bare, '198.51.100.71', true, 1);
+        self::assertSame([1000], $sleeps, 'the console said it slept, so it sleeps');
+        self::assertSame(1000, $ms, 'the honoured ms is returned for the attribution log');
+        self::assertSame(0, (new SleepDecoy($this->budget(static fn (int $ms) => null), $this->config(false), new AttackClassifier()))->maybeDelay($bare, '198.51.100.72', true, 1), 'still off by default');
+    }
+
     // --- (a) small-probe correlation ----------------------------------------------------------------
 
     public function test_small_probe_delay_correlates_with_requested_seconds(): void

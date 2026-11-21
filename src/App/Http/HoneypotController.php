@@ -18,6 +18,7 @@ use Funnypot\Core\Http\ResponseEmitter;
 use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
+use Funnypot\App\Tarpit\Cmdi\AdaptiveShell;
 use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\Core\RequestContext;
 use Geo;
@@ -46,6 +47,10 @@ final class HoneypotController
          *  non-terminal locked-down-container foothold that points onward to the labyrinth, so an AI
          *  pentester keeps pivoting instead of declaring the goal met. Null ⇒ served bytes unchanged. */
         private ?FootholdRewriter $footholdRewriter = null,
+        /** When the tarpit and its console flag are on, answers commands sent to the fake webshell
+         *  (simple commands from the foothold's facts table, shell syntax with believable errors).
+         *  Null ⇒ the static foothold landing, as before. */
+        private ?AdaptiveShell $adaptiveShell = null,
     ) {
     }
 
@@ -257,6 +262,11 @@ final class HoneypotController
 
         $detection = $funnypot->detect($context);
 
+        // The console decides its turn before the delay below, so a command it answers with a syntax
+        // error is never delayed (a parse error that arrives N seconds late would prove execution),
+        // and a command it shows as having run `sleep N` is. Null whenever the console does not apply.
+        $turn = $this->adaptiveShell?->prepare($context, $clientIp, $detection, $policy);
+
         // FP-0228: honour a time-based blind-injection SLEEP probe with a metered, slot-gated,
         // budget-bounded delay. Placed here — after detect(), before ANY serve branch below — so it
         // covers EVERY path a sleep probe can be answered on (served attack fake, panel, LLM fake, 404)
@@ -267,7 +277,7 @@ final class HoneypotController
         // benign/non-sleep request returns after one regex, off-by-default is a no-op ($sleepDecoy null),
         // and any budget fault degrades to zero delay — never a 500. The standalone controller always
         // runs respond + gate-open + isolated-origin (below), the posture this decoy is scoped to.
-        $this->sleepDecoy?->maybeDelay($context, $clientIp);
+        $delayMs = $this->sleepDecoy?->maybeDelay($context, $clientIp, $turn === null || $turn->executes, $turn?->sleepSeconds) ?? 0;
 
         // The honeypot's own admin panel (/admin, /dashboard, … mounted at the path root, and every
         // sub-path) is a deep-engagement lure and must be served by the panel emulator and logged as
@@ -316,13 +326,15 @@ final class HoneypotController
         $decoyServed = false;
         $llm = null;
         if ($response !== null) {
-            // FP-0806: deny the terminal quick win. A fired cmdi/webshell decoy would otherwise read as a
-            // completed RCE and end an AI pentester's engagement; rewrite ONLY its served body into a
-            // believable low-priv foothold that routes onward to the labyrinth. $response->satisfies is
-            // left intact on purpose, so the hit still logs/reports as a critical probe below — only the
-            // bytes change. Null rewriter (tarpit off) or a non-terminal core template ⇒ no-op.
-            if ($this->footholdRewriter !== null && $this->footholdRewriter->appliesTo($response->satisfies)) {
-                $response->body = $this->footholdRewriter->rewrite($response->body);
+            // Deny the terminal quick win. A fired cmdi/webshell decoy would otherwise read as a completed
+            // RCE and end an AI pentester's engagement. The console answers the command when it owns the
+            // request; otherwise the static foothold rewrites a webshell body into a low-priv landing that
+            // routes onward to the labyrinth. Only the bytes change: $response->satisfies is left intact,
+            // so the hit still logs and reports as what the engine matched. Both stand down on a
+            // static-asset path, and both are absent when the tarpit is off.
+            $owned = $turn !== null && $this->adaptiveShell?->serve($turn, $response) === true;
+            if (!$owned && $this->footholdRewriter !== null && $this->footholdRewriter->appliesTo($response->satisfies, $context->path)) {
+                $response->body = $this->footholdRewriter->rewrite($response->body, $this->adaptiveShell?->fallbackIdentity($clientIp, $policy));
             }
             ResponseEmitter::emit($response);
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
@@ -363,6 +375,11 @@ final class HoneypotController
         // Queue an AbuseIPDB report for the attacker (a fast local write; the drain worker sends it):
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.
         $this->maybeReport($logged->matched || $payloadClass !== null, $clientIp, $context, $payloadClass);
+
+        // The console's history is written last, best effort, once the answer is out.
+        if ($turn !== null) {
+            $this->adaptiveShell?->commit($turn, $delayMs);
+        }
     }
 
     /** Queue a web attacker for the reporters (AbuseIPDB and/or our Threat Intel service), with the

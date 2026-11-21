@@ -234,6 +234,11 @@ final class AppConfig
         public int $attritionGlobalRows = 50000,
         /** Global logical retained-state bytes (MiB), clamped 1–64. */
         public int $attritionGlobalStateMb = 64,
+        // Interactive webshell console. Only takes effect with the tarpit on; off serves the static
+        // foothold landing. The identity pin forces one console user for a lab A/B arm.
+        public bool $tarpitCmdiSyntax = true,
+        /** `auto` (drawn per source), `www-data` or `root`. */
+        public string $tarpitCmdiIdentity = 'auto',
     ) {
     }
 
@@ -460,6 +465,8 @@ final class AppConfig
             attritionMaxArtifacts: max(3, min(64, (int) $str('FUNNYPOT_ATTRITION_MAX_ARTIFACTS', '64'))),
             attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
             attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
+            tarpitCmdiSyntax: $onUnless0('FUNNYPOT_TARPIT_CMDI_SYNTAX'),
+            tarpitCmdiIdentity: in_array($cmdiIdentity = strtolower($str('FUNNYPOT_TARPIT_CMDI_IDENTITY', 'auto')), ['auto', 'www-data', 'root'], true) ? $cmdiIdentity : 'auto',
         );
     }
 }

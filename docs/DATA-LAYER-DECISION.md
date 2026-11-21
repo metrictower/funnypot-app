@@ -251,6 +251,19 @@ Concretely:
    > sentinel file, so the hot path pays at most one small `SELECT` on a
    > generation change and nothing between changes. Keeping it in its own
    > file (not `hits.db`) preserves the one-file-per-concern rule.
+   >
+   > **Extended — FP-0814.** `cmdi-shell.sqlite` (beside the hit store, only
+   > when the tarpit's webshell console is on) holds the console's per-source
+   > history. It opens through `Storage\Sqlite::open` (0666 before WAL) and
+   > then drops `busy_timeout` to 25 ms, because it sits on the request path:
+   > a locked file costs at most 25 ms, then the turn runs without history.
+   > `cmdi_shell` has one row per source keyed by a 32-hex HMAC of the IP (no
+   > raw IP), a 4 h idle TTL, a 2000-row LRU cap, 600 writes per source per
+   > hour and a 20,000-writes-per-hour global gauge row, so a rotating-IP
+   > flood cannot grow it. `cmdi_turns` is the operator's attribution log
+   > (outcome, identity, value source, owning rule, delay), never served,
+   > FIFO-capped at 20,000 rows and purged after 7 days. Every fault fails
+   > open to a stateless turn.
 3. An hourly rollup table plus maintained counters so the 3-second dashboard
    tick stops doing full-table GROUP BYs. This is the only real scaling work,
    and it would be needed under Postgres too.
