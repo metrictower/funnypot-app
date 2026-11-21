@@ -65,22 +65,52 @@ final class SourceState
     /** The state after the console answered $lex with $o. */
     public function after(LexReport $lex, Outcome $o): self
     {
+        return $this->apply(self::delta($lex, $o));
+    }
+
+    /**
+     * What one answered turn changes, as plain closed-set values. The store merges this onto the row
+     * as it is at write time, so two overlapping turns from one source both land.
+     *
+     * @return array{shape?:string,desc?:array<string,mixed>,msg?:string,families?:list<string>,accept:bool}
+     */
+    public static function delta(LexReport $lex, Outcome $o): array
+    {
         if ($o->source === 'simple') {
-            return new self($this->memo, $this->recentMsgIds, $this->prevFamilies, false, $this->stickyPaths);
+            return ['accept' => false];
         }
-        $memo = $this->memo;
+        $d = ['msg' => $o->historyId(), 'families' => $lex->families, 'accept' => $o->isAccept()];
         if ($o->source === 'pick' || $o->source === 'memo') {
-            unset($memo[self::MEMO_PREFIX . $lex->shapeKey]);
-            $memo[self::MEMO_PREFIX . $lex->shapeKey] = $o->descriptor();
+            $d['shape'] = $lex->shapeKey;
+            $d['desc'] = $o->descriptor();
+        }
+
+        return $d;
+    }
+
+    /** This state with one turn's delta merged in; every cap still applies. @param array<string,mixed> $d */
+    public function apply(array $d): self
+    {
+        $memo = $this->memo;
+        if (is_string($d['shape'] ?? null) && preg_match('~^[0-9a-f]{16}$~', $d['shape']) === 1 && is_array($d['desc'] ?? null)
+            && ($o = Outcome::fromDescriptor($d['desc'])) !== null) {
+            unset($memo[self::MEMO_PREFIX . $d['shape']]);
+            $memo[self::MEMO_PREFIX . $d['shape']] = $o->descriptor();
             if (count($memo) > self::MEMO_CAP) {
                 $memo = array_slice($memo, -self::MEMO_CAP, null, true);
             }
         }
         $recent = $this->recentMsgIds;
-        $recent[] = $o->historyId();
-        $recent = array_slice($recent, -self::RECENT_CAP);
+        if (is_string($d['msg'] ?? null) && strlen($d['msg']) <= 32) {
+            $recent[] = $d['msg'];
+            $recent = array_slice($recent, -self::RECENT_CAP);
+        }
+        $families = is_array($d['families'] ?? null)
+            ? array_slice(array_values(array_filter($d['families'], static fn ($f): bool => is_string($f) && strlen($f) <= 32)), 0, 32)
+            : $this->prevFamilies;
+        $state = new self($memo, $recent, $families, ($d['accept'] ?? $this->lastWasAccept) === true, $this->stickyPaths);
 
-        return new self($memo, $recent, $lex->families, $o->isAccept(), $this->stickyPaths);
+        return is_string($d['sticky'] ?? null) ? $state->withSticky($d['sticky']) : $state;
     }
 
     public function withSticky(string $path): self

@@ -224,6 +224,32 @@ final class AdaptiveShellTest extends TestCase
         self::assertTrue($h->store->load('1.2.3.4')->isSticky('/upload.php'));
     }
 
+    public function test_overlapping_turns_from_one_source_keep_both_answers(): void
+    {
+        $h = $this->harness();
+        $identity = IdentityTestSupport::httpIdentity();
+        [$pick, $idKey, $storeKey] = AdaptiveShell::keysFrom($identity->filesystemKey());
+        $db = $h->dir . '/overlap.sqlite';
+        // Each worker has its own connection, as separate php-fpm processes do.
+        $worker = fn (): AdaptiveShell => new AdaptiveShell($h->config, $h->rewriter, new \Funnypot\App\Storage\CmdiShellStateStore($db, $storeKey), $pick, $idKey);
+        $det = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        $prep = fn (AdaptiveShell $s, string $cmd): array => [$s, $s->prepare(self::ctx('POST', '/admin/root/post', '', 'cmd=' . rawurlencode($cmd)), '198.51.100.9', $det, self::policy())];
+        $done = static function (array $p) use ($det): string {
+            [$s, $t] = $p;
+            $r = new SynthesizedResponse(200, ['Content-Type' => 'text/html'], 'core', $det);
+            $s->serve($t, $r);
+            $s->commit($t, 0);
+
+            return (string) preg_replace('~^.*<pre>|</pre>.*$~s', '', $r->body);
+        };
+        $a = $prep($worker(), 'id; whoami');
+        $b = $prep($worker(), 'cat /etc/hosts | head');
+        $first = $done($a);
+        $second = $done($b);
+        self::assertSame($first, $done($prep($worker(), 'id; whoami')), 'the resend of an overlapped turn replays its answer');
+        self::assertSame($second, $done($prep($worker(), 'cat /etc/hosts | head')), 'and so does the other one');
+    }
+
     public function test_a_store_fault_never_escapes(): void
     {
         $spy = new SpyCmdiStore();

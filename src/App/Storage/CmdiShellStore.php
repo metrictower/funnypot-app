@@ -12,10 +12,13 @@ interface CmdiShellStore
     public function load(string $ip): SourceState;
 
     /**
-     * Persist the source's new state and one attribution row for the turn. Returns false when a write
-     * cap or a fault stopped the write; the turn has already been answered either way.
+     * Merge one turn's delta ({@see SourceState::delta()}) onto the source's row as it is now, and add
+     * one attribution row. The read and the write are one atomic step, so overlapping turns from one
+     * source never lose each other's memo. Returns false when a write cap or a fault stopped it; the
+     * turn has already been answered either way.
      *
+     * @param array<string,mixed>       $delta
      * @param array<string,scalar|null> $turn
      */
-    public function save(string $ip, SourceState $state, array $turn): bool;
+    public function save(string $ip, array $delta, array $turn): bool;
 }

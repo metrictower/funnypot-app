@@ -87,7 +87,7 @@ final class CmdiShellStateStore implements CmdiShellStore
         }
     }
 
-    public function save(string $ip, SourceState $state, array $turn): bool
+    public function save(string $ip, array $delta, array $turn): bool
     {
         try {
             $db = $this->db();
@@ -95,7 +95,9 @@ final class CmdiShellStateStore implements CmdiShellStore
                 return false;
             }
             try {
-                $ok = $this->write($db, $this->key($ip), $state, $turn);
+                // BEGIN IMMEDIATE holds the write lock from the read on, so the delta lands on the row
+                // exactly as the last committed turn left it.
+                $ok = $this->write($db, $this->key($ip), $delta, $turn);
                 $db->exec($ok ? 'COMMIT' : 'ROLLBACK');
 
                 return $ok;
@@ -110,7 +112,8 @@ final class CmdiShellStateStore implements CmdiShellStore
     }
 
     /** @param array<string,scalar|null> $turn */
-    private function write(PDO $db, string $k, SourceState $state, array $turn): bool
+    /** @param array<string,mixed> $delta @param array<string,scalar|null> $turn */
+    private function write(PDO $db, string $k, array $delta, array $turn): bool
     {
         $now = $this->now();
         $hour = intdiv($now, 3600);
@@ -126,7 +129,12 @@ final class CmdiShellStateStore implements CmdiShellStore
             return false;
         }
 
-        $json = $state->toJson();
+        $current = SourceState::empty();
+        $st = $db->prepare('SELECT state, seen FROM cmdi_shell WHERE k = ?');
+        if ($st !== false && $st->execute([$k]) && is_array($cur = $st->fetch(PDO::FETCH_ASSOC)) && (int) $cur['seen'] >= $now - self::TTL_S) {
+            $current = SourceState::fromJson((string) $cur['state']);
+        }
+        $json = $current->apply($delta)->toJson();
         if (strlen($json) > SourceState::MAX_ROW_BYTES) {
             return false;
         }

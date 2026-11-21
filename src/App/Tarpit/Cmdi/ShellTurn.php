@@ -30,6 +30,8 @@ final class ShellTurn
         public readonly ?Outcome $outcome,
         public readonly bool $simple,
         public readonly SourceState $stateAfter,
+        /** What this turn changes in the source's history ({@see SourceState::delta()}). @var array<string,mixed> */
+        public readonly array $delta = [],
     ) {
     }
 

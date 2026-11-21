@@ -164,7 +164,8 @@ final class AdaptiveShell
                 $lex->simple,
                 // The memo keeps what the picker chose. A sleep that forced this turn to run every
                 // segment changes this answer only, so a later resend of the shape answers as before.
-                $state->after($lex, $picked),
+                $state->apply($delta = SourceState::delta($lex, $picked)),
+                $delta,
             );
         } catch (Throwable $e) {
             return null;
@@ -228,8 +229,8 @@ final class AdaptiveShell
             return;
         }
         try {
-            $state = $turn->consoleRule === 'B' ? $turn->stateAfter->withSticky($turn->path) : $turn->stateAfter;
-            $this->store->save($turn->ip, $state, $turn->row($delayMs));
+            $delta = $turn->consoleRule === 'B' ? $turn->delta + ['sticky' => $turn->path] : $turn->delta;
+            $this->store->save($turn->ip, $delta, $turn->row($delayMs));
         } catch (Throwable $e) {
             // The answer is already out; losing one history write only makes the next turn stateless.
         }

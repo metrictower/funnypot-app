@@ -26,12 +26,12 @@ final class SpyCmdiStore implements CmdiShellStore
         return $this->states[$ip] ?? SourceState::empty();
     }
 
-    public function save(string $ip, SourceState $state, array $turn): bool
+    public function save(string $ip, array $delta, array $turn): bool
     {
         if ($this->throw) {
             throw new RuntimeException('store down');
         }
-        $this->states[$ip] = $state;
+        $this->states[$ip] = ($this->states[$ip] ?? SourceState::empty())->apply($delta);
         $this->writes[] = ['ip' => $ip] + $turn;
 
         return true;

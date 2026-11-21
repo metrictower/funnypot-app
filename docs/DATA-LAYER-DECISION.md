@@ -263,7 +263,10 @@ Concretely:
    > attacker's command text, and is refused above 12 KB. It has a 4 h idle
    > TTL, a 2000-row LRU cap, 600 writes per source per hour and a
    > 20,000-writes-per-hour global gauge row, so neither one source nor a
-   > rotating-IP flood can grow it past about 24 MB. `cmdi_turns` is the operator's attribution log
+   > rotating-IP flood can grow it past about 24 MB. A turn writes only its
+   > delta (memo entry, message, families, path), merged onto the row inside
+   > `BEGIN IMMEDIATE`, so overlapping requests from one source never lose
+   > each other's history. `cmdi_turns` is the operator's attribution log
    > (outcome, identity, value source, owning rule, delay), never served,
    > FIFO-capped at 20,000 rows and purged after 7 days. Every fault fails
    > open to a stateless turn.
