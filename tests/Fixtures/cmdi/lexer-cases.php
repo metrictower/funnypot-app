@@ -6,6 +6,10 @@ declare(strict_types=1);
 // [input, expected defect id or null, expected families (sorted) or null to skip, simple?, argv or null].
 // The capture runs every input through `sh -n -c` on Alpine (parse only, never executes) so the
 // golden test can check each verdict against busybox itself.
+//
+// The "busybox bash compatibility" block below follows busybox 1.36 ash.c with ASH_BASH_COMPAT
+// (function, $'…', process substitution, &>). dash parses those differently; the golden capture on
+// Alpine confirms them. A here-string is not among them: ash has no `<<<`.
 
 return [
     // --- true defects ---------------------------------------------------------------------------
@@ -112,7 +116,8 @@ return [
     'redirect_only' => ['>x', null, ['redirect'], false, null],
     'heredoc' => ["cat <<EOF\nhi\nEOF", null, ['heredoc', 'newline'], false, null],
     'heredoc_unclosed' => ['cat <<EOF', null, ['heredoc'], false, null],
-    'herestring' => ['cat <<<x', null, ['redirect'], false, null],
+    'herestring' => ['cat <<<x', 'unexpected_redir', null, false, null],
+    'herestring_quoted' => ['read a <<< "$x"', 'unexpected_redir', null, false, null],
     'arith' => ['echo $((1+2))', null, ['arith'], false, null],
     'arith_nested' => ['echo $(( 1 + (2 ) ))', null, ['arith'], false, null],
     'param_default' => ['echo ${x:-y}', null, ['param'], false, null],
@@ -143,6 +148,20 @@ return [
     'xss_redirect' => ["echo '<script>alert(1)</script>' > /var/www/html/x.html", null, ['redirect', 'squote'], false, null],
     'psql_quoted' => ['psql -c "select * from information_schema.tables"', null, ['dquote'], false, null],
     'php_r' => ["php -r 'sleep(5);'", null, ['squote'], false, null],
+    // --- busybox bash compatibility (pending golden confirmation) ------------------------------
+    'procsub' => ['cat <(id)', null, ['cmdsub'], false, null],
+    'procsub_two' => ['diff <(ls /a) <(ls /b)', null, ['cmdsub'], false, null],
+    'procsub_out' => ['tee >(cat) </dev/null', null, ['cmdsub', 'redirect'], false, null],
+    'procsub_redirected' => ['cat < <(id)', null, ['cmdsub', 'redirect'], false, null],
+    'procsub_open' => ['cat <(id', 'expect_paren', null, false, null],
+    'function_kw' => ['function f { id; }', null, ['brace', 'keyword', 'semicolon'], false, null],
+    'function_kw_parens' => ['function f() { id; }', null, ['brace', 'keyword', 'semicolon', 'subshell'], false, null],
+    'function_kw_alone' => ['function', 'expect_word', null, false, null],
+    'function_kw_no_body' => ['function f', 'unexpected_eof', null, false, null],
+    'dollar_squote' => ["echo \$'a\\'b'", null, ['squote'], false, null],
+    'dollar_squote_open' => ["echo \$'abc", 'quote', null, false, null],
+    'amp_redirect_append' => ['id &>>/tmp/x', null, ['redirect'], false, null],
+
     'id_simple' => ['id', null, [], true, ['id']],
     'echo_simple' => ['echo HELLO', null, [], true, ['echo', 'HELLO']],
 ];

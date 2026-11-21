@@ -22,7 +22,8 @@ final class ShellLexer
     public const MAX_CLASSES = 128;
     private const MAX_DEPTH = 48;
 
-    private const RESERVED = ['if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'in', '!', '{', '}'];
+    /** `function` is busybox's bash-compatible keyword; the rest are POSIX. */
+    private const RESERVED = ['if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'in', '!', '{', '}', 'function'];
     /** Tokens that end a list inside a construct. */
     private const ENDERS = ['then', 'do', 'done', 'elif', 'else', 'esac', 'fi', '}'];
     private const SAFE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.,:@%+=/-';
@@ -224,6 +225,9 @@ final class ShellLexer
                 case 'case':
                     $this->parseCase();
                     break;
+                case 'function':
+                    $this->parseFunction();
+                    break;
                 case '{':
                     $this->next();
                     $this->construct = true;
@@ -301,6 +305,28 @@ final class ShellLexer
         $this->expectWord('do', 'expect_do');
         $this->parseList('body');
         $this->expectWord('done', 'expect_done');
+        $this->depth--;
+    }
+
+    /** `function NAME [()] BODY`, busybox's bash-compatible definition form. */
+    private function parseFunction(): void
+    {
+        $this->keyword('function');
+        $t = $this->next();
+        if ($t['t'] !== 'word') {
+            throw new LexDefect('expect_word', $this->actual($t));
+        }
+        $this->addWordClass($t);
+        $t = $this->peek();
+        if ($t['t'] === 'op' && $t['v'] === '(') {
+            $this->next();
+            $this->expectOp(')', 'expect_paren');
+            $this->fam('subshell', '(');
+            $this->addClass('()');
+        }
+        $this->skipNewlines();
+        $this->nest();
+        $this->parseCommand();
         $this->depth--;
     }
 
@@ -596,7 +622,12 @@ final class ShellLexer
 
             return ['t' => 'op', 'v' => $c];
         }
-        if (preg_match('~\G\d*(<<<|<<-|<<|<>|<&|>&|>>|>\||<|>)~', $this->s, $m, 0, $this->pos) === 1) {
+        // Process substitution `<(…)` / `>(…)` is a word (busybox bash compatibility), not a redirect.
+        if (($c === '<' || $c === '>') && ($this->s[$this->pos + 1] ?? '') === '(') {
+            return $this->scanWord();
+        }
+        // No here-string: busybox ash reads `<<<x` as `<<` followed by another redirection.
+        if (preg_match('~\G\d*(<<-|<<|<>|<&|>&|>>|>\||<|>)~', $this->s, $m, 0, $this->pos) === 1) {
             $this->pos += strlen($m[0]);
             $this->steps += strlen($m[0]);
 
@@ -613,6 +644,14 @@ final class ShellLexer
         $w = ['val' => '', 'lit' => true, 'feat' => [], 'safe' => true, 'quoted' => false];
         if ($this->s[$this->pos] === '~') {
             $w['feat']['t'] = true;
+        }
+        $c0 = $this->s[$this->pos];
+        if (($c0 === '<' || $c0 === '>') && ($this->s[$this->pos + 1] ?? '') === '(') {
+            $this->pos += 2;
+            $inner = $this->subParse();
+            $this->fam('cmdsub', $c0 . '(');
+            $w['feat']['c{' . $inner . '}'] = true;
+            $w['lit'] = false;
         }
         while ($this->pos < $this->n) {
             $c = $this->s[$this->pos];
@@ -749,6 +788,33 @@ final class ShellLexer
             $this->fam('cmdsub', '$(');
             $w['feat']['c{' . $inner . '}'] = true;
             $w['lit'] = false;
+
+            return;
+        }
+        if ($nx === "'") {
+            // $'…' (busybox bash compatibility): a quoted string in which a backslash escapes the next byte.
+            $this->pos += 2;
+            while (true) {
+                if ($this->pos >= $this->n) {
+                    throw new LexDefect('quote');
+                }
+                $c = $this->s[$this->pos];
+                $this->steps++;
+                if ($c === "'") {
+                    $this->pos++;
+                    break;
+                }
+                if ($c === '\\' && $this->pos + 1 < $this->n) {
+                    $w['val'] .= $this->s[$this->pos + 1];
+                    $this->pos += 2;
+                    continue;
+                }
+                $w['val'] .= $c;
+                $this->pos++;
+            }
+            $this->fam('squote', "\$'");
+            $w['feat']['q'] = true;
+            $w['quoted'] = true;
 
             return;
         }

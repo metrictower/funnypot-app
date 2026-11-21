@@ -22,7 +22,7 @@ final class AshVocabulary
     /** Tokens a parser message may quote. Anything else is reported as a plain `word`. */
     public const TOKENS = [
         '|', '||', '&&', '&', ';', ';;', '(', ')', '{', '}', '!',
-        'then', 'do', 'done', 'fi', 'esac', 'elif', 'else', 'in', 'if', 'while', 'until', 'for', 'case',
+        'then', 'do', 'done', 'fi', 'esac', 'elif', 'else', 'in', 'if', 'while', 'until', 'for', 'case', 'function',
     ];
 
     /** What an `expect_*` message says the shell was waiting for. */
