@@ -18,7 +18,10 @@ use Funnypot\App\Http\DownloadRouter;
 use Funnypot\App\Http\HomeController;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Http\LabyrinthController;
+use Funnypot\App\Tarpit\Cmdi\AshVocabulary;
+use Funnypot\App\Tarpit\Cmdi\FootholdFacts;
 use Funnypot\App\Tarpit\Cmdi\FootholdIdentity;
+use Funnypot\Tests\App\Tarpit\Cmdi\ConsoleHarness;
 use Funnypot\App\Tarpit\FootholdRewriter;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
@@ -673,7 +676,7 @@ final class ServedSurfacesFingerprintTest extends TestCase
     }
 
     /**
-     * No-reflection on the real served surface. The foothold body is produced SOLELY by FootholdRewriter
+     * No-reflection on the landing. The landing body is produced SOLELY by FootholdRewriter
      * from the engine's STATIC core body + persona — it takes no request input — so no HTTP payload can be
      * reflected. Feed the ACTUAL installed core webshell body (captured via a benign fire) to the rewriter
      * and confirm each adversarial payload is absent and the body stays fingerprint-clean, including when
@@ -694,6 +697,101 @@ final class ServedSurfacesFingerprintTest extends TestCase
             self::assertStringContainsString('base path (base64):', $foothold, "sanity: the {$who} landing was rendered");
             self::assertStringNotContainsString($cmd, $foothold, "the {$who} foothold reflected the attacker command: {$cmd}");
             self::assertServedClean($foothold, "webshell foothold landing as {$who} (adversarial cmd={$cmd})");
+        }
+    }
+
+    // --- 3h. the interactive webshell console (app-authored error lines + command table) ----------
+
+    /** Every command the facts table answers, for the console scans below. @return list<list<string>> */
+    private static function shellCommands(FootholdFacts $f): array
+    {
+        $cmds = [];
+        foreach (FootholdFacts::commandNames() as $n) {
+            $cmds[] = [$n];
+        }
+        foreach ($f->paths() as $p) {
+            $cmds[] = ['cat', $p];
+            $cmds[] = ['ls', '-la', $p];
+            $cmds[] = ['stat', $p];
+        }
+        foreach (['ps aux', 'ip a', 'ifconfig', 'netstat -tlnp', 'netstat -an', 'ss -tlnp', 'df -h', 'mount', 'free -m', 'uptime',
+            'w', 'who', 'date', 'du -sh', 'uname -a', 'env', 'export', 'set', 'php -v', 'php -m', 'php -i', 'find /', 'apk info',
+            'id root', 'type id cd if', 'wget http://x.example/a', 'nc 10.0.0.1 1', 'ping 8.8.8.8', 'su', 'kill 1'] as $c) {
+            $cmds[] = explode(' ', $c);
+        }
+
+        return $cmds;
+    }
+
+    /**
+     * Every line the console can author: each ash message and each facts answer, inside the served
+     * page chrome, for both identities and eight personas (company, host and registry names change
+     * with the persona). None of these bytes come from the attacker, so all must be clean.
+     */
+    public function test_console_app_authored_text_carries_no_fingerprint_signature(): void
+    {
+        foreach ([1, 7, 42, 500, 4242, 99991, 123456789, IdentityTestSupport::httpIdentity()->personaSeed()] as $seed) {
+            $rewriter = new FootholdRewriter($seed, LabyrinthController::entryHint());
+            foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+                $messages = '';
+                foreach (AshVocabulary::ids() as $msg) {
+                    $messages .= AshVocabulary::render($msg, 'eof', 'No such file or directory') . "\n";
+                }
+                self::assertServedClean($rewriter->page($id, $messages), "console messages, seed {$seed}, {$id->name}");
+
+                $facts = $rewriter->facts($id, static fn (): int => 1795000000);
+                $out = '';
+                foreach (self::shellCommands($facts) as $argv) {
+                    $out .= (string) $facts->run($argv) . "\n";
+                }
+                self::assertServedClean($out, "console facts output, seed {$seed}, {$id->name}");
+                self::assertServedClean($rewriter->landing($id), "console landing, seed {$seed}, {$id->name}");
+            }
+        }
+    }
+
+    /** True-defect payloads through the real handle(): each answer is ash wording and nothing else. */
+    public function test_console_error_pages_served_through_handle_are_clean(): void
+    {
+        $h = ConsoleHarness::build();
+        try {
+            $i = 0;
+            foreach (AshVocabulary::goldenProbes() as $key => [$payload]) {
+                $body = $h->post('/admin/root/post', $payload, '198.51.103.' . (++$i))['body'];
+                self::assertStringContainsString('<title>Shell</title>', $body, $key);
+                self::assertServedClean($body, "console error page via handle(): {$key}");
+            }
+        } finally {
+            $h->cleanup();
+        }
+    }
+
+    /**
+     * Adversarial input through the console. A POST body may be echoed (a real shell echoes it), so
+     * a hit is allowed only when the bytes are the attacker's own; nothing may be added around them.
+     * Nothing from a GET is ever echoed, so a GET answer must be fully clean.
+     *
+     * @dataProvider adversarialCommands
+     */
+    public function test_console_adds_no_signature_around_adversarial_input(string $cmd): void
+    {
+        $h = ConsoleHarness::build();
+        try {
+            foreach ([$cmd, 'echo ' . $cmd, 'cat /' . $cmd, $cmd . '; id'] as $i => $line) {
+                $post = $h->post('/admin/root/post', $line, '198.51.104.' . (1 + $i))['body'];
+                foreach (self::scanAll($post) as $hit) {
+                    $term = preg_replace('~^leak-(?:in|out):/?~', '', $hit);
+                    self::assertTrue(
+                        stripos($line, (string) $term) !== false || preg_match('~' . trim((string) $term, '/') . '~i', $line) === 1,
+                        "the console added {$hit} around POST {$line}"
+                    );
+                }
+                $get = $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($line), null, '198.51.105.' . (1 + $i))['body'];
+                self::assertServedClean($get, "console GET {$line}");
+                self::assertStringNotContainsStringIgnoringCase('fpcanary7q', $h->fetch('GET', '/admin/root/html', 'cmd=echo%20FPCANARY7Q', null, '198.51.106.1')['body']);
+            }
+        } finally {
+            $h->cleanup();
         }
     }
 
