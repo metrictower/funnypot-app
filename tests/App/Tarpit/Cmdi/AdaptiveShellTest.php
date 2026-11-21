@@ -174,6 +174,17 @@ final class AdaptiveShellTest extends TestCase
         self::assertStringNotContainsString('uid=0', implode("\n", $core->headers), 'no header contradicts the page');
     }
 
+    public function test_sleep_forms_the_facts_table_runs_are_recognised(): void
+    {
+        foreach ([['sleep', '3'], ['/bin/sleep', '3'], ['busybox', 'sleep', '3'], ['timeout', '9', 'sleep', '3'], ['timeout', '-s', '9', 'sleep', '3s'], ['x=1', 'nice', 'sleep', '3.5']] as $argv) {
+            self::assertSame(3, AdaptiveShell::sleepOf($argv), implode(' ', $argv));
+        }
+        foreach ([['sleep'], ['sleep', 'x'], ['echo', 'sleep', '3'], ['sleep', '-3']] as $argv) {
+            self::assertNull(AdaptiveShell::sleepOf($argv), implode(' ', $argv));
+        }
+        self::assertSame(300, AdaptiveShell::sleepOf(['sleep', '99999']), 'clamped');
+    }
+
     public function test_the_body_is_capped(): void
     {
         $h = $this->harness();

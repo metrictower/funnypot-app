@@ -296,17 +296,31 @@ final class AdaptiveShell
         return [AshVocabulary::render($o->msgId === 'killed' ? 'killed' : 'fork') . "\n", $o, false, null];
     }
 
-    /** The seconds a literal `sleep N` asks for, or null. @param list<string> $argv */
-    private static function sleepOf(array $argv): ?int
+    /**
+     * The seconds a `sleep N` asks for, or null. Follows the forms the facts table also runs:
+     * `/bin/sleep`, `busybox sleep`, `timeout D sleep`, `nice`/`nohup`/`exec`/`command`, and `Ns`.
+     *
+     * @param list<string> $argv
+     */
+    public static function sleepOf(array $argv): ?int
     {
-        while ($argv !== [] && preg_match('~^[A-Za-z_][A-Za-z0-9_]*=~', $argv[0]) === 1) {
-            array_shift($argv);
+        while ($argv !== []) {
+            $name = basename($argv[0]);
+            if (preg_match('~^[A-Za-z_][A-Za-z0-9_]*=~', $argv[0]) === 1 || in_array($name, ['busybox', 'exec', 'command', 'nohup', 'nice'], true)) {
+                array_shift($argv);
+                continue;
+            }
+            if ($name === 'timeout') {
+                $argv = array_slice(array_values(array_filter($argv, static fn (string $w): bool => !str_starts_with($w, '-'))), 2);
+                continue;
+            }
+            break;
         }
-        if (($argv[0] ?? '') !== 'sleep' || preg_match('~^\d+(?:\.\d+)?$~', $argv[1] ?? '') !== 1) {
+        if (basename($argv[0] ?? '') !== 'sleep' || preg_match('~^(\d+)(?:\.\d+)?s?$~', $argv[1] ?? '', $m) !== 1) {
             return null;
         }
 
-        return max(0, min(self::MAX_SLEEP_S, (int) $argv[1]));
+        return max(0, min(self::MAX_SLEEP_S, (int) $m[1]));
     }
 
     private static function cut(string $s, int $max): string
