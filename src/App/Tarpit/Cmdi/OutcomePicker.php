@@ -145,9 +145,10 @@ final class OutcomePicker
             return new Outcome(Outcome::ACCEPT, Outcome::EMPTY, '', '', null, 'pick');
         }
         $s = ($r - 0.7) / 0.3;
-        $target = $lex->redirectTargets[0] ?? null;
-        if ($target !== null && $s < 0.5) {
-            return new Outcome(Outcome::ACCEPT, Outcome::RUNTIME, 'readonly', $target, null, 'pick');
+        // The write target is not part of the outcome: it is attacker text, and a resend that retargets
+        // the write must name the new file. The page takes it from the line being answered.
+        if ($lex->redirectTargets !== [] && $s < 0.5) {
+            return new Outcome(Outcome::ACCEPT, Outcome::RUNTIME, 'readonly', '', null, 'pick');
         }
 
         return new Outcome(Outcome::ACCEPT, Outcome::RUNTIME, $s < 0.75 ? 'fork' : 'killed', '', null, 'pick');

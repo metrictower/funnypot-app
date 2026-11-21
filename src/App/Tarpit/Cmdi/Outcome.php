@@ -20,6 +20,9 @@ final class Outcome
     public const EMPTY = 'empty';     // ran, printed nothing
     public const RUNTIME = 'runtime'; // the container refused (fork, OOM kill, read-only target)
 
+    /** The only tokens an outcome may carry: the closed set a parser message names. */
+    private const TOKEN_EXTRA = ['', 'eof', 'newline', 'redir', 'word'];
+
     public function __construct(
         public readonly string $kind,
         public readonly string $sub,
@@ -46,10 +49,20 @@ final class Outcome
         return new self($this->kind, $sub, $sub === self::RUNTIME ? $this->msgId : '', $sub === self::RUNTIME ? $this->token : '', $this->family, $this->source);
     }
 
-    /** @return array{k:string,s:string,m:string,t:string,f:?string} */
+    /**
+     * What a source's memo keeps. Closed-set values only: no attacker text is ever stored, so a stored
+     * row stays small and a replay can only print what the current line supplies.
+     *
+     * @return array{k:string,s:string,m:string,t:string,f:?string}
+     */
     public function descriptor(): array
     {
-        return ['k' => $this->kind, 's' => $this->sub, 'm' => $this->msgId, 't' => $this->token, 'f' => $this->family];
+        return ['k' => $this->kind, 's' => $this->sub, 'm' => $this->msgId, 't' => self::closedToken($this->token), 'f' => $this->family];
+    }
+
+    public static function closedToken(string $t): string
+    {
+        return in_array($t, self::TOKEN_EXTRA, true) || in_array($t, AshVocabulary::TOKENS, true) ? $t : '';
     }
 
     /** @param array<string,mixed> $d */
@@ -61,10 +74,14 @@ final class Outcome
             return null;
         }
         $m = is_string($d['m'] ?? null) ? $d['m'] : '';
-        if ($k === self::ERROR && !in_array($m, AshVocabulary::ids(), true) && !str_starts_with($m, 'expect_')) {
+        if ($k === self::ERROR && !in_array($m, AshVocabulary::ids(), true)) {
             return null;
         }
+        if (strlen($s) > 16 || strlen($m) > 32 || ($k === self::ACCEPT && !in_array($m, ['', 'fork', 'killed', 'readonly'], true))) {
+            return null;
+        }
+        $f = $d['f'] ?? null;
 
-        return new self($k, $s, $m, is_string($d['t'] ?? null) ? $d['t'] : '', is_string($d['f'] ?? null) ? $d['f'] : null, $source);
+        return new self($k, $s, $m, self::closedToken(is_string($d['t'] ?? null) ? $d['t'] : ''), is_string($f) && strlen($f) <= 16 ? $f : null, $source);
     }
 }

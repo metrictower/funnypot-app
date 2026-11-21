@@ -383,6 +383,53 @@ final class AdaptiveShellHandleTest extends TestCase
         }
     }
 
+    public function test_a_resent_write_names_the_file_it_targets_now(): void
+    {
+        $h = $this->harness();
+        $ip = '198.51.100.31';
+        $found = null;
+        for ($i = 0; $i < 400 && $found === null; $i++) {
+            $cmd = 'echo x' . str_repeat(';id', $i % 40) . str_repeat('|cat', intdiv($i, 40)) . " > /tmp/first{$i}";
+            if (str_contains(self::text($h->post('/admin/root/post', $cmd, $ip)['body']), "can't create /tmp/first{$i}: Read-only file system")) {
+                $found = [$i, $cmd];
+            }
+        }
+        self::assertNotNull($found, 'sanity: some shape is answered with a read-only write failure');
+        [$i, $cmd] = $found;
+        foreach (['/var/tmp/SECONDtarget', '/dev/shm/x', '/tmp/third'] as $target) {
+            $retarget = str_replace("/tmp/first{$i}", $target, $cmd);
+            self::assertSame(
+                "sh: can't create {$target}: Read-only file system\n\$ ",
+                self::text($h->post('/admin/root/post', $retarget, $ip)['body']),
+                'the same shape replays the same failure, naming the current target'
+            );
+        }
+        self::assertSame($h->rewriter->landing(FootholdIdentity::www()), $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($cmd), null, $ip)['body'], 'a GET never names its target');
+        foreach ($h->store->states[$ip]->memo as $d) {
+            self::assertStringNotContainsString('/tmp', json_encode($d), 'nothing from the line is stored');
+        }
+    }
+
+    public function test_a_sleep_forced_answer_does_not_rewrite_the_shapes_answer(): void
+    {
+        foreach (['ls | cat', "echo 'a'", 'id && id', 'echo "x"', 'echo `id`', 'id > /tmp/x', '(id)', 'echo $(id)', 'id || id', 'echo $HOME', 'cat /etc/hosts | head', 'id 2>&1'] as $k => $primer) {
+            $h = $this->harness();
+            $ip = '198.51.100.' . (110 + $k);
+            $h->post('/admin/root/post', $primer, $ip);
+            $first = self::text($h->post('/admin/root/post', 'ls; id', $ip)['body']);
+            if ((end($h->store->writes)['sub'] ?? '') !== 'first') {
+                continue;
+            }
+            $slept = self::text($h->post('/admin/root/post', 'sleep 1; id', $ip)['body']);
+            self::assertSame('all', end($h->store->writes)['sub'], 'sanity: the sleep turn ran every segment');
+            self::assertSame(FootholdIdentity::www()->idLine() . "\n\$ ", $slept);
+            self::assertSame($first, self::text($h->post('/admin/root/post', 'ls; id', $ip)['body']), 'a resend of the shape answers as it did before the sleep');
+
+            return;
+        }
+        self::fail('no primer left `ls; id` as a first-segment accept');
+    }
+
     // --- 6. the sleep decoy ----------------------------------------------------------------------
 
     /** A primer command that leaves the history in which $line gets an outcome of the wanted kind. */

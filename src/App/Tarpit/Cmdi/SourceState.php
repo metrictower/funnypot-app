@@ -16,6 +16,8 @@ final class SourceState
     public const RECENT_CAP = 4;
     public const STICKY_CAP = 8;
     public const STICKY_PATH_MAX = 200;
+    /** The most one stored row may hold; the store refuses anything larger. */
+    public const MAX_ROW_BYTES = 12288;
 
     /** Memo keys carry a prefix: an all-digit shape key would otherwise become an integer array key. */
     private const MEMO_PREFIX = 'm:';
@@ -84,7 +86,8 @@ final class SourceState
     public function withSticky(string $path): self
     {
         $p = self::normalisePath($path);
-        if ($p === '' || strlen($p) > self::STICKY_PATH_MAX) {
+        // Printable ASCII only, so a stored path never grows under JSON escaping.
+        if ($p === '' || strlen($p) > self::STICKY_PATH_MAX || preg_match('~^[\x21-\x7e]+$~', $p) !== 1) {
             return $this;
         }
         $paths = array_values(array_filter($this->stickyPaths, static fn (string $s): bool => $s !== $p));
@@ -116,25 +119,40 @@ final class SourceState
         return '/' . implode('/', $parts);
     }
 
+    /** At most MAX_ROW_BYTES: the oldest memo entries, then the oldest paths, go first. */
     public function toJson(): string
     {
-        return (string) json_encode([
-            'memo' => $this->memo,
-            'recent' => $this->recentMsgIds,
-            'prev' => $this->prevFamilies,
-            'acc' => $this->lastWasAccept,
-            'sticky' => $this->stickyPaths,
-        ], JSON_UNESCAPED_SLASHES);
+        $memo = $this->memo;
+        $sticky = $this->stickyPaths;
+        do {
+            $json = (string) json_encode([
+                'memo' => $memo,
+                'recent' => $this->recentMsgIds,
+                'prev' => $this->prevFamilies,
+                'acc' => $this->lastWasAccept,
+                'sticky' => $sticky,
+            ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+            if (strlen($json) <= self::MAX_ROW_BYTES) {
+                return $json;
+            }
+            if ($memo !== []) {
+                array_shift($memo);
+            } elseif ($sticky !== []) {
+                array_shift($sticky);
+            } else {
+                return '{}';
+            }
+        } while (true);
     }
 
     /** Anything malformed yields an empty state; a stored row can never break a request. */
     public static function fromJson(string $json): self
     {
-        $d = json_decode($json, true);
+        $d = strlen($json) <= self::MAX_ROW_BYTES ? json_decode($json, true) : null;
         if (!is_array($d)) {
             return self::empty();
         }
-        $strings = static fn ($v): array => is_array($v) ? array_values(array_filter($v, 'is_string')) : [];
+        $strings = static fn ($v): array => is_array($v) ? array_values(array_filter($v, static fn ($s): bool => is_string($s) && strlen($s) <= 32)) : [];
         $memo = [];
         if (is_array($d['memo'] ?? null)) {
             foreach ($d['memo'] as $k => $v) {
@@ -143,12 +161,14 @@ final class SourceState
                 }
             }
         }
-        $sticky = array_values(array_filter($strings($d['sticky'] ?? []), static fn (string $p): bool => strlen($p) <= self::STICKY_PATH_MAX));
+        $sticky = is_array($d['sticky'] ?? null)
+            ? array_values(array_filter($d['sticky'], static fn ($p): bool => is_string($p) && strlen($p) <= self::STICKY_PATH_MAX && preg_match('~^[\x21-\x7e]+$~', $p) === 1))
+            : [];
 
         return new self(
             array_slice($memo, -self::MEMO_CAP, null, true),
             array_slice($strings($d['recent'] ?? []), -self::RECENT_CAP),
-            $strings($d['prev'] ?? []),
+            array_slice($strings($d['prev'] ?? []), 0, 32),
             ($d['acc'] ?? false) === true,
             array_slice($sticky, -self::STICKY_CAP),
         );

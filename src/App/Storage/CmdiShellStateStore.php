@@ -13,7 +13,9 @@ use Throwable;
  * concern). It sits on the request path, so it is small, bounded and fail-open:
  *
  *  - `cmdi_shell` holds one row per source, keyed by a keyed hash of the IP (no raw IP is stored).
- *    Rows idle for four hours expire, at most 2000 rows are kept (least recently seen go first), and
+ *    A row holds closed-set values and capped paths only, never more than 12 KB
+ *    ({@see SourceState::MAX_ROW_BYTES}). Rows idle for four hours expire, at most 2000 rows are kept
+ *    (least recently seen go first), and
  *    a source may write at most 600 times an hour. A gauge row caps all writes at 20,000 an hour, so
  *    a flood from rotating IPs cannot grow the file. Over a cap the turn is answered statelessly.
  *  - `cmdi_turns` is an attribution log for the operator (what each turn got and why). It is never
@@ -124,12 +126,16 @@ final class CmdiShellStateStore implements CmdiShellStore
             return false;
         }
 
+        $json = $state->toJson();
+        if (strlen($json) > SourceState::MAX_ROW_BYTES) {
+            return false;
+        }
         $upsert = $db->prepare(
             'INSERT INTO cmdi_shell (k, state, turns, hour, seen) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(k) DO UPDATE SET state = excluded.state, turns = excluded.turns, hour = excluded.hour, seen = excluded.seen'
         );
         if ($upsert === false
-            || !$upsert->execute([$k, $state->toJson(), $turns + 1, $hour, $now])
+            || !$upsert->execute([$k, $json, $turns + 1, $hour, $now])
             || !$upsert->execute([self::GAUGE, '{}', $global + 1, $hour, $now])) {
             return false;
         }

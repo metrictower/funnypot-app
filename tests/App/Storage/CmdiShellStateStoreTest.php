@@ -181,6 +181,34 @@ final class CmdiShellStateStoreTest extends TestCase
         self::assertSame(0666, fileperms($this->dir . '/cmdi-shell.sqlite') & 0777, 'same 0666 as every Sqlite::open() file');
     }
 
+    public function test_a_row_stays_bounded_under_a_long_adversarial_sequence(): void
+    {
+        // Long control-character redirect targets and junk paths: the worst JSON-escaping case.
+        $target = str_repeat("\x01", 3500);
+        $state = SourceState::empty();
+        $s = $this->store();
+        for ($j = 0; $j < 150; $j++) {
+            $lex = ShellLexer::lex(str_repeat('a;', $j + 1) . "echo x > '" . $target . "'");
+            self::assertSame(strlen($target), strlen($lex->redirectTargets[0] ?? ''), 'sanity: the target is that long');
+            $state = $state->after($lex, new Outcome(Outcome::ACCEPT, Outcome::RUNTIME, 'readonly', $lex->redirectTargets[0], null, 'pick'));
+            $state = $state->withSticky('/' . str_repeat('"', 150) . $j . '.php')->withSticky('/' . str_repeat("\x02", 199))->withSticky('/up/' . $j . '.php');
+            $this->now++;
+            self::assertTrue($s->save('198.51.100.5', $state, self::turn()), "write {$j}");
+        }
+        self::assertLessThanOrEqual(SourceState::MAX_ROW_BYTES, strlen($state->toJson()));
+        $stored = (string) $this->pdo()->query("SELECT state FROM cmdi_shell WHERE k != '#global'")->fetchColumn();
+        self::assertLessThanOrEqual(SourceState::MAX_ROW_BYTES, strlen($stored), 'the stored row is bounded');
+        self::assertStringNotContainsString("\\u0001", $stored, 'no attacker target is stored');
+        self::assertStringNotContainsString('\\u0002', $stored, 'no unprintable path is stored');
+        $back = $s->load('198.51.100.5');
+        self::assertNotEmpty($back->memo);
+        foreach ($back->memo as $d) {
+            self::assertSame('', $d['t'], 'a stored readonly outcome carries no target');
+        }
+        self::assertTrue($back->isSticky('/up/149.php'));
+        self::assertSame(12288, SourceState::MAX_ROW_BYTES);
+    }
+
     public function test_sticky_paths_round_trip_and_are_capped(): void
     {
         $state = SourceState::empty();

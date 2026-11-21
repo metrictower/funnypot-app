@@ -147,8 +147,8 @@ final class AdaptiveShell
             if ($lex->isEmpty()) {
                 return new ShellTurn($ip, $ctx->path, $identity, $cmd['source'], $inConsole, true, false, null, '', null, false, $state);
             }
-            $outcome = OutcomePicker::pick($lex, $state, $this->pickKey);
-            [$output, $outcome, $executes, $sleep] = $this->answer($lex, $outcome, $this->page->facts($identity, $this->clock), $mayReflect);
+            $picked = OutcomePicker::pick($lex, $state, $this->pickKey);
+            [$output, $outcome, $executes, $sleep] = $this->answer($lex, $picked, $this->page->facts($identity, $this->clock), $mayReflect);
 
             return new ShellTurn(
                 $ip,
@@ -162,7 +162,9 @@ final class AdaptiveShell
                 (string) $output,
                 $outcome,
                 $lex->simple,
-                $state->after($lex, $outcome),
+                // The memo keeps what the picker chose. A sleep that forced this turn to run every
+                // segment changes this answer only, so a later resend of the shape answers as before.
+                $state->after($lex, $picked),
             );
         } catch (Throwable $e) {
             return null;
@@ -278,13 +280,14 @@ final class AdaptiveShell
                 return ['', $o, true, null];
         }
 
-        // A container failure: nothing ran.
+        // A container failure: nothing ran. A failed write names this line's target, never a stored one.
         if ($o->msgId === 'readonly') {
-            if (!$mayReflect) {
+            $target = $lex->redirectTargets[0] ?? '';
+            if ($target !== '' && !$mayReflect) {
                 return [null, $o, false, null];
             }
-            if (preg_match(FootholdFacts::SAFE_CHARSET, $o->token) === 1 && $o->token !== '' && strlen($o->token) <= FootholdFacts::PATH_CAP) {
-                return [AshVocabulary::render('readonly', htmlspecialchars($o->token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . "\n", $o, false, null];
+            if (preg_match(FootholdFacts::SAFE_CHARSET, $target) === 1 && $target !== '' && strlen($target) <= FootholdFacts::PATH_CAP) {
+                return [AshVocabulary::render('readonly', htmlspecialchars($target, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . "\n", $o, false, null];
             }
 
             return [AshVocabulary::render('fork') . "\n", $o, false, null];

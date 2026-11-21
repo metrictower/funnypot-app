@@ -258,9 +258,12 @@ Concretely:
    > then drops `busy_timeout` to 25 ms, because it sits on the request path:
    > a locked file costs at most 25 ms, then the turn runs without history.
    > `cmdi_shell` has one row per source keyed by a 32-hex HMAC of the IP (no
-   > raw IP), a 4 h idle TTL, a 2000-row LRU cap, 600 writes per source per
-   > hour and a 20,000-writes-per-hour global gauge row, so a rotating-IP
-   > flood cannot grow it. `cmdi_turns` is the operator's attribution log
+   > raw IP). A row holds closed-set values (outcome kinds, message ids,
+   > syntax families) and at most eight printable, 200-byte paths, never the
+   > attacker's command text, and is refused above 12 KB. It has a 4 h idle
+   > TTL, a 2000-row LRU cap, 600 writes per source per hour and a
+   > 20,000-writes-per-hour global gauge row, so neither one source nor a
+   > rotating-IP flood can grow it past about 24 MB. `cmdi_turns` is the operator's attribution log
    > (outcome, identity, value source, owning rule, delay), never served,
    > FIFO-capped at 20,000 rows and purged after 7 days. Every fault fails
    > open to a stateless turn.
