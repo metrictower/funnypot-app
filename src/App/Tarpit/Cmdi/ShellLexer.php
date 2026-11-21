@@ -612,8 +612,9 @@ final class ShellLexer
 
             return ['t' => 'op', 'v' => $two];
         }
+        // busybox has `&>` but no `&>>`: `&>>x` is `&>` followed by another redirection.
         if ($two === '&>') {
-            $this->pos += ($this->s[$this->pos + 2] ?? '') === '>' ? 3 : 2;
+            $this->pos += 2;
 
             return ['t' => 'redir', 'v' => '&>'];
         }

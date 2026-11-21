@@ -1,0 +1,168 @@
+semi_lead	2	sh: syntax error: unexpected ";"
+pipe_lead	2	sh: syntax error: unexpected "|"
+amp_lead	2	sh: syntax error: unexpected "&"
+and_lead	2	sh: syntax error: unexpected "&&"
+or_lead	2	sh: syntax error: unexpected "||"
+pipe_trail	2	sh: syntax error: unexpected end of file
+and_trail	2	sh: syntax error: unexpected end of file
+or_trail	2	sh: syntax error: unexpected end of file
+dsemi	2	sh: syntax error: unexpected ";;"
+redir_trail	2	sh: syntax error: unexpected end of file
+redir_fd_trail	2	sh: syntax error: unexpected end of file
+redir_redir	2	sh: syntax error: unexpected redirection
+heredoc_nodelim	2	sh: syntax error: unexpected end of file
+dquote_open	2	sh: syntax error: unterminated quoted string
+squote_open	2	sh: syntax error: unterminated quoted string
+backquote_open	2	sh: syntax error: EOF in backquote substitution
+cmdsub_open	2	sh: syntax error: unexpected end of file (expecting ")")
+cmdsub_nested_open	2	sh: syntax error: unexpected end of file (expecting ")")
+param_open	2	sh: syntax error: missing '}'
+param_open_arith	2	sh: syntax error: missing '}'
+arith_open	2	sh: syntax error: missing '))'
+arith_half	2	sh: syntax error: missing '))'
+if_open	2	sh: syntax error: unexpected end of file (expecting "then")
+if_fi	2	sh: syntax error: unexpected "fi" (expecting "then")
+then_empty	2	sh: syntax error: unexpected "fi"
+fi_open	2	sh: syntax error: unexpected end of file (expecting "fi")
+else_open	2	sh: syntax error: unexpected end of file (expecting "fi")
+elif_open	2	sh: syntax error: unexpected end of file (expecting "then")
+while_open	2	sh: syntax error: unexpected end of file (expecting "do")
+until_open	2	sh: syntax error: unexpected end of file (expecting "do")
+done_open	2	sh: syntax error: unexpected end of file (expecting "done")
+while_empty	2	sh: syntax error: unexpected ";"
+for_bad	2	sh: syntax error: bad for loop variable
+for_list_open	2	sh: syntax error: unexpected end of file
+for_do_open	2	sh: syntax error: unexpected end of file (expecting "do")
+case_alone	2	sh: syntax error: unexpected end of file (expecting word)
+case_in_open	2	sh: syntax error: unexpected end of file (expecting "in")
+case_pattern_open	2	sh: syntax error: unexpected end of file (expecting ")")
+case_arm_open	2	sh: syntax error: unexpected end of file (expecting ";;")
+rparen	2	sh: syntax error: unexpected ")"
+rparen_glued	2	sh: syntax error: unexpected ")"
+subshell_empty	2	sh: syntax error: unexpected ")"
+subshell_open	2	sh: syntax error: unexpected end of file (expecting ")")
+brace_open	2	sh: syntax error: unexpected end of file (expecting "}")
+brace_arg	2	sh: syntax error: unexpected end of file (expecting "}")
+if_alone	2	sh: syntax error: unexpected end of file (expecting "then")
+then_alone	2	sh: syntax error: unexpected "then"
+do_alone	2	sh: syntax error: unexpected "do"
+fi_alone	2	sh: syntax error: unexpected "fi"
+esac_alone	2	sh: syntax error: unexpected "esac"
+in_alone	2	sh: syntax error: unexpected "in"
+lbrace_alone	2	sh: syntax error: unexpected end of file (expecting "}")
+bang_alone	2	sh: syntax error: unexpected end of file
+rbrace_alone	2	sh: syntax error: unexpected "}"
+bang_bang	2	sh: syntax error: unexpected "!"
+pipe_bang	2	sh: syntax error: unexpected "!"
+pipe_pipe	2	sh: syntax error: unexpected "|"
+pipe_amp	2	sh: syntax error: unexpected "&"
+func_word	2	sh: syntax error: unexpected word (expecting ")")
+func_open	2	sh: syntax error: unexpected end of file (expecting ")")
+func_no_body	2	sh: syntax error: unexpected end of file
+lparen_args	2	sh: syntax error: unexpected "("
+word_after_subshell	2	sh: syntax error: unexpected word
+amp_semi	2	sh: syntax error: unexpected ";"
+semi_semi	2	sh: syntax error: unexpected ";"
+newline_semi	2	sh: syntax error: unexpected ";"
+cmdsub_inner_semi	2	sh: syntax error: unexpected ";"
+backquote_inner_semi	2	sh: syntax error: unexpected ";"
+dquote_cmdsub_open	2	sh: syntax error: unterminated quoted string
+dquote_backquote_open	2	sh: syntax error: EOF in backquote substitution
+dquote_param_open	2	sh: syntax error: unterminated quoted string
+cmdsub_extra_close	2	sh: syntax error: unexpected ")"
+html_tags	2	sh: syntax error: unexpected end of file
+leading_semi_comment	2	sh: syntax error: unexpected ";"
+trailing_semi	0	
+trailing_amp	0	
+comment_quote	0	
+hash_mid_word	0	
+escaped_backquotes	0	
+ls_semi_id	0	
+ls_pipe_cat	0	
+cmdsub	0	
+backquote	0	
+ifs	0	
+if_full	0	
+echo_rbrace	0	
+type_builtin	0	
+cd_builtin	0	
+literal_pct0a	0	
+real_newline	0	
+glob	0	
+tilde	0	
+and	0	
+or_glued	0	
+amp_glued	0	
+redirect	0	
+redirect_fd	0	
+redirect_amp	0	
+redirect_only	0	
+heredoc	0	
+heredoc_unclosed	0	
+herestring	2	sh: syntax error: unexpected redirection
+herestring_quoted	2	sh: syntax error: unexpected redirection
+arith	0	
+arith_nested	0	
+param_default	0	
+param_bad_subst	0	
+param_empty	0	
+param_plain	0	
+brace_group	0	
+brace_word	0	
+rbrace_arg	0	
+subshell	0	
+subshell_redirect	0	
+function	0	
+function_simple_body	0	
+case_ok	0	
+case_empty	0	
+for_ok	0	
+while_ok	0	
+not	0	
+assign_prefix	0	
+squote	0	
+dquote	0	
+trailing_backslash	0	
+empty_cmdsub	0	
+nested_backquote	0	
+empty	0	
+comment_only	0	
+dollar_bracket	0	
+xss_redirect	0	
+psql_quoted	0	
+php_r	0	
+procsub	0	
+procsub_two	0	
+procsub_out	0	
+procsub_redirected	0	
+procsub_open	2	sh: syntax error: unexpected end of file (expecting ")")
+function_kw	0	
+function_kw_parens	0	
+function_kw_alone	2	sh: syntax error: unexpected end of file (expecting word)
+function_kw_no_body	2	sh: syntax error: unexpected end of file
+dollar_squote	0	
+dollar_squote_open	2	sh: syntax error: unterminated quoted string
+amp_redirect_append	2	sh: syntax error: unexpected redirection
+dsq_unquoted	0	
+dsq_unquoted_escape_n	0	
+ddq_unquoted	0	
+ddq_unquoted_open	2	sh: syntax error: unterminated quoted string
+dsq_in_dquote	0	
+dsq_in_dquote_text	0	
+ddq_in_dquote	0	
+dsq_in_dquote_open	2	sh: syntax error: unterminated quoted string
+dsq_in_squote	0	
+ddq_in_squote	0	
+dsq_escaped	0	
+dsq_escaped_open	2	sh: syntax error: unterminated quoted string
+ddq_escaped	0	
+dsq_in_backquote	0	
+dsq_in_dquote_backquote	0	
+ddq_in_backquote	0	
+dsq_in_cmdsub	0	
+dsq_in_dquote_cmdsub	0	
+ddq_in_cmdsub	0	
+dsq_in_dquote_cmdsub_open	2	sh: syntax error: unterminated quoted string
+dsq_in_cmdsub_dquote	0	
+id_simple	0	
+echo_simple	0	

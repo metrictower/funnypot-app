@@ -8,8 +8,8 @@ declare(strict_types=1);
 // golden test can check each verdict against busybox itself.
 //
 // The "busybox bash compatibility" block below follows busybox 1.36 ash.c with ASH_BASH_COMPAT
-// (function, $'…', process substitution, &>). dash parses those differently; the golden capture on
-// Alpine confirms them. A here-string is not among them: ash has no `<<<`.
+// (function, $'…', process substitution, &>). dash parses those differently; every verdict here is
+// confirmed against BusyBox v1.36.1 on Alpine 3.19 (ash-parse.golden.txt). ash has no `<<<` and no `&>>`.
 
 return [
     // --- true defects ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ return [
     'xss_redirect' => ["echo '<script>alert(1)</script>' > /var/www/html/x.html", null, ['redirect', 'squote'], false, null],
     'psql_quoted' => ['psql -c "select * from information_schema.tables"', null, ['dquote'], false, null],
     'php_r' => ["php -r 'sleep(5);'", null, ['squote'], false, null],
-    // --- busybox bash compatibility (pending golden confirmation) ------------------------------
+    // --- busybox bash compatibility (confirmed by the golden capture) --------------------------
     'procsub' => ['cat <(id)', null, ['cmdsub'], false, null],
     'procsub_two' => ['diff <(ls /a) <(ls /b)', null, ['cmdsub'], false, null],
     'procsub_out' => ['tee >(cat) </dev/null', null, ['cmdsub', 'redirect'], false, null],
@@ -160,7 +160,7 @@ return [
     'function_kw_no_body' => ['function f', 'unexpected_eof', null, false, null],
     'dollar_squote' => ["echo \$'a\\'b'", null, ['squote'], false, null],
     'dollar_squote_open' => ["echo \$'abc", 'quote', null, false, null],
-    'amp_redirect_append' => ['id &>>/tmp/x', null, ['redirect'], false, null],
+    'amp_redirect_append' => ['id &>>/tmp/x', 'unexpected_redir', null, false, null],
     // $'…' starts only outside double quotes; $"…" is a literal `$` then a double-quoted string. Each
     // quoting context: unquoted, inside "…", inside '…', escaped, and inside backquotes and $(…).
     'dsq_unquoted' => ["echo \$'a b'", null, ['squote'], false, null],

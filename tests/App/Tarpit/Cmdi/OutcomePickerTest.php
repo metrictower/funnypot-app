@@ -204,10 +204,10 @@ final class OutcomePickerTest extends TestCase
             $line = AshVocabulary::render($id, 'eof', 'No such file or directory');
             self::assertDoesNotMatchRegularExpression('~sh: line \d+:~', $line, $id);
             if ($id !== 'cd_fail') {
-                self::assertStringNotContainsString('line 1:', $line, $id);
+                self::assertDoesNotMatchRegularExpression('~line \d+:~', $line, $id);
             }
         }
-        self::assertSame("sh: cd: line 1: can't cd to /x: No such file or directory", AshVocabulary::render('cd_fail', '/x'));
+        self::assertSame("sh: cd: line 0: can't cd to /x: No such file or directory", AshVocabulary::render('cd_fail', '/x'), 'ash under sh -c says line 0');
         self::assertSame('sh: syntax error: unexpected end of file (expecting "then")', AshVocabulary::render('expect_then', 'eof'));
         self::assertSame('sh: syntax error: unexpected "fi" (expecting "then")', AshVocabulary::render('expect_then', 'fi'));
         self::assertSame('sh: syntax error: unexpected word', AshVocabulary::render('unexpected_<script>'), 'a token outside the closed set is never echoed');

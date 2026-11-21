@@ -8,16 +8,17 @@ namespace Funnypot\App\Tarpit\Cmdi;
  * The error lines a busybox ash (`sh -c`, as PHP's popen runs it) prints, keyed by a message id.
  *
  * Parser errors carry no `line N:` prefix: ash only prints one while a builtin is running, so only
- * the `cd` wording embeds `line 1:`. Every token a message can name comes from a closed set, so no
+ * the `cd` wording embeds one, and under `sh -c` it reads `line 0:`. Every token a message can name comes from a closed set, so no
  * parser message ever carries attacker bytes. The few runtime messages that name a path or command
  * take a value the caller has already passed through the reflection rules.
  *
- * The wordings were learned by running the shell. GOLDEN_VERIFIED records whether a capture against
- * a real Alpine image has confirmed every line; the golden test fails if it is set without fixtures.
+ * The wordings were learned by running the shell and confirmed line by line against BusyBox v1.36.1
+ * on Alpine 3.19 (tests/Fixtures/cmdi/*.golden.txt). The golden test fails if GOLDEN_VERIFIED is set
+ * without those fixtures, or if any line drifts from them.
  */
 final class AshVocabulary
 {
-    public const GOLDEN_VERIFIED = false;
+    public const GOLDEN_VERIFIED = true;
 
     /** Tokens a parser message may quote. Anything else is reported as a plain `word`. */
     public const TOKENS = [
@@ -78,7 +79,7 @@ final class AshVocabulary
 
         return match ($msgId) {
             'not_found' => 'sh: ' . $arg . ': not found',
-            'cd_fail' => "sh: cd: line 1: can't cd to " . $arg . ': ' . ($arg2 !== '' ? $arg2 : 'No such file or directory'),
+            'cd_fail' => "sh: cd: line 0: can't cd to " . $arg . ': ' . ($arg2 !== '' ? $arg2 : 'No such file or directory'),
             'readonly' => "sh: can't create " . $arg . ': Read-only file system',
             'killed' => 'Killed',
             default => 'sh: syntax error: unexpected end of file',

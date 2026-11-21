@@ -1,0 +1,41 @@
+quote	sh: syntax error: unterminated quoted string
+backquote	sh: syntax error: EOF in backquote substitution
+expect_paren	sh: syntax error: unexpected end of file (expecting ")")
+expect_paren_word	sh: syntax error: unexpected word (expecting ")")
+expect_brace	sh: syntax error: unexpected end of file (expecting "}")
+expect_then	sh: syntax error: unexpected end of file (expecting "then")
+expect_then_fi	sh: syntax error: unexpected "fi" (expecting "then")
+expect_do	sh: syntax error: unexpected end of file (expecting "do")
+expect_done	sh: syntax error: unexpected end of file (expecting "done")
+expect_fi	sh: syntax error: unexpected end of file (expecting "fi")
+expect_in	sh: syntax error: unexpected end of file (expecting "in")
+expect_dsemi	sh: syntax error: unexpected end of file (expecting ";;")
+expect_word	sh: syntax error: unexpected end of file (expecting word)
+missing_brace	sh: syntax error: missing '}'
+missing_arith	sh: syntax error: missing '))'
+bad_subst	sh: syntax error: bad substitution
+bad_for	sh: syntax error: bad for loop variable
+unexpected_semi	sh: syntax error: unexpected ";"
+unexpected_pipe	sh: syntax error: unexpected "|"
+unexpected_amp	sh: syntax error: unexpected "&"
+unexpected_and	sh: syntax error: unexpected "&&"
+unexpected_or	sh: syntax error: unexpected "||"
+unexpected_dsemi	sh: syntax error: unexpected ";;"
+unexpected_rparen	sh: syntax error: unexpected ")"
+unexpected_lparen	sh: syntax error: unexpected "("
+unexpected_rbrace	sh: syntax error: unexpected "}"
+unexpected_bang	sh: syntax error: unexpected "!"
+unexpected_then	sh: syntax error: unexpected "then"
+unexpected_do	sh: syntax error: unexpected "do"
+unexpected_done	sh: syntax error: unexpected "done"
+unexpected_fi	sh: syntax error: unexpected "fi"
+unexpected_esac	sh: syntax error: unexpected "esac"
+unexpected_elif	sh: syntax error: unexpected "elif"
+unexpected_else	sh: syntax error: unexpected "else"
+unexpected_in	sh: syntax error: unexpected "in"
+unexpected_eof	sh: syntax error: unexpected end of file
+unexpected_redir	sh: syntax error: unexpected redirection
+unexpected_word	sh: syntax error: unexpected word
+not_found	sh: nonexistentcommand: not found
+cd_fail	sh: cd: line 0: can't cd to /nonexistent: No such file or directory
+readonly	sh: can't create /probe: Read-only file system
