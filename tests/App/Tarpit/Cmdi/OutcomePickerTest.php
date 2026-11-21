@@ -223,8 +223,10 @@ final class OutcomePickerTest extends TestCase
             $s = $s->after($lex, new Outcome(Outcome::ERROR, 'phantom', 'unexpected_|', '|', 'pipe', 'pick'));
         }
         self::assertCount(SourceState::MEMO_CAP, $s->memo);
-        self::assertArrayHasKey(sprintf('%016x', 99), $s->memo, 'newest kept');
-        self::assertArrayNotHasKey(sprintf('%016x', 0), $s->memo, 'oldest evicted');
+        self::assertNotNull($s->memoFor(sprintf('%016x', 99)), 'newest kept');
+        self::assertNull($s->memoFor(sprintf('%016x', 0)), 'oldest evicted');
+        $digits = $s->after(self::synthetic(['pipe'], [], '7472259693434975'), new Outcome(Outcome::ERROR, 'phantom', 'unexpected_|', '|', 'pipe', 'pick'));
+        self::assertNotNull(SourceState::fromJson($digits->toJson())->memoFor('7472259693434975'), 'an all-digit shape key survives the JSON round trip');
         self::assertCount(SourceState::RECENT_CAP, $s->recentMsgIds);
 
         for ($i = 0; $i < 12; $i++) {

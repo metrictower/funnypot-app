@@ -17,8 +17,11 @@ final class SourceState
     public const STICKY_CAP = 8;
     public const STICKY_PATH_MAX = 200;
 
+    /** Memo keys carry a prefix: an all-digit shape key would otherwise become an integer array key. */
+    private const MEMO_PREFIX = 'm:';
+
     /**
-     * @param array<string,array<string,mixed>> $memo         shape key => outcome descriptor, oldest first
+     * @param array<string,array<string,mixed>> $memo         prefixed shape key => outcome descriptor, oldest first
      * @param list<string>                      $recentMsgIds newest last
      * @param list<string>                      $prevFamilies
      * @param list<string>                      $stickyPaths  oldest first
@@ -46,6 +49,12 @@ final class SourceState
         return hash('sha256', json_encode([$this->recentMsgIds, $fams, $this->lastWasAccept]) ?: '');
     }
 
+    /** @return array<string,mixed>|null the descriptor this source got for $shapeKey before */
+    public function memoFor(string $shapeKey): ?array
+    {
+        return $this->memo[self::MEMO_PREFIX . $shapeKey] ?? null;
+    }
+
     public function lastMsgId(): ?string
     {
         return $this->recentMsgIds === [] ? null : $this->recentMsgIds[count($this->recentMsgIds) - 1];
@@ -59,8 +68,8 @@ final class SourceState
         }
         $memo = $this->memo;
         if ($o->source === 'pick' || $o->source === 'memo') {
-            unset($memo[$lex->shapeKey]);
-            $memo[$lex->shapeKey] = $o->descriptor();
+            unset($memo[self::MEMO_PREFIX . $lex->shapeKey]);
+            $memo[self::MEMO_PREFIX . $lex->shapeKey] = $o->descriptor();
             if (count($memo) > self::MEMO_CAP) {
                 $memo = array_slice($memo, -self::MEMO_CAP, null, true);
             }
@@ -129,7 +138,7 @@ final class SourceState
         $memo = [];
         if (is_array($d['memo'] ?? null)) {
             foreach ($d['memo'] as $k => $v) {
-                if (is_string($k) && preg_match('~^[0-9a-f]{16}$~', $k) === 1 && is_array($v) && Outcome::fromDescriptor($v) !== null) {
+                if (is_string($k) && preg_match('~^m:[0-9a-f]{16}$~', $k) === 1 && is_array($v) && Outcome::fromDescriptor($v) !== null) {
                     $memo[$k] = $v;
                 }
             }

@@ -40,8 +40,9 @@ final class OutcomePicker
         if ($lex->simple) {
             return new Outcome(Outcome::ACCEPT, Outcome::FACTS, '', '', null, 'simple');
         }
-        if (isset($state->memo[$lex->shapeKey])) {
-            $replay = Outcome::fromDescriptor($state->memo[$lex->shapeKey]);
+        $memo = $state->memoFor($lex->shapeKey);
+        if ($memo !== null) {
+            $replay = Outcome::fromDescriptor($memo);
             if ($replay !== null) {
                 return $replay;
             }
