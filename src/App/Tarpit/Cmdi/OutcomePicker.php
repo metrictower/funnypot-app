@@ -9,7 +9,8 @@ namespace Funnypot\App\Tarpit\Cmdi;
  * the same outcome, whatever source sent it.
  *
  * In order:
- *  1. a real syntax error gets the error ash would print;
+ *  1. a real syntax error gets the error ash would print, and a `${…}` ash rejects gets its
+ *     "bad substitution";
  *  2. a simple command is accepted and answered from the facts table;
  *  3. a shape this source already tried replays its earlier answer, so a resend is stable;
  *  4. a new shape is accepted about one time in five (never twice running), with output that is
@@ -36,6 +37,9 @@ final class OutcomePicker
     {
         if ($lex->trueDefect !== null) {
             return new Outcome(Outcome::ERROR, 'defect', $lex->trueDefect['id'], $lex->trueDefect['token'], null, 'defect');
+        }
+        if ($lex->badSubst) {
+            return new Outcome(Outcome::ERROR, 'defect', 'bad_subst', '', null, 'defect');
         }
         if ($lex->simple) {
             return new Outcome(Outcome::ACCEPT, Outcome::FACTS, '', '', null, 'simple');
@@ -84,7 +88,8 @@ final class OutcomePicker
             'squote', 'dquote', 'escape' => ['quote', ''],
             'cmdsub', 'subshell' => ['expect_paren', 'eof'],
             'arith' => ['missing_arith', ''],
-            'param' => ['bad_subst', ''],
+            // A valid ${NAME op word}: "bad substitution" belongs only to forms ash really rejects.
+            'param' => ['missing_brace', ''],
             'brace' => ['expect_brace', 'eof'],
             'keyword' => self::keywordPhantom($tokens),
             'pipe' => ['unexpected_|', '|'],

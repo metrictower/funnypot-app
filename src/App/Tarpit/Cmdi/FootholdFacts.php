@@ -44,6 +44,16 @@ final class FootholdFacts
 
     /** Output beyond this is cut, the way a webshell's capture buffer would be. */
     private const MAX_OUTPUT = 12288;
+
+    /**
+     * One request's work, whatever the line asks for: operands an applet looks at, table entries
+     * visited, the longest pattern matched, and wall time across every command of the request. When
+     * the budget runs out the answer is what was produced so far, the way a killed command's is.
+     */
+    private const MAX_ARGS = 64;
+    private const MAX_NODES = 3000;
+    private const MAX_PATTERN = 128;
+    private const MAX_WORK_NS = 30_000_000;
     private const IMAGE_MTIME = 'Nov  3 09:12';
     private const DEPLOY_MTIME = 'Nov 19 06:40';
     private const BUSYBOX = 'BusyBox v1.36.1 (2024-01-26 10:44:39 UTC) multi-call binary.';
@@ -118,6 +128,8 @@ final class FootholdFacts
     /** @var array<string,list<string>> */
     private array $children = [];
     private bool $mayReflect = true;
+    private int $nodes = 0;
+    private ?int $deadline = null;
     /** @var callable():int */
     private $clock;
 
@@ -235,8 +247,18 @@ final class FootholdFacts
     public function run(array $argv, bool $mayReflect = true): ?string
     {
         $this->mayReflect = $mayReflect;
+        // From a GET or a query string the answer may not depend on argument text at all: a selected
+        // field, a joining delimiter or an echoed pid is still the attacker's bytes. Only a bare
+        // command is answered there; anything with arguments gets the landing.
+        if (!$mayReflect && count($argv) > 1) {
+            return null;
+        }
+        $this->deadline ??= hrtime(true) + self::MAX_WORK_NS;
+        if ($this->spent()) {
+            return '';
+        }
         try {
-            $out = $this->exec($this->expand($argv), 0);
+            $out = $this->exec($this->expand(array_slice($argv, 0, self::MAX_ARGS + 1)), 0);
         } catch (SlotRefused $e) {
             // From a GET the caller serves the landing instead. From a body, the text only failed the
             // charset, and the command simply prints nothing.
@@ -244,6 +266,14 @@ final class FootholdFacts
         }
 
         return strlen($out) > self::MAX_OUTPUT ? substr($out, 0, self::MAX_OUTPUT) : $out;
+    }
+
+    /** True once this request's work budget is used up, or $out is already a full answer. */
+    private function spent(string $out = ''): bool
+    {
+        return strlen($out) >= self::MAX_OUTPUT
+            || $this->nodes > self::MAX_NODES
+            || ($this->deadline !== null && hrtime(true) > $this->deadline);
     }
 
     /** True when $name runs here: an applet on PATH, a builtin, or a known binary. */
@@ -291,7 +321,7 @@ final class FootholdFacts
             return '';
         }
         $name = $argv[0];
-        $args = array_slice($argv, 1);
+        $args = array_slice($argv, 1, self::MAX_ARGS);
 
         if (str_contains($name, '/')) {
             $abs = $this->abs($name);
@@ -340,7 +370,7 @@ final class FootholdFacts
             case 'export':
                 return $this->listVars('export ');
             case 'set':
-                return $a === [] ? $this->listVars('') . "IFS=' \t\n'\nOPTIND='1'\nPPID='213'\nPS1='\\w \\\$ '\nPS2='> '\nPS4='+ '\n" : '';
+                return $a === [] ? $this->listVars('') . "IFS=' \t\n'\nOPTIND='1'\nPPID='12'\nPS1='\\w \\\$ '\nPS2='> '\nPS4='+ '\n" : '';
             case 'umask':
                 return $a === [] ? "0022\n" : '';
             case 'ulimit':
@@ -809,6 +839,9 @@ final class FootholdFacts
         if ($paths !== []) {
             $sel = [];
             foreach ($paths as $p) {
+                if ($this->spent($out)) {
+                    break;
+                }
                 $abs = $this->abs($p);
                 if (!isset($this->fs[$abs])) {
                     return "df: " . $this->slotPath($p) . ": can't find mount point\n";
@@ -873,6 +906,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($paths as $p) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($p);
             if (!isset($this->fs[$abs])) {
                 $out .= "du: can't open '" . $this->slotPath($p) . "': No such file or directory\n";
@@ -883,6 +919,7 @@ final class FootholdFacts
                 continue;
             }
             $kb = 4;
+            $this->nodes += count($this->fs);
             foreach ($this->fs as $path => $e) {
                 if ($path !== $abs && str_starts_with($path, rtrim($abs, '/') . '/')) {
                     $kb += max(4, (int) (ceil(($e['size'] ?? 0) / 4096) * 4));
@@ -1008,6 +1045,9 @@ final class FootholdFacts
         $files = [];
         $dirs = [];
         foreach ($paths as $p) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($p);
             $e = $this->fs[$abs] ?? null;
             if ($e === null) {
@@ -1021,6 +1061,9 @@ final class FootholdFacts
             }
         }
         foreach ($files as [$p, $abs]) {
+            if ($this->spent($out)) {
+                break;
+            }
             $out .= $long ? $this->longLine($this->shown($p, $abs), $abs, $human) : $this->shown($p, $abs) . "\n";
         }
         foreach ($dirs as $i => [$p, $abs]) {
@@ -1044,6 +1087,9 @@ final class FootholdFacts
                 $out .= 'total ' . (4 * max(1, count($names))) . "\n";
             }
             foreach ($names as $n) {
+                if (++$this->nodes > self::MAX_NODES || strlen($out) >= self::MAX_OUTPUT) {
+                    break;
+                }
                 $child = $n === '.' ? $real : ($n === '..' ? $this->parent($real) : rtrim($real, '/') . '/' . $n);
                 $out .= $long ? $this->longLine($n, $child, $human) : $n . "\n";
             }
@@ -1069,6 +1115,9 @@ final class FootholdFacts
         [, $paths] = self::split($a);
         $out = '';
         foreach ($paths as $p) {
+            if ($this->spent($out)) {
+                break;
+            }
             if ($p === '-') {
                 continue;
             }
@@ -1140,6 +1189,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             [$c, $err] = $this->read($name, $f);
             if ($c === null) {
                 $out .= $err;
@@ -1208,32 +1260,60 @@ final class FootholdFacts
         return $lines === [] ? '' : implode("\n", $lines) . "\n";
     }
 
-    /** @param list<string> $a @param list<string> $lines */
+    /**
+     * busybox cut -d/-f: each selected field once, in field order; a line without the delimiter
+     * passes through whole. A delimiter from the command line is attacker text, so it is shown only
+     * through a slot (when two or more fields are joined).
+     *
+     * @param list<string> $a @param list<string> $lines
+     */
     private function cut(array $a, array $lines): string
     {
         $delim = "\t";
-        $fields = null;
+        $typed = false;
+        $spec = null;
         foreach ($a as $i => $w) {
             if (str_starts_with($w, '-d')) {
                 $delim = strlen($w) > 2 ? substr($w, 2, 1) : (string) substr($a[$i + 1] ?? "\t", 0, 1);
+                $typed = true;
             } elseif (str_starts_with($w, '-f')) {
                 $spec = strlen($w) > 2 ? substr($w, 2) : ($a[$i + 1] ?? '1');
-                $fields = array_map('intval', preg_split('~[,-]~', $spec) ?: ['1']);
             }
         }
-        if ($fields === null || $delim === '') {
+        if ($spec === null || $delim === '') {
             return '';
         }
+        $fields = [];
+        foreach (explode(',', $spec) as $part) {
+            if (preg_match('~^(\d*)-(\d*)$~', $part, $m) === 1) {
+                $lo = $m[1] === '' ? 1 : (int) $m[1];
+                $hi = $m[2] === '' ? 64 : min(64, (int) $m[2]);
+                for ($f = $lo; $f <= $hi; $f++) {
+                    $fields[$f] = true;
+                }
+            } elseif (ctype_digit($part) && (int) $part >= 1) {
+                $fields[min(64, (int) $part)] = true;
+            }
+        }
+        ksort($fields);
+        $joiner = null;
         $out = [];
         foreach ($lines as $l) {
+            if (!str_contains($l, $delim)) {
+                $out[] = $l;
+                continue;
+            }
             $parts = explode($delim, $l);
             $pick = [];
-            foreach ($fields as $f) {
-                if ($f >= 1 && isset($parts[$f - 1])) {
+            foreach (array_keys($fields) as $f) {
+                if (isset($parts[$f - 1])) {
                     $pick[] = $parts[$f - 1];
                 }
             }
-            $out[] = implode($delim, $pick);
+            if (count($pick) > 1) {
+                $joiner ??= $typed ? $this->slotWord($delim, 1) : $delim;
+            }
+            $out[] = implode((string) $joiner, $pick);
         }
 
         return self::lines($out);
@@ -1266,7 +1346,19 @@ final class FootholdFacts
         if ($rest === []) {
             return '';
         }
-        $re = '~' . str_replace('\.', '.', preg_quote($pattern, '~')) . '~' . (str_contains($flags, 'i') ? 'i' : '');
+        // Only `.` is a wildcard here, and an over-long pattern is matched literally, so no attacker
+        // text is ever compiled into a regex that could backtrack or warn.
+        $ci = str_contains($flags, 'i');
+        $re = strlen($pattern) <= self::MAX_PATTERN && str_contains($pattern, '.')
+            ? '~' . str_replace('\.', '.', preg_quote($pattern, '~')) . '~s' . ($ci ? 'i' : '')
+            : null;
+        $match = static function (string $line) use ($pattern, $re, $ci): bool {
+            if ($re === null) {
+                return $ci ? stripos($line, $pattern) !== false : str_contains($line, $pattern);
+            }
+
+            return preg_match($re, $line) === 1;
+        };
         $recurse = str_contains($flags, 'r') || str_contains($flags, 'R');
         $files = [];
         $out = '';
@@ -1284,6 +1376,9 @@ final class FootholdFacts
         }
         $prefix = count($files) > 1 || $recurse;
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             [$c, $err] = $this->read('grep', $f);
             if ($c === null) {
                 $out .= $err;
@@ -1291,7 +1386,10 @@ final class FootholdFacts
             }
             $count = 0;
             foreach (explode("\n", rtrim($c, "\n")) as $line) {
-                $hit = preg_match($re, $line) === 1;
+                if (strlen($out) >= self::MAX_OUTPUT) {
+                    break;
+                }
+                $hit = $match($line);
                 if ($hit !== str_contains($flags, 'v')) {
                     $count++;
                     if (!str_contains($flags, 'c') && !str_contains($flags, 'l')) {
@@ -1327,6 +1425,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             [$c, $err] = $this->read('wc', $f);
             if ($c === null) {
                 $out .= $err;
@@ -1349,6 +1450,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             [$c, $err] = $this->read($name, $f);
             $out .= $c === null ? $err : hash($algo, $c) . '  ' . $this->shown($f, $this->abs($f)) . "\n";
         }
@@ -1365,6 +1469,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             [$c, $err] = $this->read($name, $f);
             if ($c === null) {
                 $out .= $err;
@@ -1404,6 +1511,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($roots as $r) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($r);
             if (!isset($this->fs[$abs])) {
                 $out .= "find: '" . $this->slotPath($r) . "': No such file or directory\n";
@@ -1417,7 +1527,10 @@ final class FootholdFacts
                 if ($type !== null && $this->type($p) !== ($type === 'f' ? 'f' : ($type === 'l' ? 'l' : 'd'))) {
                     continue;
                 }
-                if ($name !== null && !fnmatch($name, basename($p))) {
+                if (strlen($out) >= self::MAX_OUTPUT) {
+                    break;
+                }
+                if ($name !== null && (strlen($name) > self::MAX_PATTERN || !fnmatch($name, basename($p)))) {
                     continue;
                 }
                 $out .= ($r === '.' || $r === './' ? '.' . substr($p, strlen(self::CWD)) : $p) . "\n";
@@ -1435,6 +1548,7 @@ final class FootholdFacts
      */
     private function walk(string $abs, string &$errors, string $applet): array
     {
+        $this->nodes++;
         $out = [$abs];
         if ($this->type($abs) !== 'd') {
             return $out;
@@ -1447,6 +1561,9 @@ final class FootholdFacts
         $names = $this->children[$abs] ?? [];
         sort($names, SORT_STRING);
         foreach ($names as $n) {
+            if ($this->spent()) {
+                break;
+            }
             $child = rtrim($abs, '/') . '/' . $n;
             if ($this->fs[$child]['t'] === 'l') {
                 $out[] = $child;
@@ -1464,6 +1581,9 @@ final class FootholdFacts
         [, $files] = self::split($a);
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($f);
             if (!isset($this->fs[$abs])) {
                 $out .= "stat: can't stat '" . $this->slotPath($f) . "': No such file or directory\n";
@@ -1503,6 +1623,9 @@ final class FootholdFacts
         [$flags, $files] = self::split($a);
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($f);
             $e = $this->fs[$abs] ?? null;
             if (str_contains($flags, 'f')) {
@@ -1521,6 +1644,9 @@ final class FootholdFacts
         [, $files] = self::split($a);
         $out = '';
         foreach ($files as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($f);
             $out .= isset($this->fs[$abs])
                 ? $this->resolve($abs) . "\n"
@@ -1699,6 +1825,9 @@ final class FootholdFacts
         }
         $out = '';
         foreach ($paths as $p) {
+            if ($this->spent($out)) {
+                break;
+            }
             $abs = $this->abs($p);
             $exists = isset($this->fs[$abs]);
             if (!$exists && in_array($name, ['rm', 'rmdir', 'chmod', 'chown', 'chgrp', 'unlink', 'truncate', 'shred', 'chattr'], true)) {
@@ -1871,12 +2000,17 @@ final class FootholdFacts
         if ($rest === []) {
             return $name === 'kill' ? "kill: usage: kill [-s sigspec | -signum | -sigspec] [pid | job]... or\nkill -l [exitstatus]\n" : '';
         }
-        if ($this->id->isRoot() || $name !== 'kill') {
+        $pid = $rest[0];
+        if ($name !== 'kill' || !ctype_digit($pid)) {
             return '';
         }
-        $pid = $rest[0];
+        // The processes ps lists; anything else does not exist.
+        if (!in_array((int) $pid, [1, 7, 12, 13, 14, 213, 214], true) || strlen($pid) > 7) {
+            return "sh: can't kill pid " . $this->slotWord($pid, 16) . ": No such process\n";
+        }
+        $own = $this->id->isRoot() || !in_array((int) $pid, [1, 7], true);
 
-        return ctype_digit($pid) ? "sh: can't kill pid {$pid}: Operation not permitted\n" : '';
+        return $own ? '' : "sh: can't kill pid {$pid}: Operation not permitted\n";
     }
 
     /** @param list<string> $a */
@@ -2265,7 +2399,7 @@ final class FootholdFacts
     private function expand(array $argv): array
     {
         $out = [];
-        foreach ($argv as $i => $w) {
+        foreach ($this->expandVars($argv) as $i => $w) {
             if ($w !== '' && $w[0] === '~') {
                 $slash = strpos($w, '/');
                 $user = substr($w, 1, $slash === false ? null : $slash - 1);
@@ -2287,13 +2421,61 @@ final class FootholdFacts
         return $out;
     }
 
+    /**
+     * Fill the lexer's parameter markers from this box's shell variables: the same environment `env`,
+     * `printenv` and `set` print, so `echo $HOME` and `printenv HOME` always agree. An unset name is
+     * empty, as in ash. An unquoted expansion is split on blanks; a quoted one is not.
+     *
+     * @param list<string> $argv
+     * @return list<string>
+     */
+    private function expandVars(array $argv): array
+    {
+        $out = [];
+        foreach ($argv as $w) {
+            if (!str_contains($w, "\x00")) {
+                $out[] = $w;
+                continue;
+            }
+            $split = false;
+            $value = (string) preg_replace_callback('~\x00([uq])([^\x00]*)\x00~', function (array $m) use (&$split): string {
+                $split = $split || $m[1] === 'u';
+
+                return $this->shellVar($m[2]);
+            }, $w);
+            if (!$split) {
+                $out[] = $value;
+                continue;
+            }
+            foreach (preg_split('~[ \t\n]+~', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $field) {
+                $out[] = $field;
+            }
+        }
+
+        return $out;
+    }
+
+    /** One shell variable or special parameter as `sh -c` sees it here; unset is empty. */
+    private function shellVar(string $name): string
+    {
+        $vars = $this->envVars() + ['IFS' => " \t\n", 'OPTIND' => '1', 'PPID' => '12', 'PS1' => '\\w \\$ ', 'PS2' => '> ', 'PS4' => '+ '];
+
+        return match ($name) {
+            '?', '#' => '0',
+            '$' => '213',
+            '0' => 'sh',
+            '-' => 'c',
+            default => $vars[$name] ?? '',
+        };
+    }
+
     /** @return list<string> */
     private function glob(string $pattern): array
     {
         $slash = strrpos($pattern, '/');
         $dirPart = $slash === false ? '' : substr($pattern, 0, $slash + 1);
         $base = $slash === false ? $pattern : substr($pattern, $slash + 1);
-        if (strpbrk($dirPart, '*?[') !== false || $base === '') {
+        if (strpbrk($dirPart, '*?[') !== false || $base === '' || strlen($base) > self::MAX_PATTERN || $this->spent()) {
             return [];
         }
         $abs = $this->abs($dirPart === '' ? '.' : $dirPart);
@@ -2301,6 +2483,7 @@ final class FootholdFacts
             return [];
         }
         $names = $this->children[$abs] ?? [];
+        $this->nodes += count($names);
         sort($names, SORT_STRING);
         $hits = [];
         foreach ($names as $n) {

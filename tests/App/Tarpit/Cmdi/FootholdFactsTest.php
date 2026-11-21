@@ -330,13 +330,84 @@ final class FootholdFactsTest extends TestCase
         self::assertNull($f->run(['FPCANARY7Q'], false), 'an unknown command name is attacker text');
         self::assertNull($f->run(['cat', '/etc/shadow-'], false), 'an unknown path is attacker text');
         self::assertSame("sh: curl: not found\n", $f->run(['curl'], false), 'a fixed absent-tool word is not attacker text');
-        self::assertSame(FootholdIdentity::www()->idLine() . "\n", $f->run(['id'], false));
-        self::assertSame(CannedData::PASSWD, $f->run(['cat', '/etc/passwd'], false), 'a known file is closed-set');
+        self::assertSame(FootholdIdentity::www()->idLine() . "\n", $f->run(['id'], false), 'a bare command is answered from a GET');
+        self::assertNull($f->run(['cat', '/etc/passwd'], false), 'from a GET any answer that depends on its arguments gets the landing');
+        self::assertNull($f->run(['uname', '-a'], false));
 
         self::assertSame("FPCANARY7Q\n", $f->run(['echo', 'FPCANARY7Q']));
         self::assertSame('', $f->run(['echo', '<b>x</b>']), 'unsafe characters never reflect, even from a body');
         self::assertNull($f->run(['echo', '<b>x</b>'], false));
         self::assertSame(str_repeat('A', FootholdFacts::ECHO_CAP) . "\n", $f->run(['echo', str_repeat('A', 300)]), 'echo is capped');
+    }
+
+    /** @dataProvider identities */
+    public function test_expansions_agree_with_the_environment(FootholdIdentity $id): void
+    {
+        $f = self::facts($id);
+        $exp = static fn (string $line): ?string => $f->run(\Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv);
+        foreach (['PATH', 'HOME', 'USER', 'PWD', 'SHELL'] as $var) {
+            self::assertSame(self::sh($f, "printenv {$var}"), $exp('echo $' . $var), "\${$var} expands from the same environment printenv prints");
+            self::assertSame(self::sh($f, "printenv {$var}"), $exp('echo ${' . $var . '}'));
+        }
+        self::assertSame($id->home . "\n", $exp('echo $HOME'), 'identity-aware');
+        self::assertSame("end\n", $exp('echo $NOT_SET end'), 'an unset name is empty');
+        self::assertSame("0 213\n", $exp('echo $? $$'));
+        self::assertSame(self::sh($f, 'cat /etc/hostname'), $exp('cat${IFS}/etc/hostname'), 'an unquoted expansion splits on blanks');
+        self::assertSame("cat: can't open '{$id->home}/.profile': No such file or directory\n", $exp('cat $HOME/.profile'));
+    }
+
+    public function test_cut_and_kill_follow_busybox(): void
+    {
+        $f = self::facts(FootholdIdentity::www());
+        self::assertSame(self::sh($f, 'cut -d: -f1 /etc/passwd'), self::sh($f, 'cut -d: -f1,1 /etc/passwd'), 'a selected field prints once');
+        self::assertStringStartsWith("root:0\n", self::sh($f, 'cut -d: -f1,3 /etc/passwd'), 'fields in order, joined by the delimiter');
+        self::assertSame("app-prod-01\n", self::sh($f, 'cut -d: -f2 /etc/hostname'), 'a line without the delimiter passes through whole');
+        self::assertSame("sh: can't kill pid 31337: No such process\n", self::sh($f, 'kill 31337'));
+        self::assertSame("sh: can't kill pid 1: Operation not permitted\n", self::sh($f, 'kill 1'));
+        self::assertSame('', self::sh($f, 'kill 12'), 'www-data may signal its own worker');
+        self::assertSame('', self::sh(self::facts(FootholdIdentity::root()), 'kill 1'));
+    }
+
+    /** One request's work is bounded whatever the line asks for: time, memory, and no warnings. */
+    public function test_worst_case_commands_stay_within_the_budget(): void
+    {
+        $roots = array_fill(0, 2000, '/');
+        $cases = [
+            'grep -r' => array_merge(['grep', '-r', 'a'], $roots),
+            'grep -rv' => array_merge(['grep', '-rv', 'Q'], $roots),
+            'find' => array_merge(['find'], $roots),
+            'find -name long' => array_merge(['find'], array_fill(0, 3, '/'), ['-name', str_repeat('a', 1100)]),
+            'du' => array_merge(['du', '-sh'], $roots),
+            'ls -la' => array_merge(['ls', '-la'], array_fill(0, 2000, '/usr/bin')),
+            'cat' => array_merge(['cat'], array_fill(0, 2000, '/etc/passwd')),
+            'glob' => array_merge(['ls'], array_fill(0, 2000, '/usr/bin/*')),
+            'grep long pattern' => ['grep', '-r', str_repeat('a.', 2000), '/'],
+        ];
+        $warnings = [];
+        set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+            $warnings[] = $msg;
+
+            return true;
+        });
+        try {
+            foreach ($cases as $name => $argv) {
+                foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+                    $f = self::facts($id);
+                    memory_reset_peak_usage();
+                    $base = memory_get_usage();
+                    $t = hrtime(true);
+                    $out = $f->run($argv);
+                    $ms = (hrtime(true) - $t) / 1e6;
+                    self::assertIsString($out, $name);
+                    self::assertLessThanOrEqual(12288, strlen((string) $out), "{$name}: the output is capped");
+                    self::assertLessThan(60.0, $ms, sprintf('%s as %s took %.1f ms', $name, $id->name, $ms));
+                    self::assertLessThan(8 * 1048576, memory_get_peak_usage() - $base, "{$name}: peak memory");
+                }
+            }
+        } finally {
+            restore_error_handler();
+        }
+        self::assertSame([], $warnings, 'no warning ever reaches the log');
     }
 
     public function test_writes_and_egress_always_fail(): void

@@ -50,6 +50,7 @@ final class ShellLexer
     private array $redirectTargets = [];
     private bool $allSafe = true;
     private bool $construct = false;
+    private bool $badSubst = false;
     private int $depth = 0;
 
     public static function lex(string $input): LexReport
@@ -93,6 +94,7 @@ final class ShellLexer
             $l->classTotal,
             $l->steps,
             $l->n,
+            $defect === null && $l->badSubst,
         );
     }
 
@@ -825,8 +827,21 @@ final class ShellLexer
             return;
         }
         if ($nx === '{') {
+            $start = $this->pos + 2;
             $this->pos += 2;
             $this->scanParam($inDquote);
+            $body = substr($this->s, $start, $this->pos - 1 - $start);
+            if (preg_match('~^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])$~', $body) === 1) {
+                // ${NAME}: the same plain expansion as $NAME.
+                $this->expansion($w, $body, $inDquote);
+
+                return;
+            }
+            // ash rejects anything that is not NAME, #NAME, or NAME followed by an operator; it says
+            // "bad substitution" when the line runs (the parse itself succeeds).
+            if (preg_match('~^(?:#(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])$|(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])[:]?[-=?+%#/:])~s', $body) !== 1) {
+                $this->badSubst = true;
+            }
             $this->fam('param', '${');
             $w['feat']['p'] = true;
             $w['lit'] = false;
@@ -836,17 +851,13 @@ final class ShellLexer
         if (preg_match('~\G[A-Za-z_][A-Za-z0-9_]*~', $this->s, $m, 0, $this->pos + 1) === 1) {
             $this->pos += 1 + strlen($m[0]);
             $this->steps += strlen($m[0]);
-            $this->fam('param', '$');
-            $w['feat']['p'] = true;
-            $w['lit'] = false;
+            $this->expansion($w, $m[0], $inDquote);
 
             return;
         }
         if ($nx !== '' && strpos('0123456789@*#?$!-', $nx) !== false) {
             $this->pos += 2;
-            $this->fam('param', '$');
-            $w['feat']['p'] = true;
-            $w['lit'] = false;
+            $this->expansion($w, $nx, $inDquote);
 
             return;
         }
@@ -854,6 +865,20 @@ final class ShellLexer
         $w['safe'] = false;
         $w['feat']['x'] = true;
         $this->pos++;
+    }
+
+    /**
+     * A plain parameter expansion ($NAME, ${NAME}, $?, $1, ...). It is not shell syntax to blame: the
+     * word stays literal with a marker the facts table fills from the box's own environment
+     * (NUL-delimited, since a NUL never survives into the line; `q` = inside double quotes, so no
+     * field splitting).
+     *
+     * @param array<string,mixed> $w
+     */
+    private function expansion(array &$w, string $name, bool $inDquote): void
+    {
+        $w['val'] .= "\x00" . ($inDquote ? 'q' : 'u') . $name . "\x00";
+        $w['feat']['v'] = true;
     }
 
     /** `$( … )`: parse the inner list in place and return its shape. */

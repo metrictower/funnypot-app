@@ -22,11 +22,11 @@ final class OutcomePickerTest extends TestCase
     /** Compound lines an attacker plausibly sends while "fixing" a payload. */
     private const COMPOUNDS = [
         'ls; id', 'ls | cat', 'id && whoami', 'id || id', 'echo $(id)', 'echo `id`', "echo 'a b'", 'echo "a b"',
-        'echo \\`id\\`', 'cat${IFS}/etc/passwd', 'if id; then whoami; fi', 'id > /tmp/x', 'echo $((1+2))',
+        'echo \\`id\\`', 'cat${IFS:-x}/etc/passwd', 'if id; then whoami; fi', 'id > /tmp/x', 'echo $((1+2))',
         "id\nwhoami", 'id &', '{ id; }', '(id)', 'cat /etc/passwd | grep root', 'id; cat /etc/shadow',
         "psql -c 'select 1'", 'echo $(cat /etc/passwd) | base64', 'id | base64 && wget x', 'for i in 1 2; do id; done',
         'case x in a) id;; esac', 'echo "$(id)"', 'echo `whoami`; id', 'ls -la /root; id', 'id 2>&1', 'cat /etc/hosts | head',
-        'echo ${HOME}', 'echo $HOME; id', "echo 'x' > /var/www/html/x.php", 'ls && ls', 'ls || ls', 'ls | grep a | wc -l',
+        'echo ${HOME:-/}', 'echo $HOME; id', "echo 'x' > /var/www/html/x.php", 'ls && ls', 'ls || ls', 'ls | grep a | wc -l',
         '(id; whoami)', 'id;whoami;hostname', 'echo "a";echo "b"', 'id | tee /tmp/o', '! id',
     ];
 

@@ -430,6 +430,82 @@ final class AdaptiveShellHandleTest extends TestCase
         self::fail('no primer left `ls; id` as a first-segment accept');
     }
 
+    public function test_plain_expansions_answer_from_the_box_environment(): void
+    {
+        foreach (['www-data' => '/var/www', 'root' => '/root'] as $pin => $home) {
+            $h = $this->harness(['pin' => $pin, 'env' => ['FUNNYPOT_JITTER_MS' => '0']]);
+            foreach (['echo $PATH', 'echo $HOME', 'cat $HOME/.profile', 'echo ${PATH}', 'echo $USER'] as $i => $cmd) {
+                $t = self::text($h->post('/admin/root/post', $cmd, '203.0.113.' . (10 + $i), 'pct20')['body']);
+                self::assertStringNotContainsString('bad substitution', $t, "{$cmd}: ash never says this for a plain expansion");
+            }
+            for ($i = 0; $i < 40; $i++) {
+                self::assertSame("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\$ ", self::text($h->post('/admin/root/post', 'echo $PATH', '198.18.' . $i . '.9', 'pct20')['body']), 'every fresh source: the value env prints');
+            }
+            self::assertSame("{$home}\n\$ ", self::text($h->post('/admin/root/post', 'echo $HOME', '203.0.113.90', 'pct20')['body']));
+            self::assertSame("sh: syntax error: bad substitution\n\$ ", self::text($h->post('/admin/root/post', 'echo ${7*7}', '203.0.113.91', 'pct20')['body']), 'a malformed ${…} is the real, deterministic error');
+        }
+    }
+
+    public function test_a_get_never_carries_bytes_from_its_arguments(): void
+    {
+        $h = $this->harness(['env' => ['FUNNYPOT_JITTER_MS' => '0']]);
+        $cut = self::text($h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode('cut -dQ -f1,1 /etc/hostname'), null, '203.0.113.60')['body']);
+        self::assertStringNotContainsString('Q', $cut, 'the GET-supplied delimiter byte');
+        $kill = self::text($h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode('kill 31337424242'), null, '203.0.113.61')['body']);
+        self::assertStringNotContainsString('31337424242', $kill, 'GET-supplied digits');
+
+        $n = 0;
+        $shapes = ['%s FPCANARYQ7', '%s -dFPCANARYQ7 -f1,1 /etc/hostname', '%s 31337424242', '%s /FPCANARYQ7', '%s -n 31337424242 /etc/passwd'];
+        foreach (array_merge(\Funnypot\App\Tarpit\Cmdi\FootholdFacts::commandNames(), \Funnypot\App\Tarpit\Cmdi\FootholdFacts::BUILTINS) as $applet) {
+            foreach ($shapes as $shape) {
+                $cmd = sprintf($shape, $applet);
+                $body = $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($cmd), null, '10.77.' . intdiv($n, 250) . '.' . ($n % 250))['body'];
+                $n++;
+                self::assertStringNotContainsStringIgnoringCase('fpcanaryq7', $body, "GET {$cmd}");
+                self::assertStringNotContainsString('31337424242', $body, "GET {$cmd}");
+            }
+        }
+        self::assertGreaterThan(1000, $n, 'every applet and builtin was swept');
+    }
+
+    public function test_one_turn_stays_cheap_whatever_the_line_asks(): void
+    {
+        $h = $this->harness(['env' => ['FUNNYPOT_JITTER_MS' => '0']]);
+        $fill = static function (string $head, string $operand): string {
+            while (strlen($head) + strlen($operand) + 1 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+                $head .= ' ' . $operand;
+            }
+
+            return $head;
+        };
+        $warnings = [];
+        set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+            // The CLI cannot send headers once PHPUnit has printed; under php-fpm these never occur.
+            if (!str_contains($msg, 'headers already sent')) {
+                $warnings[] = $msg;
+            }
+
+            return true;
+        });
+        try {
+            foreach (['grep -r' => $fill('grep -r a', '/'), 'grep -rv' => $fill('grep -rv Q', '/'), 'find' => $fill('find', '/'),
+                'find -name' => 'find / / / -name ' . str_repeat('a', 1100), 'du' => $fill('du -sh', '/'), 'all segments' => $fill('grep -r a /', ';grep -r a /')] as $name => $line) {
+                $h->post('/admin/root/post', 'id', '203.0.113.70');
+                memory_reset_peak_usage();
+                $base = memory_get_usage();
+                $t = hrtime(true);
+                $body = $h->post('/admin/root/post', $line, '203.0.113.70', 'pct20')['body'];
+                $ms = (hrtime(true) - $t) / 1e6;
+                self::assertStringContainsString('<title>Shell</title>', $body, $name);
+                self::assertLessThan(150.0, $ms, sprintf('%s: one request took %.0f ms', $name, $ms));
+                self::assertLessThan(16 * 1048576, memory_get_peak_usage() - $base, "{$name}: peak memory");
+            }
+        } finally {
+            restore_error_handler();
+        }
+        self::assertSame([], $warnings, 'no warning reaches the log');
+    }
+
     // --- 6. the sleep decoy ----------------------------------------------------------------------
 
     /** A primer command that leaves the history in which $line gets an outcome of the wanted kind. */

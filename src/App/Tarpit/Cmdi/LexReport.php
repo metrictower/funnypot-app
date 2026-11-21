@@ -27,6 +27,8 @@ final class LexReport
         public readonly int $classCount,
         public readonly int $steps,
         public readonly int $length,
+        /** A `${…}` ash rejects when the line runs (`${7*7}`): the parse succeeds, the run says "bad substitution". */
+        public readonly bool $badSubst = false,
     ) {
     }
 

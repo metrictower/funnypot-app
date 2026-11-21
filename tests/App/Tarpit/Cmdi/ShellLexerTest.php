@@ -51,6 +51,26 @@ final class ShellLexerTest extends TestCase
         self::assertSame('unexpected_;', ShellLexer::lex(';id')->trueDefect['id']);
     }
 
+    public function test_plain_expansions_are_words_not_syntax(): void
+    {
+        foreach (['echo $PATH', 'echo ${PATH}', 'echo $? $$ $1 $#', 'cat $HOME/.profile', 'echo ${HOME}x', 'echo ${#}'] as $line) {
+            $r = ShellLexer::lex($line);
+            self::assertSame([], $r->families, "{$line}: a plain expansion is not a syntax feature to blame");
+            self::assertTrue($r->simple, $line);
+            self::assertFalse($r->badSubst, $line);
+        }
+        self::assertSame(['dquote'], ShellLexer::lex('echo "$HOME"')->families);
+        foreach (['echo ${7*7}', 'echo ${}', 'echo ${ x}', 'echo ${#x:-y}'] as $line) {
+            self::assertTrue(ShellLexer::lex($line)->badSubst, "{$line}: ash says bad substitution when it runs");
+            self::assertNull(ShellLexer::lex($line)->trueDefect, "{$line}: but it parses");
+        }
+        foreach (['echo ${x:-y}', 'echo ${#x}', 'echo ${x%%y}', 'echo ${x/a/b}', 'echo ${x:1:2}', 'echo ${1+x}'] as $line) {
+            $r = ShellLexer::lex($line);
+            self::assertFalse($r->badSubst, $line);
+            self::assertSame(['param'], $r->families, $line);
+        }
+    }
+
     public function test_hash_mid_word_is_a_word(): void
     {
         self::assertSame([['a#b']], ShellLexer::lex('a#b')->segments);

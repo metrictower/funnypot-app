@@ -126,9 +126,15 @@ under the tarpit): an agent that "fixes" its payload is kept fixing it.
   LFI answers byte for byte. Anything with shell syntax is lexed the way busybox ash parses `sh -c`
   (`ShellLexer`). A real syntax error gets ash's own message. A valid compound gets a believable error that
   blames the feature the attacker just added and never repeats the last message, or now and then a
-  useless "success". A resend replays the same answer, nothing ever executes, and no answer is progress.
+  useless "success". A plain `$NAME`/`${NAME}` expands from the same environment `env` prints (unset is
+  empty); only a `${…}` ash really rejects gets `bad substitution`. A resend replays the same answer, nothing
+  ever executes, and no answer is progress.
+- **Bounded.** One request's answer has a hard budget (operands looked at, fake-filesystem entries visited,
+  pattern length, output bytes and about 30 ms of work across every command in the line). Past it the
+  answer is the output so far, like a killed command, so a 4 KB `grep -r` or `find` line stays cheap.
 - **Reflection.** Attacker text is echoed only from the body of a non-GET request, in a small safe charset,
-  length-capped and HTML-escaped. A GET or query-string command that would need it gets the landing.
+  length-capped and HTML-escaped. From a GET or a query string only a bare command (no arguments) is
+  answered; anything whose answer depends on its arguments gets the landing.
 - **Flags.** `FUNNYPOT_TARPIT_CMDI_SYNTAX=0` keeps the static landing (the A/B switch);
   `FUNNYPOT_TARPIT_CMDI_IDENTITY=www-data|root` pins the identity for a lab run. Per-source history and an
   attribution log live in a bounded `cmdi-shell.sqlite` (see `docs/DATA-LAYER-DECISION.md`).
