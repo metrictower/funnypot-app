@@ -112,7 +112,9 @@ under the tarpit): an agent that "fixes" its payload is kept fixing it.
 - **Ownership.** The console owns the `/admin/root/{html,post,link}` lure, webshell file names
   (`shell.php`, `c99.php`, …) and any path where it already answered that source. There it answers
   whatever rule the engine matched (SQLi, SSTI, XSS, LFI, cmdi), so a SQL-shaped command never flips the
-  console into a MySQL error page. Elsewhere it answers only the webshell/cmdi/LFI rules.
+  console into a MySQL error page. Elsewhere it answers only the webshell/cmdi/LFI rules. A console page
+  builds its own headers (Content-Type plus the engine's every-response `X-Powered-By`/`X-Request-Id`), so a
+  replaced rule's `Location` or command-output header never rides along.
 - **Gates.** It runs only inside the engine's existing gates: the `attack-webshell-panel` catalog entry
   must be on and `FUNNYPOT_CEILING` must admit `critical`. It only replaces a body the engine already
   chose to serve, so the 404/LLM path, logging and AbuseIPDB/TI reporting are untouched.

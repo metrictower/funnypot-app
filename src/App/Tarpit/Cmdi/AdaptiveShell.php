@@ -45,6 +45,8 @@ final class AdaptiveShell
     private const MAX_BODY = 16384;
     private const MAX_PRE = 12288;
     private const MAX_SLEEP_S = 300;
+    /** Headers the engine puts on every response; the only ones a console page keeps. */
+    private const KEPT_HEADERS = ['X-Powered-By', 'X-Request-Id'];
 
     /** @var callable():int|null */
     private $clock;
@@ -200,13 +202,17 @@ final class AdaptiveShell
                 $body = $this->page->page($turn->identity, self::cut($turn->output, intdiv(self::MAX_PRE, 4)));
             }
         }
-        $headers = [];
+        // The page's headers are built from scratch. The replaced rule's own headers (a Location, a
+        // command-output header, ...) belong to a different answer and would contradict this page; only
+        // the engine's every-response headers carry over, so the console looks like the rest of the site.
+        $headers = ['Content-Type' => 'text/html; charset=utf-8'];
         foreach ($core->headers as $name => $value) {
-            if (strcasecmp((string) $name, 'Content-Type') !== 0 && strcasecmp((string) $name, 'Content-Length') !== 0) {
-                $headers[$name] = $value;
+            foreach (self::KEPT_HEADERS as $kept) {
+                if (strcasecmp((string) $name, $kept) === 0) {
+                    $headers[$kept] = $value;
+                }
             }
         }
-        $headers['Content-Type'] = 'text/html; charset=utf-8';
 
         $core->body = $body;
         $core->status = 200;

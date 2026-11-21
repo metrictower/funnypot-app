@@ -139,6 +139,41 @@ final class AdaptiveShellTest extends TestCase
         }
     }
 
+    /** @return array<string,array{0:RequestContext,1:string,2:string}> request, rule the engine serves, header it sets */
+    public static function headerCarryingAnswers(): array
+    {
+        return [
+            'command output header' => [self::ctx('POST', '/admin/root/post', '', ConsoleHarness::form('${@java.lang.Runtime@getRuntime().exec("id")}', 'pct20')), 'attack-confluence-26134', 'X-Cmd-Response'],
+            'command output header, recon line' => [self::ctx('POST', '/admin/root/post', '', ConsoleHarness::form('ls ${JAVA_HOME}/lib | grep Runtime', 'pct20')), 'attack-confluence-26134', 'X-Cmd-Response'],
+            'redirect' => [self::ctx('GET', '/admin/root/html', 'cmd=id&next=https://evil.example/x'), 'attack-open-redirect', 'Location'],
+            'protocol-relative redirect' => [self::ctx('GET', '/admin/root/link', 'cmd=whoami&url=//evil.example/'), 'attack-open-redirect', 'Location'],
+        ];
+    }
+
+    /** @dataProvider headerCarryingAnswers */
+    public function test_the_page_never_keeps_the_replaced_rules_headers(RequestContext $ctx, string $rule, string $header): void
+    {
+        $h = $this->harness();
+        $core = self::engine($ctx, $h->config);
+        self::assertSame($rule, $core->satisfies->templateIds()[0] ?? '', 'sanity: the engine answers with that rule');
+        self::assertArrayHasKey($header, $core->headers, "sanity: the engine answer carries {$header}");
+        $request = $core->headers['X-Request-Id'] ?? null;
+
+        $turn = $h->shell->prepare($ctx, '198.51.100.9', $core->satisfies, self::policy());
+        self::assertNotNull($turn);
+        self::assertTrue($h->shell->serve($turn, $core), 'Rule A: the console owns its path');
+
+        $names = array_map('strtolower', array_keys($core->headers));
+        self::assertNotContains(strtolower($header), $names, "the console page drops {$header}");
+        self::assertNotContains('location', $names, 'never a redirect from the console');
+        self::assertSame(['content-type', 'x-powered-by', 'x-request-id'], array_values(array_intersect(['content-type', 'x-powered-by', 'x-request-id'], $names)));
+        self::assertSame([], array_values(array_diff($names, ['content-type', 'x-powered-by', 'x-request-id'])), 'nothing else carries over');
+        self::assertSame('text/html; charset=utf-8', $core->headers['Content-Type']);
+        self::assertSame($request, $core->headers['X-Request-Id'], 'the engine\'s per-response headers are kept as they were');
+        self::assertSame(200, $core->status);
+        self::assertStringNotContainsString('uid=0', implode("\n", $core->headers), 'no header contradicts the page');
+    }
+
     public function test_the_body_is_capped(): void
     {
         $h = $this->harness();
