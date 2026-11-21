@@ -757,7 +757,7 @@ final class ShellLexer
                 continue;
             }
             if ($c === '$') {
-                $this->scanDollar($w);
+                $this->scanDollar($w, true);
                 continue;
             }
             if ($c === '`') {
@@ -769,13 +769,18 @@ final class ShellLexer
         }
     }
 
-    /** @param array<string,mixed> $w */
-    private function scanDollar(array &$w): void
+    /**
+     * A `$` construct. Inside double quotes `$'` is a literal `$` and a quote character: ANSI-C
+     * quoting starts only outside them. `$(…)` and backquotes open a fresh quoting context.
+     *
+     * @param array<string,mixed> $w
+     */
+    private function scanDollar(array &$w, bool $inDquote = false): void
     {
         $nx = $this->s[$this->pos + 1] ?? '';
         if ($nx === '(' && ($this->s[$this->pos + 2] ?? '') === '(') {
             $this->pos += 3;
-            $this->scanArith();
+            $this->scanArith($inDquote);
             $this->fam('arith', '$((');
             $w['feat']['a'] = true;
             $w['lit'] = false;
@@ -791,7 +796,7 @@ final class ShellLexer
 
             return;
         }
-        if ($nx === "'") {
+        if ($nx === "'" && !$inDquote) {
             // $'…' (busybox bash compatibility): a quoted string in which a backslash escapes the next byte.
             $this->pos += 2;
             while (true) {
@@ -820,7 +825,7 @@ final class ShellLexer
         }
         if ($nx === '{') {
             $this->pos += 2;
-            $this->scanParam();
+            $this->scanParam($inDquote);
             $this->fam('param', '${');
             $w['feat']['p'] = true;
             $w['lit'] = false;
@@ -911,7 +916,7 @@ final class ShellLexer
         $w['lit'] = false;
     }
 
-    private function scanArith(): void
+    private function scanArith(bool $inDquote = false): void
     {
         $depth = 0;
         while (true) {
@@ -940,14 +945,14 @@ final class ShellLexer
             }
             if ($c === '$' || $c === '`') {
                 $tmp = ['val' => '', 'lit' => true, 'feat' => [], 'safe' => true, 'quoted' => false];
-                $c === '$' ? $this->scanDollar($tmp) : $this->scanBackquote($tmp);
+                $c === '$' ? $this->scanDollar($tmp, $inDquote) : $this->scanBackquote($tmp);
                 continue;
             }
             $this->pos++;
         }
     }
 
-    private function scanParam(): void
+    private function scanParam(bool $inDquote = false): void
     {
         while (true) {
             if ($this->pos >= $this->n) {
@@ -978,7 +983,7 @@ final class ShellLexer
                     $this->pos++;
                     $this->scanDquote($tmp);
                 } elseif ($c === '$') {
-                    $this->scanDollar($tmp);
+                    $this->scanDollar($tmp, $inDquote);
                 } else {
                     $this->scanBackquote($tmp);
                 }
