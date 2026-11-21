@@ -554,7 +554,7 @@ final class FootholdFacts
             case 'flock':
                 return $this->cmdRunner($name, $a, $depth);
             case 'timeout':
-                return $this->exec(array_slice(array_values(array_filter($a, static fn ($w) => $w[0] !== '-')), 1), $depth + 1);
+                return $this->exec(array_slice(array_values(array_filter($a, static fn ($w) => !str_starts_with($w, '-'))), 1), $depth + 1);
             case 'vi':
             case 'sleep':
             case 'usleep':
@@ -616,7 +616,7 @@ final class FootholdFacts
     private function cmdId(array $a): string
     {
         $who = $this->id;
-        $users = array_values(array_filter($a, static fn ($w) => $w[0] !== '-'));
+        $users = array_values(array_filter($a, static fn ($w) => !str_starts_with($w, '-')));
         if ($users !== []) {
             $u = $users[0];
             if ($u === 'root') {
@@ -627,7 +627,7 @@ final class FootholdFacts
                 return 'id: unknown user ' . $this->slotWord($u, self::PATH_CAP) . "\n";
             }
         }
-        $flags = implode('', array_filter($a, static fn ($w) => $w[0] === '-'));
+        $flags = implode('', array_filter($a, static fn ($w) => str_starts_with($w, '-')));
         if (str_contains($flags, 'u') || str_contains($flags, 'g') || str_contains($flags, 'G')) {
             return (str_contains($flags, 'n') ? $who->name : (string) $who->uid) . "\n";
         }
@@ -758,8 +758,9 @@ final class FootholdFacts
         $worker = $this->id->isRoot() ? 'root' : 'www-data';
         $args = implode(' ', $a);
         $self = in_array($args, ['', 'aux', '-ef', 'ax', '-e', '-A', 'auxww', '-aux', 'ef', 'w', '-o pid,user,args'], true) ? trim('ps ' . $args) : 'ps';
+        // A root pool needs php-fpm's -R (allow running as root); the pool config agrees (www.conf).
         $rows = [
-            [1, 'root', '0:00', '/sbin/tini -- php-fpm'],
+            [1, 'root', '0:00', '/sbin/tini -- php-fpm' . ($this->id->isRoot() ? ' -R' : '')],
             [7, 'root', '0:41', 'php-fpm: master process (/usr/local/etc/php-fpm.conf)'],
             [12, $worker, '0:09', 'php-fpm: pool www'],
             [13, $worker, '0:08', 'php-fpm: pool www'],
@@ -802,7 +803,7 @@ final class FootholdFacts
     private function cmdDf(array $a): string
     {
         $human = in_array('-h', $a, true);
-        $paths = array_values(array_filter($a, static fn ($w) => $w[0] !== '-'));
+        $paths = array_values(array_filter($a, static fn ($w) => !str_starts_with($w, '-')));
         $out = sprintf('%-20s %9s %9s %9s %s %s', 'Filesystem', $human ? 'Size' : '1K-blocks', 'Used', 'Available', 'Use%', 'Mounted on') . "\n";
         $rows = $this->dfRows();
         if ($paths !== []) {
@@ -865,8 +866,8 @@ final class FootholdFacts
     /** @param list<string> $a */
     private function cmdDu(array $a): string
     {
-        $human = str_contains(implode('', array_filter($a, static fn ($w) => $w[0] === '-')), 'h');
-        $paths = array_values(array_filter($a, static fn ($w) => $w[0] !== '-'));
+        $human = str_contains(implode('', array_filter($a, static fn ($w) => str_starts_with($w, '-'))), 'h');
+        $paths = array_values(array_filter($a, static fn ($w) => !str_starts_with($w, '-')));
         if ($paths === []) {
             $paths = ['.'];
         }
@@ -2092,8 +2093,25 @@ final class FootholdFacts
         $this->fs['/run/deploy/app.env'] = $file('@appenv', 'r--r--r--', self::DEPLOY_MTIME);
         $this->fs['/var/www/html/index.php'] = $file("<?php\ndeclare(strict_types=1);\n\n// Application pages are served upstream; this pod only answers the load balancer's health check.\nif (trim(\$_SERVER['REQUEST_URI'] ?? '', '/') === 'healthz') {\n    echo \"ok\\n\";\n    return;\n}\n\nhttp_response_code(404);\n");
         $this->fs['/usr/local/etc/php-fpm.conf'] = $file("[global]\nerror_log = /proc/self/fd/2\ndaemonize = no\n\ninclude=etc/php-fpm.d/*.conf\n");
-        $this->fs['/usr/local/etc/php-fpm.d/www.conf'] = $file("[www]\nuser = www-data\ngroup = www-data\nlisten = 9000\npm = dynamic\npm.max_children = 5\npm.start_servers = 2\npm.min_spare_servers = 1\npm.max_spare_servers = 3\nclear_env = no\n");
+        // The pool runs as the console's identity, so `ps`, `id` and this file tell one story.
+        $pool = $this->id->name;
+        $this->fs['/usr/local/etc/php-fpm.d/www.conf'] = $file("[www]\nuser = {$pool}\ngroup = {$pool}\nlisten = 9000\npm = dynamic\npm.max_children = 5\npm.start_servers = 2\npm.min_spare_servers = 1\npm.max_spare_servers = 3\nclear_env = no\n");
         $this->fs['/lib/ld-musl-x86_64.so.1'] = $file("\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x3e\x00\x01\x00\x00\x00", 'rwxr-xr-x');
+
+        // The processes `ps` lists, so /proc agrees with it.
+        $worker = $this->id->isRoot() ? 0 : 33;
+        foreach ([
+            1 => ["/sbin/tini\x00--\x00php-fpm\x00" . ($this->id->isRoot() ? "-R\x00" : ''), 'tini', 0],
+            7 => ["php-fpm: master process (/usr/local/etc/php-fpm.conf)\x00", 'php-fpm', 0],
+            12 => ["php-fpm: pool www\x00", 'php-fpm', $worker],
+            13 => ["php-fpm: pool www\x00", 'php-fpm', $worker],
+            14 => ["php-fpm: pool www\x00", 'php-fpm', $worker],
+        ] as $pid => [$cmdline, $name, $uid]) {
+            $this->fs["/proc/{$pid}"] = $dir('r-xr-xr-x');
+            $this->fs["/proc/{$pid}/cmdline"] = $file($cmdline, 'r--r--r--');
+            $this->fs["/proc/{$pid}/status"] = $file("Name:\t{$name}\nState:\tS (sleeping)\nPid:\t{$pid}\nUid:\t{$uid}\t{$uid}\t{$uid}\t{$uid}\nGid:\t{$uid}\t{$uid}\t{$uid}\t{$uid}\n"
+                . "CapEff:\t0000000000000000\nNoNewPrivs:\t1\n", 'r--r--r--');
+        }
 
         foreach (['null', 'zero', 'random', 'urandom', 'full', 'tty'] as $n) {
             $this->fs['/dev/' . $n] = ['t' => 'c', 'm' => 'rw-rw-rw-', 'u' => 'root', 'g' => 'root'];

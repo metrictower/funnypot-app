@@ -283,6 +283,33 @@ final class FootholdFactsTest extends TestCase
         self::assertSame('', self::sh($f, 'sort'));
     }
 
+    /** @dataProvider identities */
+    public function test_the_pool_config_and_process_list_agree_with_the_identity(FootholdIdentity $id): void
+    {
+        $f = self::facts($id);
+        $conf = self::sh($f, 'cat /usr/local/etc/php-fpm.d/www.conf');
+        self::assertStringContainsString("user = {$id->name}\ngroup = {$id->name}\n", $conf);
+        $ps = self::sh($f, 'ps aux');
+        self::assertMatchesRegularExpression('~^\s+12 ' . preg_quote($id->name, '~') . '\s.*pool www$~m', $ps, 'the workers run as the pool user');
+        self::assertStringContainsString($id->isRoot() ? '/sbin/tini -- php-fpm -R' : "/sbin/tini -- php-fpm\n", $ps, 'a root pool needs -R');
+        $cmdline = self::sh($f, 'cat /proc/1/cmdline');
+        self::assertSame($id->isRoot(), str_contains($cmdline, "-R\x00"), '/proc agrees with ps');
+        self::assertStringContainsString('Uid:' . "\t{$id->uid}\t", self::sh($f, 'cat /proc/12/status'));
+    }
+
+    public function test_empty_words_never_raise_warnings(): void
+    {
+        $f = self::facts(FootholdIdentity::www());
+        foreach (FootholdFacts::commandNames() as $n) {
+            $f->run([$n, '']);
+            $f->run([$n, '', '']);
+        }
+        foreach (['timeout', 'id', 'df', 'du', 'nice'] as $n) {
+            self::assertIsString($f->run([$n, '', 'id']));
+        }
+        self::assertSame("sh: : not found\n", $f->run(['']));
+    }
+
     // --- (k) the root landing never volunteers credential material --------------------------------
 
     public function test_root_landing_holds_no_credential_material(): void
