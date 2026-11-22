@@ -23,7 +23,9 @@ final class SsrfNoOutboundTest extends TestCase
     private const DELTA = [
         'calls' => [],
         'new' => [],
-        'static' => [],
+        'static' => [
+            'self::gatewaylines',
+        ],
         'extends' => [],
     ];
 

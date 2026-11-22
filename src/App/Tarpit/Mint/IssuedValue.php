@@ -116,6 +116,12 @@ final class IssuedValue
         return true;
     }
 
+    /** Whether the engine would flag this one request; a sibling surface probes its own shapes with it. */
+    public function flagged(RequestContext $r): bool
+    {
+        return ($this->flags)($r);
+    }
+
     /**
      * The first fit value of $gen(0), $gen(1), … (null skips a step). None within $tries is a fault the
      * surface's fault boundary answers, never a flagged or unchecked value.

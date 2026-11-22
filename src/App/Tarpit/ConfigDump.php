@@ -31,7 +31,20 @@ use Throwable;
  */
 final class ConfigDump
 {
-    public function __construct(private int $personaSeed)
+    /**
+     * A lower bound on one generated section's length, for any persona: a section is a fixed template
+     * plus the persona's domain. The SSRF decoy's key index covers ceil(cap / MIN_SECTION_BYTES)
+     * sections, which is never fewer than chunks() can serve at that cap.
+     */
+    public const MIN_SECTION_BYTES = 880;
+
+    private ?string $domain = null;
+
+    /**
+     * @param bool $gatewayPointers add the three preamble lines naming the internal credential
+     *        gateways (the SSRF decoy's fake network answers them); off keeps today's bytes
+     */
+    public function __construct(private int $personaSeed, private bool $gatewayPointers = false)
     {
     }
 
@@ -118,6 +131,7 @@ final class ConfigDump
             . "SECRET_KEY = '{$secret}'\n"
             . "DEBUG = False\n"
             . "ALLOWED_HOSTS = ['app.{$domain}', 'internal.{$domain}', '127.0.0.1']\n\n"
+            . ($this->gatewayPointers ? self::gatewayLines($region) : '')
             . "DATABASES = {\n"
             . "    'default': {\n"
             . "        'ENGINE': 'django.db.backends.postgresql',\n"
@@ -133,20 +147,53 @@ final class ConfigDump
             . "REGIONS = {\n";
     }
 
+    /** The gateway lines, worded as plain configuration data. */
+    public static function gatewayLines(string $region): string
+    {
+        return "# Outbound: app hosts reach public AWS and card-processor APIs only through the internal gateways below.\n"
+            . "AWS_STS_ENDPOINT = 'http://sts.{$region}.internal'\n"
+            . "PAYMENTS_API_BASE = 'http://payments-gw.{$region}.internal:8443/v1'\n\n";
+    }
+
+    /**
+     * The values section $k carries, without rendering it: its slugs, the persona domain, its two keys,
+     * its rotated secret, its flag and the two hosts it names. section() renders exactly these.
+     *
+     * @return array{slug:string,region:string,domain:string,awsKey:string,stripeKey:string,rotated:string,flag:string,svcHost:string,cacheHost:string}
+     */
+    public function sectionFacts(int $k): array
+    {
+        $slug = $this->slug('settings|slug|' . $k, 6);
+        $region = $this->slug('settings|region-id|' . $k, 4);
+        $this->domain ??= $this->persona('company.domain', 'internal.example');
+
+        return [
+            'slug' => $slug,
+            'region' => $region,
+            'domain' => $this->domain,
+            'awsKey' => InertSecret::apiKey($this->personaSeed, 'settings|region|' . $k . '|aws'),
+            'stripeKey' => InertSecret::stripeKey($this->personaSeed, 'settings|region|' . $k . '|stripe'),
+            'rotated' => InertSecret::resetToken($this->personaSeed, 'settings|region|' . $k . '|rotated'),
+            'flag' => $this->flag($k),
+            'svcHost' => 'svc-' . $slug . '.' . $region . '.' . $this->domain,
+            'cacheHost' => 'cache-' . $slug . '.' . $region . '.internal',
+        ];
+    }
+
     /**
      * One synthetic per-region nested config section, deterministic in (personaSeed, k). Deeply nested
      * dicts with commented "historical" credentials — every secret an inert FakeSecrets/FLAG token.
      */
     private function section(int $k): string
     {
-        $slug = $this->slug('settings|slug|' . $k, 6);
-        $region = $this->slug('settings|region-id|' . $k, 4);
-        $domain = $this->persona('company.domain', 'internal.example');
-
-        $apiKey = InertSecret::apiKey($this->personaSeed, 'settings|region|' . $k . '|aws');
-        $stripe = InertSecret::stripeKey($this->personaSeed, 'settings|region|' . $k . '|stripe');
-        $oldReset = InertSecret::resetToken($this->personaSeed, 'settings|region|' . $k . '|rotated');
-        $flag = $this->flag($k);
+        $f = $this->sectionFacts($k);
+        $slug = $f['slug'];
+        $region = $f['region'];
+        $domain = $f['domain'];
+        $apiKey = $f['awsKey'];
+        $stripe = $f['stripeKey'];
+        $oldReset = $f['rotated'];
+        $flag = $f['flag'];
 
         return "    'region-{$region}-{$slug}': {\n"
             . "        'BASE_URL': 'https://svc-{$slug}.{$region}.{$domain}',\n"
