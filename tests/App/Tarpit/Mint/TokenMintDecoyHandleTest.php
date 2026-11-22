@@ -336,6 +336,25 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertStringContainsString("value='FPMINTPOSTnote'", $ok['body'], 'a clean POST value is re-filled');
     }
 
+    public function test_control_characters_never_reach_the_stored_row(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $tok = $h->mint(['read:user', 'user:write']);
+        $page = $h->get('/settings/profile');
+        $r = $h->post('/settings/profile', ['csrf_token' => MintHarness::csrf($page['body']), 'name' => str_repeat("\0", 160), 'bio' => "\t\r\n\x0B"]);
+        self::assertSame(422, $r['status']);
+        self::assertStringNotContainsString("\0", $r['body']);
+        $api = $h->request('PATCH', '/api/v2/user', '', '{"bio":"\u0000\u0000\u0000\n"}', ['Authorization' => 'Bearer ' . $tok, 'Content-Type' => 'application/json']);
+        self::assertSame(422, $api['status']);
+        $form = $h->get('/settings/applications/new');
+        $app = $h->post('/settings/applications', ['csrf_token' => MintHarness::csrf($form['body']), 'name' => 'ctl', 'homepage_url' => 'https://a.example.com', 'callback_url' => 'https://a.example.com/cb', 'description' => str_repeat("\0", 200)]);
+        self::assertSame(422, $app['status']);
+        foreach ($h->store->db()->query('SELECT state FROM mint_state')->fetchAll(\PDO::FETCH_COLUMN) as $json) {
+            self::assertStringNotContainsString('\\u', (string) $json, 'no stored character needs a JSON escape');
+        }
+    }
+
     // --- 6. content type and status table ------------------------------------------------------------
 
     public function test_status_and_content_type_table(): void

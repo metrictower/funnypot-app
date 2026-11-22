@@ -79,10 +79,14 @@ final class MintForms
         return $url !== '' && strlen($url) <= self::URL_MAX && preg_match(self::URL, $url) === 1 && preg_match(self::HOMEPAGE, $url) === 1;
     }
 
-    /** A free-text field in the shared charset: null when fine, else the message key suffix. */
+    /**
+     * A free-text field in the shared charset: null when fine, else the message key suffix. Only an
+     * empty or spaces-only value is blank; anything else, control characters included, has to pass
+     * the charset, so nothing JSON or HTML would escape is ever stored.
+     */
     public static function text(?string $v, int $max, bool $required): ?string
     {
-        if ($v === null || trim($v) === '') {
+        if ($v === null || trim($v, ' ') === '') {
             return $required ? 'blank' : null;
         }
         if (strlen($v) > $max) {

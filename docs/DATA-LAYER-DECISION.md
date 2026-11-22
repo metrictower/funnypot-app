@@ -301,7 +301,8 @@ The token-mint account surface keeps its state in its own file, `token-mint.sqli
   the hour bucket's write and work-unit counters. Caps: 6 accounts per source; per account 6 personal
   tokens, 2 OAuth tokens, 3 apps (2 live secrets each), 4 sessions and 10 recovery-code hashes; per
   source the last 8 outcomes, 16 mint and 32 API timestamps, 8 pending SSO/approval/consent requests.
-  Every stored string has a capped length in a charset JSON never escapes, so the worst case at every cap
+  Every stored string has a capped length in a charset JSON never escapes (control characters are a charset
+  error, never "blank"), so the worst case at every cap
   at once is about 44.5 KB, under the 48 KB row cap without eviction (pinned by `MintStateTest`). Eviction
   exists only as a guard, in a fixed order: expired tokens, dead sessions, then the least recently active
   account. Rows idle 24 hours expire; at most 2,000 rows, least recently seen first out.

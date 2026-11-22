@@ -110,6 +110,18 @@ final class MintFormsTest extends TestCase
         }
     }
 
+    public function test_control_characters_are_a_charset_error_never_blank(): void
+    {
+        foreach (["\0", "\t\n", "\x0B", "\r", str_repeat("\0", 160), " \0 "] as $v) {
+            self::assertSame('charset', MintForms::text($v, 160, false), json_encode($v) . ' in an optional field');
+            self::assertSame('charset', MintForms::text($v, 160, true), json_encode($v) . ' in a required field');
+        }
+        self::assertSame(['name' => 'name_charset', 'bio' => 'bio_charset'], MintForms::profile("\0", "\t\r\n\x0B"));
+        self::assertSame(['description' => 'description_charset'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', str_repeat("\0", 200), self::free()));
+        self::assertNull(MintForms::text('   ', 160, false), 'spaces only is still blank');
+        self::assertSame('blank', MintForms::text('   ', 160, true));
+    }
+
     public function test_profile_rules(): void
     {
         self::assertSame([], MintForms::profile('Ar Tex', 'build/ci owner: team@example.com, v2.0-rc_1 +1=ok'));
