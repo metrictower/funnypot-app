@@ -61,4 +61,28 @@ final class CsrfCodecTest extends TestCase
         $forged = rtrim(strtr(base64_encode(substr($raw, 0, 20) . str_repeat("\0", 7)), '+/', '-_'), '=');
         self::assertFalse($c->issuedByUs($forged), 'a wrong origin MAC');
     }
+
+    public function test_tokens_issued_in_the_same_second_share_no_tail(): void
+    {
+        $c = new CsrfCodec(str_repeat('c', 32));
+        $tokens = [
+            $c->issue('sid-0001', 'app_secret', 0, self::NOW),
+            $c->issue('sid-0001', 'app_delete', 0, self::NOW),
+            $c->issue('sid-0002', 'profile', 3, self::NOW),
+            $c->issue('sid-0001', 'app_secret', 1, self::NOW),
+        ];
+        foreach ($tokens as $i => $a) {
+            self::assertTrue($c->issuedByUs($a));
+            foreach ($tokens as $j => $b) {
+                if ($i < $j) {
+                    self::assertNotSame(substr($a, -9), substr($b, -9), "tokens {$i} and {$j} share their tail");
+                    self::assertSame(substr($a, 0, 5), substr($b, 0, 5), 'sanity: the same issue second');
+                }
+            }
+        }
+        // Changing the middle of a token of ours no longer leaves it recognisably ours.
+        $raw = (string) base64_decode(strtr($tokens[0], '-_', '+/') . '=');
+        $raw[10] = chr(ord($raw[10]) ^ 1);
+        self::assertFalse($c->issuedByUs(rtrim(strtr(base64_encode($raw), '+/', '-_'), '=')));
+    }
 }

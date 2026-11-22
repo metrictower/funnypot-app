@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace Funnypot\App\Tarpit\Mint;
 
 /**
- * The `csrf_token` form field: base64url(issuedAt u32 ‖ HMAC(csrf, sid ‖ formId ‖ epoch ‖ issuedAt)[0..16] ‖
- * HMAC(csrf, issuedAt)[0..7]), 36 characters.
+ * The `csrf_token` form field: base64url(head ‖ HMAC(csrf, head)[0..7]), 36 characters, where head is
+ * issuedAt u32 ‖ HMAC(csrf, sid ‖ formId ‖ epoch ‖ issuedAt)[0..16].
  *
  * A token is valid for one session, one form and the account's current CSRF epoch, for at most an hour.
  * Bumping the epoch invalidates every form the account has open, which is how a "stale form" stays true
  * on the next submit. The short second MAC proves only that this surface issued the token, so a stale
- * or used form of ours can be told apart from a guess.
+ * or used form of ours can be told apart from a guess; it covers the whole head, so no two tokens share
+ * a tail.
  */
 final class CsrfCodec
 {
@@ -28,8 +29,9 @@ final class CsrfCodec
     public function issue(string $sid, string $formId, int $epoch, int $issuedAt): string
     {
         $t = pack('N', $issuedAt);
+        $head = $t . $this->mac($sid, $formId, $epoch, $t);
 
-        return rtrim(strtr(base64_encode($t . $this->mac($sid, $formId, $epoch, $t) . $this->origin($t)), '+/', '-_'), '=');
+        return rtrim(strtr(base64_encode($head . $this->origin($head)), '+/', '-_'), '=');
     }
 
     /** @return int|null the token's issue time when it is valid for this session, form and epoch */
@@ -56,7 +58,7 @@ final class CsrfCodec
     {
         $raw = self::raw($token);
 
-        return $raw !== null && hash_equals($this->origin(substr($raw, 0, 4)), substr($raw, 20, 7));
+        return $raw !== null && hash_equals($this->origin(substr($raw, 0, 20)), substr($raw, 20, 7));
     }
 
     private static function raw(?string $token): ?string
@@ -74,8 +76,8 @@ final class CsrfCodec
         return substr(hash_hmac('sha256', "csrf\0" . $sid . "\0" . $formId . "\0" . $epoch . "\0" . $t, $this->key, true), 0, 16);
     }
 
-    private function origin(string $t): string
+    private function origin(string $head): string
     {
-        return substr(hash_hmac('sha256', "csrf-origin\0" . $t, $this->key, true), 0, 7);
+        return substr(hash_hmac('sha256', "csrf-origin\0" . $head, $this->key, true), 0, 7);
     }
 }
