@@ -739,11 +739,20 @@ final class ServedSurfacesFingerprintTest extends TestCase
                 }
                 self::assertServedClean($rewriter->page($id, $messages), "console messages, seed {$seed}, {$id->name}");
 
-                $facts = $rewriter->facts($id, static fn (): int => 1795000000);
+                $date = static fn (): int => 1795000000;
                 $out = '';
-                foreach (self::shellCommands($facts) as $argv) {
-                    $out .= (string) $facts->run($argv) . "\n";
+                $empty = [];
+                foreach (self::shellCommands($rewriter->facts($id, $date)) as $argv) {
+                    // A fresh table per command, as each request gets one: a shared table's work budget
+                    // would run out and leave most answers empty and unscanned.
+                    $answer = (string) $rewriter->facts($id, $date)->run($argv);
+                    if ($answer === '' && count($argv) > 1) {
+                        $empty[] = implode(' ', $argv);
+                    }
+                    $out .= $answer . "\n";
                 }
+                // Past a bare applet reading an empty stdin, only a character device prints nothing.
+                self::assertLessThanOrEqual(16, count($empty), "the scan went hollow, seed {$seed}, {$id->name}: " . implode(', ', $empty));
                 self::assertServedClean($out, "console facts output, seed {$seed}, {$id->name}");
                 self::assertServedClean($rewriter->landing($id), "console landing, seed {$seed}, {$id->name}");
             }
