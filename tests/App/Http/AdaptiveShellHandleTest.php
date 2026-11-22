@@ -493,6 +493,14 @@ final class AdaptiveShellHandleTest extends TestCase
             while (strlen($joined) + 5 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
                 $joined .= '$PATH';
             }
+            $getent = 'getent passwd ';
+            while (strlen($getent) + 5 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+                $getent .= '$PATH';
+            }
+            foreach (['POST getent long key' => 'POST', 'GET getent long key' => 'GET'] as $name => $m) {
+                $body = $m === 'POST' ? $h->post('/admin/root/post', $getent, '203.0.113.72', 'pct20')['body'] : $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($getent), null, '203.0.113.72')['body'];
+                self::assertStringContainsString('<title>Shell</title>', $body, $name);
+            }
             foreach (['GET long $PATH path' => $joined] as $name => $line) {
                 $h->fetch('GET', '/admin/root/html', 'cmd=id', null, '203.0.113.71');
                 $t = hrtime(true);

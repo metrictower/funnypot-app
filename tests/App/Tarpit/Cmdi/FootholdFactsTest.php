@@ -490,6 +490,55 @@ final class FootholdFactsTest extends TestCase
         }
     }
 
+    public function test_getent_matches_whole_fields(): void
+    {
+        $f = self::facts(FootholdIdentity::www());
+        self::assertSame("root:x:0:0:root:/root:/bin/bash\n", self::sh($f, 'getent passwd root'));
+        self::assertSame("www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n", self::sh($f, 'getent passwd 33'), 'by numeric id');
+        self::assertSame('', self::sh($f, 'getent passwd ro'), 'a prefix is not a match');
+        self::assertSame('', self::sh($f, 'getent passwd .*'), 'a key is never a pattern');
+        self::assertSame("root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n", self::sh($f, 'getent passwd root daemon'));
+        self::assertSame("www-data:x:33:\n", self::sh($f, 'getent group www-data'));
+        self::assertSame(FootholdFacts::POD_IP . "\tapp-prod-01\n", self::sh($f, 'getent hosts app-prod-01'));
+        self::assertSame("127.0.0.1\tlocalhost\n", self::sh($f, 'getent hosts 127.0.0.1'));
+    }
+
+    /** No attacker text is ever compiled into a regex: long or hostile keys raise no warning anywhere. */
+    public function test_hostile_keys_raise_no_warnings(): void
+    {
+        $long = str_repeat(trim(self::sh(self::facts(FootholdIdentity::www()), 'printenv PATH')), 70);
+        $keys = [$long, str_repeat('(', 5000), '(*', '[', '\\', ')', 'a{1000000}', "a\x00b", "\xff\xfe", '~', '.*', str_repeat('.', 4000), str_repeat('a', 100000)];
+        $warnings = [];
+        set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+            $warnings[] = $msg;
+
+            return true;
+        });
+        try {
+            foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+                foreach ($keys as $k) {
+                    foreach ([
+                        ['getent', 'passwd', $k], ['getent', 'group', $k], ['getent', 'hosts', $k], ['getent', 'passwd', 'root', $k],
+                        ['grep', $k, '/etc/passwd'], ['grep', '-i', $k, '/etc/passwd'], ['grep', '-rv', $k, '/etc'], ['egrep', $k, '/etc/group'],
+                        ['find', '/etc', '-name', $k], ['ls', '/usr/bin/' . $k . '*'], ['date', '+' . $k], ['cut', '-d' . $k, '-f' . $k, '/etc/passwd'],
+                        ['which', $k], ['type', $k], ['id', $k], ['printenv', $k], ['kill', $k], ['head', '-n', $k, '/etc/passwd'], ['stat', $k], ['cat', $k],
+                        ['printf', $k], ['echo', $k], ['sysctl', $k], ['pidof', $k], [$k],
+                    ] as $argv) {
+                        foreach ([true, false] as $reflect) {
+                            $out = self::facts($id)->run($argv, $reflect);
+                            self::assertTrue($out === null || is_string($out));
+                        }
+                    }
+                    \Funnypot\App\Tarpit\Cmdi\ShellLexer::lex('getent passwd ' . $k);
+                    \Funnypot\App\Tarpit\Cmdi\AdaptiveShell::sleepOf(['sleep', $k]);
+                }
+            }
+        } finally {
+            restore_error_handler();
+        }
+        self::assertSame([], $warnings, 'no warning reaches the log');
+    }
+
     public function test_writes_and_egress_always_fail(): void
     {
         foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {

@@ -1580,7 +1580,7 @@ final class FootholdFacts
                 if (strlen($out) >= self::MAX_OUTPUT) {
                     break;
                 }
-                if ($name !== null && (strlen($name) > self::MAX_PATTERN || !fnmatch($name, basename($p)))) {
+                if ($name !== null && (strlen($name) > self::MAX_PATTERN || str_contains($name, "\0") || !fnmatch($name, basename($p)))) {
                     continue;
                 }
                 $out .= ($r === '.' || $r === './' ? '.' . substr($p, strlen(self::CWD)) : $p) . "\n";
@@ -1784,13 +1784,27 @@ final class FootholdFacts
         if (!isset($a[1])) {
             return $src;
         }
-        foreach (explode("\n", $src) as $line) {
-            if ($line !== '' && (str_starts_with($line, $a[1] . ':') || preg_match('~\s' . preg_quote($a[1], '~') . '(\s|$)~', $line) === 1)) {
-                return $line . "\n";
+        // A key matches a whole field, as getent does: a name or numeric id for passwd/group, a name,
+        // alias or address for hosts. It is compared as a plain string, never compiled into a pattern.
+        $lines = array_values(array_filter(explode("\n", $src), static fn (string $l): bool => $l !== '' && $l[0] !== '#'));
+        $out = '';
+        foreach (array_slice($a, 1) as $key) {
+            if ($this->spent($out)) {
+                break;
+            }
+            foreach ($lines as $line) {
+                $fields = $db === 'hosts' ? (preg_split('~[ \t]+~', $line) ?: []) : explode(':', $line);
+                $hit = $db === 'hosts'
+                    ? in_array($key, $fields, true)
+                    : ($fields[0] === $key || (ctype_digit($key) && ($fields[2] ?? null) === $key));
+                if ($hit) {
+                    $out .= $line . "\n";
+                    break;
+                }
             }
         }
 
-        return '';
+        return $out;
     }
 
     /** @param list<string> $a */
@@ -2548,7 +2562,7 @@ final class FootholdFacts
         $slash = strrpos($pattern, '/');
         $dirPart = $slash === false ? '' : substr($pattern, 0, $slash + 1);
         $base = $slash === false ? $pattern : substr($pattern, $slash + 1);
-        if (strpbrk($dirPart, '*?[') !== false || $base === '' || strlen($base) > self::MAX_PATTERN || $this->spent()) {
+        if (strpbrk($dirPart, '*?[') !== false || $base === '' || strlen($base) > self::MAX_PATTERN || str_contains($pattern, "\0") || $this->spent()) {
             return [];
         }
         try {
