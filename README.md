@@ -206,8 +206,9 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
 - **Inert and closed.** Nothing fetches or executes; a callback URL is stored text, shown as text. None
   of the surface's own answers is a 5xx or a 302 (the `/` sign-in keeps that page's existing 302), every
   header comes from a closed list, every redirect is one of the surface's own pages, and OAuth never redirects at all: consent, the issued code, a denial and every
-  error render on the surface's own pages, and the client's `state` appears only in the consent POST's
-  answer, escaped. Nothing from a GET query or a path is ever echoed.
+  error render on the surface's own pages. Nothing from a GET query or a path is ever echoed in a GET
+  answer or a header; the authorize request's `state` is held server-side and shown only, escaped, in the
+  consent POST's answer.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
   hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
   decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a
