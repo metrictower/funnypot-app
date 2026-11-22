@@ -133,8 +133,9 @@ under the tarpit): an agent that "fixes" its payload is kept fixing it.
   pattern length, output bytes and about 30 ms of work across every command in the line). Past it the
   answer is the output so far, like a killed command, so a 4 KB `grep -r` or `find` line stays cheap.
 - **Reflection.** Attacker text is echoed only from the body of a non-GET request, in a small safe charset,
-  length-capped and HTML-escaped. From a GET or a query string only a bare command (no arguments) is
-  answered; anything whose answer depends on its arguments gets the landing.
+  length-capped and HTML-escaped. A GET or query-string command whose answer would echo any of it gets the
+  landing. Variables, `${IFS}` field splitting and globs expand before any applet looks at its arguments,
+  so every spelling of one command gets one answer.
 - **Flags.** `FUNNYPOT_TARPIT_CMDI_SYNTAX=0` keeps the static landing (the A/B switch);
   `FUNNYPOT_TARPIT_CMDI_IDENTITY=www-data|root` pins the identity for a lab run. Per-source history and an
   attribution log live in a bounded `cmdi-shell.sqlite` (see `docs/DATA-LAYER-DECISION.md`).

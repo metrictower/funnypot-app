@@ -247,17 +247,14 @@ final class FootholdFacts
     public function run(array $argv, bool $mayReflect = true): ?string
     {
         $this->mayReflect = $mayReflect;
-        // From a GET or a query string the answer may not depend on argument text at all: a selected
-        // field, a joining delimiter or an echoed pid is still the attacker's bytes. Only a bare
-        // command is answered there; anything with arguments gets the landing.
-        if (!$mayReflect && count($argv) > 1) {
-            return null;
-        }
         $this->deadline ??= hrtime(true) + self::MAX_WORK_NS;
         if ($this->spent()) {
             return '';
         }
         try {
+            // The operand cap counts the words as typed. Expansion (variables, field splitting, globs)
+            // happens before any applet looks at its arguments, so every spelling of one command gets
+            // one answer, and what expansion adds is bounded by the work budget instead.
             $out = $this->exec($this->expand(array_slice($argv, 0, self::MAX_ARGS + 1)), 0);
         } catch (SlotRefused $e) {
             // From a GET the caller serves the landing instead. From a body, the text only failed the
@@ -321,7 +318,7 @@ final class FootholdFacts
             return '';
         }
         $name = $argv[0];
-        $args = array_slice($argv, 1, self::MAX_ARGS);
+        $args = array_slice($argv, 1);
 
         if (str_contains($name, '/')) {
             $abs = $this->abs($name);
@@ -1360,37 +1357,21 @@ final class FootholdFacts
             return preg_match($re, $line) === 1;
         };
         $recurse = str_contains($flags, 'r') || str_contains($flags, 'R');
-        $files = [];
+        $prefix = count($rest) > 1 || $recurse;
         $out = '';
-        foreach ($rest as $f) {
-            $abs = $this->abs($f);
-            if ($recurse && $this->type($abs) === 'd') {
-                foreach ($this->walk($abs, $out, 'grep') as $p) {
-                    if ($this->type($p) === 'f') {
-                        $files[] = $p;
-                    }
-                }
-                continue;
-            }
-            $files[] = $f;
-        }
-        $prefix = count($files) > 1 || $recurse;
-        foreach ($files as $f) {
-            if ($this->spent($out)) {
-                break;
-            }
+        $search = function (string $f) use (&$out, $match, $flags, $prefix): void {
             [$c, $err] = $this->read('grep', $f);
             if ($c === null) {
                 $out .= $err;
-                continue;
+
+                return;
             }
             $count = 0;
             foreach (explode("\n", rtrim($c, "\n")) as $line) {
                 if (strlen($out) >= self::MAX_OUTPUT) {
                     break;
                 }
-                $hit = $match($line);
-                if ($hit !== str_contains($flags, 'v')) {
+                if ($match($line) !== str_contains($flags, 'v')) {
                     $count++;
                     if (!str_contains($flags, 'c') && !str_contains($flags, 'l')) {
                         $out .= ($prefix ? $this->shown($f, $this->abs($f)) . ':' : '') . $line . "\n";
@@ -1402,6 +1383,28 @@ final class FootholdFacts
             } elseif (str_contains($flags, 'l') && $count > 0) {
                 $out .= $this->shown($f, $this->abs($f)) . "\n";
             }
+        };
+        // Each operand is searched as soon as it is walked, so a budget that runs out mid-line still
+        // leaves the matches already found.
+        foreach ($rest as $f) {
+            if ($this->spent($out)) {
+                break;
+            }
+            $abs = $this->abs($f);
+            if ($recurse && $this->type($abs) === 'd') {
+                $errors = '';
+                foreach ($this->walk($abs, $errors, 'grep') as $p) {
+                    if ($this->spent($out)) {
+                        break;
+                    }
+                    if ($this->type($p) === 'f') {
+                        $search($p);
+                    }
+                }
+                $out .= $errors;
+                continue;
+            }
+            $search($f);
         }
 
         return $out;
@@ -2006,11 +2009,12 @@ final class FootholdFacts
         }
         // The processes ps lists; anything else does not exist.
         if (!in_array((int) $pid, [1, 7, 12, 13, 14, 213, 214], true) || strlen($pid) > 7) {
-            return "sh: can't kill pid " . $this->slotWord($pid, 16) . ": No such process\n";
+            return "sh: can't kill pid " . $this->slotWord(ltrim($pid, '0') ?: '0', 16) . ": No such process\n";
         }
         $own = $this->id->isRoot() || !in_array((int) $pid, [1, 7], true);
 
-        return $own ? '' : "sh: can't kill pid {$pid}: Operation not permitted\n";
+        // busybox prints the pid as a number: no zero padding from the command line survives.
+        return $own ? '' : "sh: can't kill pid " . (int) $pid . ": Operation not permitted\n";
     }
 
     /** @param list<string> $a */

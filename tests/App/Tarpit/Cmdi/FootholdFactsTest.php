@@ -330,9 +330,12 @@ final class FootholdFactsTest extends TestCase
         self::assertNull($f->run(['FPCANARY7Q'], false), 'an unknown command name is attacker text');
         self::assertNull($f->run(['cat', '/etc/shadow-'], false), 'an unknown path is attacker text');
         self::assertSame("sh: curl: not found\n", $f->run(['curl'], false), 'a fixed absent-tool word is not attacker text');
-        self::assertSame(FootholdIdentity::www()->idLine() . "\n", $f->run(['id'], false), 'a bare command is answered from a GET');
-        self::assertNull($f->run(['cat', '/etc/passwd'], false), 'from a GET any answer that depends on its arguments gets the landing');
-        self::assertNull($f->run(['uname', '-a'], false));
+        self::assertSame(FootholdIdentity::www()->idLine() . "\n", $f->run(['id'], false));
+        self::assertSame(CannedData::PASSWD, $f->run(['cat', '/etc/passwd'], false), 'a known file is closed-set');
+        self::assertSame("Linux app-prod-01 5.15.0 x86_64 Linux\n", $f->run(['uname', '-a'], false));
+        self::assertSame("app-prod-01\n", $f->run(['cut', '-dQ', '-f1,1', '/etc/hostname'], false), 'no delimiter in the line: printed whole, no attacker byte');
+        self::assertNull($f->run(['cut', '-d-', '-f1,3', '/etc/hostname'], false), 'joining fields would show the typed delimiter: a GET gets the landing');
+        self::assertSame("app-01\n", $f->run(['cut', '-d-', '-f1,3', '/etc/hostname']), 'from a body it is a slot');
 
         self::assertSame("FPCANARY7Q\n", $f->run(['echo', 'FPCANARY7Q']));
         self::assertSame('', $f->run(['echo', '<b>x</b>']), 'unsafe characters never reflect, even from a body');
@@ -354,6 +357,32 @@ final class FootholdFactsTest extends TestCase
         self::assertSame("0 213\n", $exp('echo $? $$'));
         self::assertSame(self::sh($f, 'cat /etc/hostname'), $exp('cat${IFS}/etc/hostname'), 'an unquoted expansion splits on blanks');
         self::assertSame("cat: can't open '{$id->home}/.profile': No such file or directory\n", $exp('cat $HOME/.profile'));
+    }
+
+    public function test_every_spelling_of_a_command_gets_one_answer(): void
+    {
+        foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+            foreach ([true, false] as $reflect) {
+                $runs = static fn (string $line): ?string => self::facts($id)->run(\Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv, $reflect);
+                foreach ([['cat /etc/passwd', 'cat${IFS}/etc/passwd', 'cat$IFS/etc/passwd', "cat\t/etc/passwd", 'cat  /etc/passwd'],
+                    ['uname -a', 'uname${IFS}-a', "uname\t-a"], ['kill 1', 'kill${IFS}0000001', 'kill 0001']] as $spellings) {
+                    $first = $runs($spellings[0]);
+                    foreach ($spellings as $s) {
+                        self::assertSame($first, $runs($s), "{$s} answers like {$spellings[0]}");
+                    }
+                }
+            }
+        }
+        self::assertSame("sh: can't kill pid 1: Operation not permitted\n", self::facts(FootholdIdentity::www())->run(\Funnypot\App\Tarpit\Cmdi\ShellLexer::lex('kill${IFS}0000001')->argv, false), 'busybox prints the number, not the padding');
+    }
+
+    public function test_globs_list_every_match(): void
+    {
+        $f = self::facts(FootholdIdentity::www());
+        $names = explode("\n", trim(self::sh($f, 'ls /usr/bin')));
+        self::assertGreaterThan(64, count($names), 'sanity: more entries than the operand cap');
+        self::assertCount(count($names), explode("\n", trim(self::sh(self::facts(FootholdIdentity::www()), 'ls /usr/bin/*'))), 'the glob lists them all');
+        self::assertStringContainsString("/usr/bin/yes\n", self::sh(self::facts(FootholdIdentity::www()), 'ls /usr/bin/*'));
     }
 
     public function test_cut_and_kill_follow_busybox(): void

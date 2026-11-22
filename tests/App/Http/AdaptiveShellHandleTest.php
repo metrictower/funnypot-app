@@ -455,7 +455,8 @@ final class AdaptiveShellHandleTest extends TestCase
         self::assertStringNotContainsString('31337424242', $kill, 'GET-supplied digits');
 
         $n = 0;
-        $shapes = ['%s FPCANARYQ7', '%s -dFPCANARYQ7 -f1,1 /etc/hostname', '%s 31337424242', '%s /FPCANARYQ7', '%s -n 31337424242 /etc/passwd'];
+        $shapes = ['%s FPCANARYQ7', '%s -dFPCANARYQ7 -f1,1 /etc/hostname', '%s 31337424242', '%s /FPCANARYQ7', '%s -n 31337424242 /etc/passwd',
+            '%s${IFS}FPCANARYQ7', '%s${IFS}0000031337424242', '%s$IFS -d- -f1,3 /etc/hostname'];
         foreach (array_merge(\Funnypot\App\Tarpit\Cmdi\FootholdFacts::commandNames(), \Funnypot\App\Tarpit\Cmdi\FootholdFacts::BUILTINS) as $applet) {
             foreach ($shapes as $shape) {
                 $cmd = sprintf($shape, $applet);

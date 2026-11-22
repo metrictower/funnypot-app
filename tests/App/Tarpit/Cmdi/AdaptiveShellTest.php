@@ -250,6 +250,50 @@ final class AdaptiveShellTest extends TestCase
         self::assertSame($second, $done($prep($worker(), 'cat /etc/hosts | head')), 'and so does the other one');
     }
 
+    /**
+     * The permanent guard on operator decision 2: a canary argument sent by GET never appears in the
+     * served page, whatever the applet, the argument shape, or the spelling that gets it to the applet.
+     */
+    public function test_a_get_canary_never_reaches_the_page_under_any_spelling(): void
+    {
+        $shapes = ['FPCANARYQ7', '/FPCANARYQ7', '-dFPCANARYQ7 -f1,1 /etc/hostname', '-d- -f1,3 /etc/hostname', '31337424242', '0000031337424242', '-n 31337424242 /etc/passwd', 'FPCANARYQ7=1 /etc/passwd'];
+        $spell = [
+            'plain' => static fn (string $a, string $x): string => "{$a} {$x}",
+            '${IFS}' => static fn (string $a, string $x): string => $a . '${IFS}' . $x,
+            '$IFS' => static fn (string $a, string $x): string => $a . '$IFS ' . $x,
+            'tab' => static fn (string $a, string $x): string => "{$a}\t{$x}",
+            'single quotes' => static fn (string $a, string $x): string => "{$a} '{$x}'",
+            'double quotes' => static fn (string $a, string $x): string => "{$a} \"{$x}\"",
+            'backslash' => static fn (string $a, string $x): string => $a . ' ' . substr($x, 0, 1) . '\\' . substr($x, 1),
+            'glob *' => static fn (string $a, string $x): string => "{$a} {$x}*",
+            'glob ?' => static fn (string $a, string $x): string => "{$a} {$x}?",
+            '${IFS} + quotes' => static fn (string $a, string $x): string => $a . '${IFS}\'' . $x . '\'',
+        ];
+        $det = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        $checked = 0;
+        foreach (['www-data', 'root'] as $pin) {
+            $h = $this->harness(['pin' => $pin]);
+            foreach (array_merge(\Funnypot\App\Tarpit\Cmdi\FootholdFacts::commandNames(), \Funnypot\App\Tarpit\Cmdi\FootholdFacts::BUILTINS) as $applet) {
+                foreach ($shapes as $x) {
+                    // Reflection is decided by the slot rules, not the identity: root re-checks a few spellings.
+                    foreach ($pin === 'root' ? array_intersect_key($spell, ['plain' => 1, '${IFS}' => 1, 'single quotes' => 1]) : $spell as $how => $make) {
+                        $line = $make($applet, $x);
+                        $turn = $h->shell->prepare(self::ctx('GET', '/admin/root/html', 'cmd=' . rawurlencode($line)), '198.51.100.44', $det, self::policy());
+                        if ($turn === null) {
+                            continue;
+                        }
+                        $r = new SynthesizedResponse(200, ['Content-Type' => 'text/html'], 'core', $det);
+                        self::assertTrue($h->shell->serve($turn, $r));
+                        self::assertStringNotContainsStringIgnoringCase('fpcanaryq7', $r->body, "{$pin}, {$how}: GET {$line}");
+                        self::assertStringNotContainsString('31337424242', $r->body, "{$pin}, {$how}: GET {$line}");
+                        $checked++;
+                    }
+                }
+            }
+        }
+        self::assertGreaterThan(25000, $checked, 'every applet x shape x spelling');
+    }
+
     public function test_a_store_fault_never_escapes(): void
     {
         $spy = new SpyCmdiStore();

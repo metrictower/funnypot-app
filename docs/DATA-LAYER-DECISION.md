@@ -265,8 +265,10 @@ Concretely:
    > 20,000-writes-per-hour global gauge row, so neither one source nor a
    > rotating-IP flood can grow it past about 24 MB. A turn writes only its
    > delta (memo entry, message, families, path), merged onto the row inside
-   > `BEGIN IMMEDIATE`, so overlapping requests from one source never lose
-   > each other's history. `cmdi_turns` is the operator's attribution log
+   > `BEGIN IMMEDIATE`, so overlapping requests from one source merge rather
+   > than overwrite. It stays fail-open: a write that cannot take the lock
+   > within 25 ms is dropped (measured: 2–3 of 16 writers lined up on one
+   > source), never a 500. `cmdi_turns` is the operator's attribution log
    > (outcome, identity, value source, owning rule, delay), never served,
    > FIFO-capped at 20,000 rows and purged after 7 days. Every fault fails
    > open to a stateless turn.
