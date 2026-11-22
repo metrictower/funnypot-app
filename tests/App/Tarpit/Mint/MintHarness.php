@@ -83,7 +83,7 @@ final class MintHarness
         $this->config->decoyArchive = $opts['decoyArchive'] ?? true;
         $this->config->vulnsPath = $this->dir . '/none.json';
         $this->hits = new SqliteHitStore($this->dir . '/hits.sqlite');
-        $seed = IdentityTestSupport::httpIdentity()->personaSeed();
+        $seed = $opts['personaSeed'] ?? IdentityTestSupport::httpIdentity()->personaSeed();
         $this->persona = MintPersona::fromSeed($seed);
 
         $llm = null;
