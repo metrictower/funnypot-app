@@ -263,7 +263,7 @@ final class TokenMintDecoyHandleTest extends TestCase
         $forged = \Funnypot\App\Tarpit\Mint\JwtCodec::encode($claims, (string) $persona->field('secret.jwt'));
         $r = $h->get('/api/v2/user', '', 'default', MintHarness::IP, ['Authorization' => 'Bearer ' . $forged]);
         self::assertSame(401, $r['status']);
-        self::assertSame('Bad credentials', self::json($r)['message']);
+        self::assertSame('The credentials are invalid or have expired.', self::json($r)['message']);
 
         $admin = (string) $persona->field('user.admin.username');
         $answers = [];

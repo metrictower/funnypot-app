@@ -101,7 +101,7 @@ final class AccountPages
         $apps = count($a['ap']);
         $main = '<div class=card><h1>Signed in as ' . self::e((string) $a['u']) . '</h1>'
             . '<p class=muted>Member of ' . self::e($this->p->company) . ' since ' . self::date((int) $a['c']) . '.</p></div>'
-            . "<div class=card><h2>Developer settings</h2><p><a href='/settings/tokens'>Personal access tokens</a> ("
+            . "<div class=card><h2>Developer tools</h2><p><a href='/settings/tokens'>Personal access tokens</a> ("
             . $tokens . ") · <a href='/settings/applications'>OAuth applications</a> (" . $apps . ')</p>'
             . "<p class=muted>Use a token with the API. See the <a href='/docs/api'>API documentation</a>.</p></div>"
             . "<div class=card><h2>Security</h2><p>Two-factor authentication is " . ($a['tf'] !== null ? 'on' : 'off')
@@ -174,16 +174,16 @@ final class AccountPages
     /** @param array<string,string> $errors */
     public function confirm(string $csrf, bool $twoFactor, array $errors): string
     {
-        $main = '<div class=card><h1>Confirm access</h1><p class=muted>' . $this->msg('confirm_intro') . '</p>'
+        $main = '<div class=card><h1>Verify it is you</h1><p class=muted>' . $this->msg('confirm_intro') . '</p>'
             . "<form method=post action='/settings/confirm'>" . self::csrf($csrf)
             . $this->input('Password', 'password', [], $errors, 'password', ' autocomplete=current-password')
             . ($twoFactor
                 ? $this->input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')
                     . $this->input('Or a recovery code', 'recovery_code', [], $errors)
                 : '')
-            . '<button type=submit>Confirm</button></form></div>';
+            . '<button type=submit>Continue</button></form></div>';
 
-        return $this->layout('Confirm access', $main, true);
+        return $this->layout('Verify it is you', $main, true);
     }
 
     /**
@@ -206,7 +206,7 @@ final class AccountPages
                 . '<button class=danger type=submit>Delete</button></form></td></tr>';
         }
         $main = $fresh . '<div class=card><div class=row><h1>Personal access tokens</h1></div>'
-            . "<p><a href='/settings/tokens/new'>Generate new token</a></p>"
+            . "<p><a href='/settings/tokens/new'>Create a token</a></p>"
             . ($rows === '' ? '<p class=muted>You have no tokens.</p>' : '<table>' . $rows . '</table>') . '</div>';
 
         return $this->layout('Personal access tokens', $main, true, $notice);
@@ -235,7 +235,7 @@ final class AccountPages
             . $this->input('Note', 'note', $values, $errors)
             . "<label>Expiration<select name=expiration>{$opts}</select></label>" . $this->fieldError($errors, 'expiration')
             . '<h2>Scopes</h2>' . $scopes . $this->fieldError($errors, 'scopes')
-            . '<button type=submit>Generate token</button></form></div>';
+            . '<button type=submit>Create token</button></form></div>';
 
         return $this->layout('New token', $main, true);
     }
@@ -248,7 +248,7 @@ final class AccountPages
             $rows .= "<tr><td><a href='/settings/applications/" . self::e((string) $a['id']) . "'>" . self::e((string) $a['nm']) . '</a></td>'
                 . '<td class=mono>' . self::e((string) $a['ci']) . '</td></tr>';
         }
-        $main = "<div class=card><h1>OAuth applications</h1><p><a href='/settings/applications/new'>Register a new application</a></p>"
+        $main = "<div class=card><h1>OAuth applications</h1><p><a href='/settings/applications/new'>Add an OAuth application</a></p>"
             . ($rows === '' ? '<p class=muted>No applications yet.</p>' : '<table>' . $rows . '</table>') . '</div>';
 
         return $this->layout('OAuth applications', $main, true, $notice);
@@ -257,12 +257,12 @@ final class AccountPages
     /** @param array<string,string> $values @param array<string,string> $errors */
     public function appNew(string $csrf, array $values, array $errors): string
     {
-        $main = "<div class=card><h1>Register a new OAuth application</h1><form method=post action='/settings/applications'>" . self::csrf($csrf)
+        $main = "<div class=card><h1>New OAuth application</h1><form method=post action='/settings/applications'>" . self::csrf($csrf)
             . $this->input('Application name', 'name', $values, $errors)
             . $this->input('Homepage URL', 'homepage_url', $values, $errors, 'url')
-            . $this->input('Authorization callback URL', 'callback_url', $values, $errors, 'url')
+            . $this->input('Callback URL', 'callback_url', $values, $errors, 'url')
             . $this->input('Description', 'description', $values, $errors)
-            . '<button type=submit>Register application</button></form></div>';
+            . '<button type=submit>Save application</button></form></div>';
 
         return $this->layout('New OAuth application', $main, true);
     }
@@ -279,11 +279,11 @@ final class AccountPages
             . '<div class=card><h1>' . self::e((string) $app['nm']) . '</h1>'
             . '<p>Client ID</p><p class=mono>' . self::e((string) $app['ci']) . '</p>'
             . '<p class=muted>Homepage URL: <span class=mono>' . self::e((string) $app['hp']) . '</span></p>'
-            . '<p class=muted>Authorization callback URL: <span class=mono>' . self::e((string) $app['cb']) . '</span></p>'
+            . '<p class=muted>Callback URL: <span class=mono>' . self::e((string) $app['cb']) . '</span></p>'
             . ((string) $app['ds'] !== '' ? '<p class=muted>' . self::e((string) $app['ds']) . '</p>' : '')
             . '<h2>Client secrets</h2>' . ($secrets === '' ? '<p class=muted>No client secrets.</p>' : '<ul>' . $secrets . '</ul>')
             . "<form method=post action='/settings/applications/{$id}/secrets'>" . self::csrf($csrfSecret)
-            . '<button type=submit>Generate a new client secret</button></form></div>'
+            . '<button type=submit>Create a client secret</button></form></div>'
             . '<div class=card><h2>Organization access</h2><p>' . $this->msg('approval_pending', ['company' => $this->p->company]) . '</p></div>'
             . "<div class=card><h2>Delete application</h2><form method=post action='/settings/applications/{$id}/delete'>" . self::csrf($csrfDelete)
             . '<button class=danger type=submit>Delete application</button></form></div>';
@@ -299,7 +299,7 @@ final class AccountPages
             $list .= '<li><span class=mono>' . self::e($s) . '</span> ' . self::e(ScopeSet::ALL[$s]) . '</li>';
         }
         $main = '<div class=card><h1>Authorize ' . self::e($appName) . '</h1>'
-            . '<p>' . self::e($appName) . ' wants to access your ' . self::e($this->p->company) . ' account.</p>'
+            . '<p>' . self::e($appName) . ' is asking for access to your ' . self::e($this->p->company) . ' account.</p>'
             . ($list !== '' ? '<ul>' . $list . '</ul>' : '<p class=muted>Read-only access to your public profile.</p>')
             . "<form method=post action='/login/oauth/authorize'>" . self::csrf($csrf)
             . "<input type=hidden name=authorization_request value='" . self::e($requestId) . "'>"

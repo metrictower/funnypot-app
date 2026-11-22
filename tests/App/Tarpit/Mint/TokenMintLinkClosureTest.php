@@ -66,4 +66,38 @@ final class TokenMintLinkClosureTest extends TestCase
             }
         }
     }
+
+    /**
+     * The surface claims no product: none of these phrases, each a named code host's own API or UI
+     * wording, appears in any page, header or message. (Generic HTTP reason phrases stay.)
+     */
+    private const BORROWED = [
+        "won't be able to see it again", 'Make sure to copy', 'Requires authentication', 'Bad credentials',
+        'Problems parsing JSON', 'secondary rate limit', 'Validation Failed', '"resource":', 'Incorrect username or password',
+        "can't be blank", 'has already been taken', 'Authorization callback URL', 'Register a new application',
+        'Generate a new client secret', 'Generate new token', 'wants to access your', 'Confirm access', 'Developer settings',
+    ];
+
+    public function test_no_page_or_message_borrows_a_named_products_wording(): void
+    {
+        $crawl = new MintCrawl(3);
+        try {
+            $out = $crawl->run();
+            $texts = [];
+            foreach ([...$crawl->plans, ['home', $out['home']]] as [$label, $plan]) {
+                $texts[$label . ' #' . count($texts)] = $plan->body . "\n" . implode("\n", array_map(static fn (array $h): string => $h[0] . ': ' . $h[1], $plan->headers()));
+            }
+            foreach (array_keys(\Funnypot\App\Tarpit\Mint\MintVocabulary::MESSAGES) as $key) {
+                $texts['message ' . $key] = \Funnypot\App\Tarpit\Mint\MintVocabulary::MESSAGES[$key];
+            }
+            self::assertGreaterThan(150, count($texts));
+            foreach ($texts as $label => $text) {
+                foreach (self::BORROWED as $phrase) {
+                    self::assertStringNotContainsStringIgnoringCase($phrase, html_entity_decode($text, ENT_QUOTES), "{$label} borrows: {$phrase}");
+                }
+            }
+        } finally {
+            $crawl->cleanup();
+        }
+    }
 }

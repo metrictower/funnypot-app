@@ -166,12 +166,7 @@ final class MintApi
                     $bio = $r->str('bio') ?? (string) $a['bi'];
                     $errors = MintForms::profile($name, $bio);
                     if ($errors !== []) {
-                        $list = [];
-                        foreach (array_keys($errors) as $field) {
-                            $list[] = ['resource' => 'User', 'field' => $field, 'code' => 'invalid'];
-                        }
-
-                        return [MintPlan::json(422, ['message' => 'Validation Failed', 'errors' => $list, 'documentation_url' => '/docs/api'])->attribute(['outcome' => 'invalid']), false];
+                        return [MintPlan::json(422, ['message' => MintVocabulary::text('fields_invalid'), 'fields' => array_keys($errors), 'documentation_url' => '/docs/api'])->attribute(['outcome' => 'invalid']), false];
                     }
                     // Only name and bio are writable; role, admin flags and the rest are ignored.
                     $s->d['a'][$pos]['nm'] = (string) $name;

@@ -89,7 +89,7 @@ final class HomeControllerAccountTest extends TestCase
             self::assertStringContainsString('/admin/access-login', $funnel(true, $u, $p, $ip));
         }
         $wrong = $funnel(true, 'artex1', 'wrong-pass', MintHarness::IP);
-        self::assertStringContainsString('Incorrect username or password.', $wrong);
+        self::assertStringContainsString('That username and password do not match.', $wrong);
         self::assertStringContainsString("<a href='/join'>Create an account</a>", $wrong);
         $ok = $funnel(true, 'artex1', 'Passw0rd!x', MintHarness::IP);
         self::assertStringContainsString('url=/', $ok);

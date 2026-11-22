@@ -172,7 +172,8 @@ member's view: organisation data (`users`, `orders`, `orders/{id}`, `orders/expo
 SSO page leads to a same-host identity provider that never signs anyone in, and approval stays pending.
 `admin:org` is refused, a member never sees an admin link, and the login API answers a persona member's
 username with "signs in through SSO" without looking at the password, so a leaked password is neither
-confirmed nor refuted.
+confirmed nor refuted. Every message and label is the surface's own wording: it borrows no code host's API
+or UI text, so it reads as the persona's own platform rather than a clone of a named product.
 - **Form friction.** The mint forms (token, OAuth app, client secret, consent) run every true check
   first, then a keyed picker (`FrictionPicker`) may answer with one plausible obstacle a real service
   shows: a stale form, a lapsed session, a lapsed confirm window, a throttle, an edit conflict or a
