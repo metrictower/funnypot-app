@@ -234,6 +234,13 @@ final class AppConfig
         public int $attritionGlobalRows = 50000,
         /** Global logical retained-state bytes (MiB), clamped 1–64. */
         public int $attritionGlobalStateMb = 64,
+        // Token-mint account surface (sign-up, personal access tokens, OAuth apps, the member API).
+        // Independent opt-in that ALSO needs the tarpit master switch and public mode; off means the
+        // owned paths answer exactly as today. Its own token-mint.sqlite (env-only path).
+        public bool $tokenMintEnabled = false,
+        /** The form-friction escalator; off keeps every true validation check and drops the extras. */
+        public bool $tokenMintFriction = true,
+        public string $tokenMintDbPath = '',
     ) {
     }
 
@@ -460,6 +467,9 @@ final class AppConfig
             attritionMaxArtifacts: max(3, min(64, (int) $str('FUNNYPOT_ATTRITION_MAX_ARTIFACTS', '64'))),
             attritionGlobalRows: max(100, min(50000, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_ROWS', '50000'))),
             attritionGlobalStateMb: max(1, min(64, (int) $str('FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', '64'))),
+            tokenMintEnabled: in_array(strtolower((string) $env('FUNNYPOT_TARPIT_TOKEN_MINT')), ['1', 'on', 'true', 'yes'], true),
+            tokenMintFriction: $onUnless0('FUNNYPOT_TARPIT_TOKEN_FRICTION'),
+            tokenMintDbPath: $str('FUNNYPOT_TOKEN_MINT_DB', $store . '/token-mint.sqlite'),
         );
     }
 }

@@ -22,7 +22,7 @@ final class IdentityKeyDeriverTest extends TestCase
     private const NAMED = [
         'coreRenderSalt', 'shellFilesystemKey', 'consoleSessionMacKey', 'dockerRegistryTokenKey',
         'engagementAnalyticsKey', 'engagementExperimentKey', 'serviceProfileKey',
-        'redisTelemetryFingerprintKey', 'postExploitStateKey', 'attritionJourneyKey',
+        'redisTelemetryFingerprintKey', 'postExploitStateKey', 'attritionJourneyKey', 'tokenMintKey',
     ];
 
     private function vectorDeriver(): IdentityKeyDeriver
@@ -63,6 +63,7 @@ final class IdentityKeyDeriverTest extends TestCase
         self::assertSame($expect('redis-telemetry/v1'), $d->redisTelemetryFingerprintKey());
         self::assertSame($expect('post-exploit-state/v1'), $d->postExploitStateKey());
         self::assertSame($expect('attrition-journey/v1'), $d->attritionJourneyKey());
+        self::assertSame($expect('token-mint/v1'), $d->tokenMintKey());
         self::assertSame(IdentityKeyDeriver::PERSONA_PREFIX . IdentityKeyDeriver::encodeKey($expect('persona-material/v1')), $d->personaMaterial());
         // The commitment is a one-way SHA-256 over the private proof output, never the output itself.
         $proof = $expect('runtime-keyset-proof/v1');
@@ -88,6 +89,7 @@ final class IdentityKeyDeriverTest extends TestCase
         self::assertSame('4dba5d60996195ceb3bd78b04366bcf8c42ec3c365080e15b36d8eab1ad48878', bin2hex($d->redisTelemetryFingerprintKey()));
         self::assertSame('304d022333b863b8d63cfb6b043b4dbc21c323f0f4f7928f857eb9621e95ee95', bin2hex($d->postExploitStateKey()));
         self::assertSame('09fd20dfe3573d846253b440eef2b80747df07adfdd30b79a806fe5f613a28fd', bin2hex($d->attritionJourneyKey()));
+        self::assertSame('521f729fc15c4913cf3dd0b1eafb1cef8a2ecb1ea53b84e7f65bc36eb0095700', bin2hex($d->tokenMintKey()));
         self::assertSame('fpph1_' . 'c5b906a8c87e9125c06409a9c69784b14ee0e62578ea0759f9b59b7c4a989fe6', IdentityKeyDeriver::publicPersonaHash('httptest'));
         self::assertMatchesRegularExpression('/^fpkc1_[0-9a-f]{64}$/', $d->keysetCommitment());
         self::assertMatchesRegularExpression('/^fpi1_[A-Za-z0-9_-]{43}$/', $d->personaMaterial());

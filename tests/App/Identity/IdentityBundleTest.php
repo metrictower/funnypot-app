@@ -67,8 +67,9 @@ final class IdentityBundleTest extends TestCase
         $redis = json_decode((string) file_get_contents($this->paths->redisBundlePath()), true);
         $post = json_decode((string) file_get_contents($this->paths->postExploitBundlePath()), true);
 
-        self::assertSame(['attrition_journey_key', 'console_session_mac_key', 'core_render_salt', 'docker_registry_token_key', 'engagement_analytics_key', 'persona_material', 'shell_filesystem_key'], array_keys($http['payload']));
+        self::assertSame(['attrition_journey_key', 'console_session_mac_key', 'core_render_salt', 'docker_registry_token_key', 'engagement_analytics_key', 'persona_material', 'shell_filesystem_key', 'token_mint_key'], array_keys($http['payload']));
         self::assertSame(IdentityKeyDeriver::encodeKey($d->attritionJourneyKey()), $http['payload']['attrition_journey_key']);
+        self::assertSame(IdentityKeyDeriver::encodeKey($d->tokenMintKey()), $http['payload']['token_mint_key']);
         self::assertSame(['persona_material', 'shell_filesystem_key'], array_keys($shell['payload']));
         self::assertSame(['persona_material'], array_keys($sip['payload']));
         self::assertSame(['persona_material', 'redis_telemetry_fingerprint_key'], array_keys($redis['payload']), 'RedisIdentity: exactly persona + redis-telemetry/v1');
@@ -187,6 +188,26 @@ final class IdentityBundleTest extends TestCase
         $old = HttpIdentity::load($this->paths);
         self::assertNull($old->attritionJourneyKey());
         self::assertSame('bundle-test-persona-value', $old->personaMaterial());
+    }
+
+    public function test_http_bundle_carries_the_token_mint_key_and_an_old_bundle_still_loads(): void
+    {
+        $d = IdentityTestSupport::deriver();
+        $h = HttpIdentity::load($this->paths);
+        self::assertSame($d->tokenMintKey(), $h->tokenMintKey());
+        self::assertSame(IdentityKeyDeriver::encodeKey($d->tokenMintKey()), $h->toPayload()['token_mint_key'], 'the key round-trips');
+
+        // A bundle written before the key existed (both additive keys absent) still loads, and the
+        // token-mint surface sees no key, so it stays unwired.
+        $p = $this->paths->httpBundlePath();
+        $doc = json_decode((string) file_get_contents($p), true);
+        unset($doc['payload']['token_mint_key'], $doc['payload']['attrition_journey_key']);
+        file_put_contents($p, (string) json_encode($doc, JSON_UNESCAPED_SLASHES));
+        chmod($p, 0640);
+        $old = HttpIdentity::load($this->paths);
+        self::assertNull($old->tokenMintKey());
+        self::assertNull($old->attritionJourneyKey());
+        self::assertArrayNotHasKey('token_mint_key', $old->toPayload());
     }
 
     public function test_reader_never_touches_the_manifest_or_the_master(): void

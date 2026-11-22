@@ -24,6 +24,7 @@ final class AppConfigTest extends TestCase
         'FUNNYPOT_POWERED_BY', 'FUNNYPOT_LLM_GENS_PER_HOUR', 'FUNNYPOT_LLM_PROMPT_VERSION',
         'FUNNYPOT_ADMIN_PASSWORD', 'FUNNYPOT_ADMIN_KNOCK', 'FUNNYPOT_ABUSEIPDB_KEY', 'FUNNYPOT_THREATINTEL_KEY',
         'FUNNYPOT_HONEYTOKEN_KEY', 'FUNNYPOT_ANALYTICS_KEY',
+        'FUNNYPOT_TARPIT_TOKEN_MINT', 'FUNNYPOT_TARPIT_TOKEN_FRICTION', 'FUNNYPOT_TOKEN_MINT_DB',
     ];
 
     protected function setUp(): void
@@ -254,6 +255,29 @@ final class AppConfigTest extends TestCase
     }
 
     /** AppConfig carries no identity: no persona seed/material, no master, no derived key. */
+    public function test_token_mint_defaults_off_with_friction_on_and_its_own_store(): void
+    {
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertFalse($c->tokenMintEnabled, 'the token-mint surface is opt-in');
+        self::assertTrue($c->tokenMintFriction, 'friction is on unless switched off with 0');
+        self::assertSame('/app/demo/storage/token-mint.sqlite', $c->tokenMintDbPath);
+
+        putenv('FUNNYPOT_TARPIT_TOKEN_MINT=1');
+        putenv('FUNNYPOT_TARPIT_TOKEN_FRICTION=0');
+        putenv('FUNNYPOT_TOKEN_MINT_DB=/data/tm.sqlite');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertTrue($c->tokenMintEnabled);
+        self::assertFalse($c->tokenMintFriction);
+        self::assertSame('/data/tm.sqlite', $c->tokenMintDbPath);
+
+        // Only an explicit 0 turns friction off; any other value keeps it on.
+        putenv('FUNNYPOT_TARPIT_TOKEN_FRICTION=no');
+        putenv('FUNNYPOT_TARPIT_TOKEN_MINT=maybe');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertTrue($c->tokenMintFriction);
+        self::assertFalse($c->tokenMintEnabled, 'an unrecognised value leaves the opt-in off');
+    }
+
     public function test_config_carries_no_identity_field(): void
     {
         $c = AppConfig::fromEnv(sys_get_temp_dir());

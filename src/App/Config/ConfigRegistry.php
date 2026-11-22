@@ -197,6 +197,9 @@ final class ConfigRegistry
             'attrition.max_artifacts_per_journey' => ['field' => 'attritionMaxArtifacts', 'env' => 'FUNNYPOT_ATTRITION_MAX_ARTIFACTS', 'type' => 'int', 'min' => 3, 'max' => 64, 'default' => '64', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(3,min(64,...)))
             'attrition.global_rows' => ['field' => 'attritionGlobalRows', 'env' => 'FUNNYPOT_ATTRITION_GLOBAL_ROWS', 'type' => 'int', 'min' => 100, 'max' => 50000, 'default' => '50000', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(100,min(50000,...)))
             'attrition.global_state_mb' => ['field' => 'attritionGlobalStateMb', 'env' => 'FUNNYPOT_ATTRITION_GLOBAL_STATE_MB', 'type' => 'int', 'min' => 1, 'max' => 64, 'default' => '64', 'group' => 'Tarpit', 'live' => false, 'secret' => false], // (max(1,min(64,...)))
+            // --- Token-mint account surface. Opt-in AND needs the tarpit master switch + public mode. tokenMintDbPath is env-only (a path). ---
+            'token_mint.enabled' => ['field' => 'tokenMintEnabled', 'env' => 'FUNNYPOT_TARPIT_TOKEN_MINT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            'token_mint.friction' => ['field' => 'tokenMintFriction', 'env' => 'FUNNYPOT_TARPIT_TOKEN_FRICTION', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
 
             // --- Engagement episode metrics (opt-in; restart-required: the store + caps are built at bootstrap). analyticsKey is env-only (a secret). ---
             'engagement.enabled' => ['field' => 'engagementEnabled', 'env' => 'FUNNYPOT_ENGAGEMENT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Engagement', 'live' => false, 'secret' => false],

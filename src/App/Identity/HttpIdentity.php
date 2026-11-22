@@ -31,7 +31,7 @@ final class HttpIdentity
      * image booting against a not-yet-re-prepared old bundle never fails the whole web tier; the
      * feature that consumes one enforces its presence only when it is enabled.
      */
-    private const OPTIONAL_KEYS = ['attrition_journey_key'];
+    private const OPTIONAL_KEYS = ['attrition_journey_key', 'token_mint_key'];
 
     private function __construct(
         private string $personaMaterial,
@@ -41,6 +41,7 @@ final class HttpIdentity
         private string $dockerRegistryTokenKey,
         private string $engagementAnalyticsKey,
         private ?string $attritionJourneyKey = null,
+        private ?string $tokenMintKey = null,
     ) {
     }
 
@@ -54,6 +55,7 @@ final class HttpIdentity
             $d->dockerRegistryTokenKey(),
             $d->engagementAnalyticsKey(),
             $d->attritionJourneyKey(),
+            $d->tokenMintKey(),
         );
     }
 
@@ -70,6 +72,7 @@ final class HttpIdentity
             IdentityKeyDeriver::decodeKey($p['docker_registry_token_key']),
             IdentityKeyDeriver::decodeKey($p['engagement_analytics_key']),
             isset($p['attrition_journey_key']) ? IdentityKeyDeriver::decodeKey($p['attrition_journey_key']) : null,
+            isset($p['token_mint_key']) ? IdentityKeyDeriver::decodeKey($p['token_mint_key']) : null,
         );
     }
 
@@ -92,6 +95,9 @@ final class HttpIdentity
         ];
         if ($this->attritionJourneyKey !== null) {
             $out['attrition_journey_key'] = IdentityKeyDeriver::encodeKey($this->attritionJourneyKey);
+        }
+        if ($this->tokenMintKey !== null) {
+            $out['token_mint_key'] = IdentityKeyDeriver::encodeKey($this->tokenMintKey);
         }
 
         return $out;
@@ -143,5 +149,11 @@ final class HttpIdentity
     public function attritionJourneyKey(): ?string
     {
         return $this->attritionJourneyKey;
+    }
+
+    /** The token-mint account surface key, or null when the bundle predates it (feature must stay off). */
+    public function tokenMintKey(): ?string
+    {
+        return $this->tokenMintKey;
     }
 }
