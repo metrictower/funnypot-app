@@ -242,9 +242,9 @@ final class OAuthFlow
             if ($consumed === null) {
                 return MintContext::out(null, false, $units, self::oauthError('invalid_grant'));
             }
-            // OAuth access tokens are capped at four per account; the oldest gives way.
+            // OAuth access tokens are capped per account; the oldest gives way.
             $oats = array_keys(array_filter($s->d['a'][$pos]['k'], static fn (array $t): bool => $t['k'] === 'oat'));
-            if (count($oats) >= 4) {
+            if (count($oats) >= MintState::MAX_OAUTH_TOKENS) {
                 array_splice($s->d['a'][$pos]['k'], (int) $oats[0], 1);
             }
             [, $access] = $this->c->addToken($s, $pos, $kref, 'oat', '', $scopes, $now + self::ACCESS_TTL_S, (int) $app['n'], $now);

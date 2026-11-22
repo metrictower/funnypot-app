@@ -25,11 +25,19 @@ Every bundle carries a common envelope (`schema`, `bundle`, `source`, `public_pe
 
 | Bundle | Payload |
 |---|---|
-| `http` | persona material, core render salt, shell filesystem key, console session-MAC key, Docker registry-token key, engagement analytics key |
+| `http` | persona material, core render salt, shell filesystem key, console session-MAC key, Docker registry-token key, engagement analytics key, plus the additive optional keys `attrition-journey/v1` and `token-mint/v1` |
 | `shell` | persona material, shell filesystem key |
 | `sip` | persona material |
 | `redis` | persona material, `redis-telemetry/v1` key |
 | `post-exploit-state` | persona material, `post-exploit-state/v1` key (root-only source; the future state role receives a projected view, the sample role and every web/protocol process never see it) |
+
+The two additive `http` keys are read optionally: a bundle written before a key existed still boots the
+whole web tier, and only the feature that needs it stays off (with a fixed log code,
+`attrition-key-missing` or `token-mint-key-missing`). To enable such a feature on an install whose
+bundle predates its key, re-run `identity:prepare` (the deploy preflight does) so the bundle is
+re-published with it; nothing else changes, since every existing key re-derives to the same value. The
+token-mint surface derives its per-purpose keys (store, session, CSRF, token, JWT, TOTP, password, pick)
+from `token-mint/v1` as `HMAC(key, "funnypot-app/token-mint/<purpose>/v1")`, never from another domain.
 
 Private keys are HKDF-SHA256 outputs of the master (salt `funnypot/install-identity/v1`, one versioned
 info string per domain, 32 bytes each). The API is closed: named methods only, no `derive($label)`.

@@ -28,6 +28,16 @@ actually ships.
 
 Resolution order is override, then catalog default, then on.
 
+## What the catalog does not cover: app-native surfaces
+
+The catalog lists what the core engine serves from templates. funnypot-app also has its own surfaces
+that answer some paths with app code (the labyrinth and context-polluters, the attrition journey, the
+token-mint account surface, the fake AI-API chat, the Docker API). They are not catalog entries and
+`funnypot-vulns.json` does not switch them: each has its own environment flag, off by default, and
+most also need the tarpit master switch (`FUNNYPOT_TARPIT`). See `demo/README.md` for the flags. When
+one answers a path, the engine still runs first, so a catalog entry switched off still stops being
+detected and reported there exactly as anywhere else.
+
 ## Auto-add mechanics
 
 `funnypot vulns:sync` (host, needs the compiled catalog) materializes the full list, and so does its

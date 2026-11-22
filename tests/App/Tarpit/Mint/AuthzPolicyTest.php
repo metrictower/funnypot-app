@@ -31,10 +31,9 @@ final class AuthzPolicyTest extends TestCase
                         } else {
                             self::assertSame('ok', $d['decision'], "{$ep} {$m} {$k}");
                         }
-                        foreach (ScopeSet::ORG_DATA as $org) {
-                            if ($need === $org) {
-                                self::assertNotSame('ok', $d['decision'], "{$ep} never answers organisation data");
-                            }
+                        // The member's own order list is the one org-scoped read that answers (always empty).
+                        if ($ep !== 'user_orders' && in_array($need, ScopeSet::ORG_DATA, true)) {
+                            self::assertNotSame('ok', $d['decision'], "{$ep} never answers organisation data");
                         }
                     }
                 }

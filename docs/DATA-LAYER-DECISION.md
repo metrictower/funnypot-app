@@ -290,3 +290,36 @@ SQLite's file-on-one-host model is disqualified, and the answer flips to
 option C, Postgres-for-all, with the UNLOGGED-cache pattern instead of Redis.
 Nothing else plausibly flips it: box RAM only strengthens SQLite (it is the
 smallest), and even a 10x traffic misestimate stays inside its budget.
+
+## 6. Feature stores: token-mint.sqlite
+
+The token-mint account surface keeps its state in its own file, `token-mint.sqlite`
+(`FUNNYPOT_TOKEN_MINT_DB`), opened through `Sqlite::open()` and then given a 100 ms busy timeout.
+
+- **`mint_state`** — one row per source, keyed by an HMAC of the IP (never the IP). The row holds that
+  source's accounts (each with tokens, OAuth apps, sessions, 2FA) and its recent history as JSON, plus
+  the hour bucket's write and work-unit counters. Caps: 6 accounts per source; per account 6 personal
+  tokens, 2 OAuth tokens, 3 apps (2 live secrets each), 4 sessions and 10 recovery-code hashes; per
+  source the last 8 outcomes, 16 mint and 32 API timestamps, 8 pending SSO/approval/consent requests.
+  Every stored string has a capped length in a charset JSON never escapes, so the worst case at every cap
+  at once is about 44.5 KB, under the 48 KB row cap without eviction (pinned by `MintStateTest`). Eviction
+  exists only as a guard, in a fixed order: expired tokens, dead sessions, then the least recently active
+  account. Rows idle 24 hours expire; at most 2,000 rows, least recently seen first out.
+- **`mint_codes`, `mint_refresh`** — single-use OAuth codes and rotating refresh tokens, stored as HMACs,
+  consumed by `UPDATE … WHERE used = 0 AND expires > now` with a row-count check inside the transaction
+  that issues the new tokens. At most 4 live codes and 8 live refresh tokens per account, 20,000 rows each.
+- **`mint_turns`** — attribution only (route, outcome, friction kind, scopes, token kind), never served.
+  FIFO at 20,000 rows, pruned after 7 days.
+- **`mint_gauge`** — the global hourly write gauge.
+
+Every state-changing request runs load, decide and write inside one `BEGIN IMMEDIATE` and commits
+before the answer is sent. Every store error inside a transaction (busy or locked, an I/O error, a failed
+commit, a write cap) is one typed failure with nothing changed, answered with a coherent "couldn't save"
+or throttle page. Writes that change account state count against 600 per source per hour and 20,000 in
+all per hour; counter-only writes (a page view's work units, a session's last-seen) do not. No raw secret
+is stored: tokens re-derive from their serials, and passwords, client secrets, codes, refresh tokens and
+recovery codes are kept as keyed hashes.
+
+**Disk bound.** 2,000 rows × 48 KB + 2 × 20,000 side rows × about 200 B + 20,000 attribution rows × about
+200 B is about **108 MB** at the worst case, a constant independent of traffic.
+

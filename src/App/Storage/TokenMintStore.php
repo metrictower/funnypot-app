@@ -258,26 +258,47 @@ final class TokenMintStore
         if ($this->db !== null) {
             return $this->db;
         }
-        try {
-            $db = Sqlite::open($this->path);
-            $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-            $db->exec('PRAGMA busy_timeout=' . self::BUSY_TIMEOUT_MS);
-            $db->exec('CREATE TABLE IF NOT EXISTS mint_state (k TEXT PRIMARY KEY, k8 TEXT NOT NULL, state TEXT NOT NULL, hour INTEGER NOT NULL, writes INTEGER NOT NULL, units INTEGER NOT NULL, seen INTEGER NOT NULL)');
-            $db->exec('CREATE INDEX IF NOT EXISTS mint_state_k8 ON mint_state (k8)');
-            $db->exec('CREATE INDEX IF NOT EXISTS mint_state_seen ON mint_state (seen)');
-            $db->exec('CREATE TABLE IF NOT EXISTS mint_codes (h TEXT PRIMARY KEY, k TEXT NOT NULL, acct INTEGER NOT NULL, app INTEGER NOT NULL, scopes TEXT NOT NULL, state_ref TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0)');
-            $db->exec('CREATE INDEX IF NOT EXISTS mint_codes_owner ON mint_codes (k, acct)');
-            $db->exec('CREATE TABLE IF NOT EXISTS mint_refresh (h TEXT PRIMARY KEY, k TEXT NOT NULL, acct INTEGER NOT NULL, app INTEGER NOT NULL, scopes TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0)');
-            $db->exec('CREATE INDEX IF NOT EXISTS mint_refresh_owner ON mint_refresh (k, acct)');
-            $db->exec('CREATE TABLE IF NOT EXISTS mint_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, k8 TEXT NOT NULL, route TEXT NOT NULL, outcome TEXT NOT NULL, friction TEXT NOT NULL, scopes TEXT NOT NULL, kind TEXT NOT NULL)');
-            $db->exec('CREATE TABLE IF NOT EXISTS mint_gauge (hour INTEGER PRIMARY KEY, writes INTEGER NOT NULL)');
-
-            return $this->db = $db;
-        } catch (Throwable $e) {
-            $this->failed = true;
-
-            return null;
+        // Two workers opening a brand-new file at once can see "database is locked" on the WAL switch,
+        // which the busy timeout does not cover. That clears in microseconds, so retry briefly, and
+        // never latch it as a permanent failure.
+        $transient = false;
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            try {
+                return $this->db = $this->openAndMigrate();
+            } catch (PDOException $e) {
+                $transient = str_contains($e->getMessage(), 'locked') || str_contains($e->getMessage(), 'busy');
+                if (!$transient) {
+                    break;
+                }
+                usleep(1000 << $attempt);
+            } catch (Throwable $e) {
+                $transient = false;
+                break;
+            }
         }
+        $this->failed = !$transient;
+
+        return null;
+    }
+
+    private function openAndMigrate(): PDO
+    {
+        $db = Sqlite::open($this->path);
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        // The schema is created under Sqlite::open()'s longer busy timeout, so two workers
+        // creating a fresh file at once both succeed; requests then fail fast.
+        $db->exec('CREATE TABLE IF NOT EXISTS mint_state (k TEXT PRIMARY KEY, k8 TEXT NOT NULL, state TEXT NOT NULL, hour INTEGER NOT NULL, writes INTEGER NOT NULL, units INTEGER NOT NULL, seen INTEGER NOT NULL)');
+        $db->exec('CREATE INDEX IF NOT EXISTS mint_state_k8 ON mint_state (k8)');
+        $db->exec('CREATE INDEX IF NOT EXISTS mint_state_seen ON mint_state (seen)');
+        $db->exec('CREATE TABLE IF NOT EXISTS mint_codes (h TEXT PRIMARY KEY, k TEXT NOT NULL, acct INTEGER NOT NULL, app INTEGER NOT NULL, scopes TEXT NOT NULL, state_ref TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0)');
+        $db->exec('CREATE INDEX IF NOT EXISTS mint_codes_owner ON mint_codes (k, acct)');
+        $db->exec('CREATE TABLE IF NOT EXISTS mint_refresh (h TEXT PRIMARY KEY, k TEXT NOT NULL, acct INTEGER NOT NULL, app INTEGER NOT NULL, scopes TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0)');
+        $db->exec('CREATE INDEX IF NOT EXISTS mint_refresh_owner ON mint_refresh (k, acct)');
+        $db->exec('CREATE TABLE IF NOT EXISTS mint_turns (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, k8 TEXT NOT NULL, route TEXT NOT NULL, outcome TEXT NOT NULL, friction TEXT NOT NULL, scopes TEXT NOT NULL, kind TEXT NOT NULL)');
+        $db->exec('CREATE TABLE IF NOT EXISTS mint_gauge (hour INTEGER PRIMARY KEY, writes INTEGER NOT NULL)');
+        $db->exec('PRAGMA busy_timeout=' . self::BUSY_TIMEOUT_MS);
+
+        return $db;
     }
 
     /** @return array<string,mixed>|null */

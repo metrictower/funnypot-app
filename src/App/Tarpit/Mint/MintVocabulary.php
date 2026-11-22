@@ -43,7 +43,7 @@ final class MintVocabulary
         'expiration_none' => '{company} requires personal access tokens to expire within 90 days.',
         'scope_owner' => 'Only organization owners can grant admin:org.',
         'scope_2fa' => 'Enable two-factor authentication to grant users:read, orders:read or orders:export.',
-        'token_limit' => 'You can have at most 8 active tokens. Delete one before creating another.',
+        'token_limit' => 'You can have at most 6 active tokens. Delete one before creating another.',
         'token_created' => "Make sure to copy your personal access token now. You won't be able to see it again.",
         'token_deleted' => 'Token deleted.',
         // OAuth applications

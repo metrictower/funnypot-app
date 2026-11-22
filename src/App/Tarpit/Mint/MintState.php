@@ -22,7 +22,9 @@ final class MintState
     public const VERSION = 1;
     public const ROW_CAP = 49152;
     public const MAX_ACCOUNTS = 6;
-    public const MAX_TOKENS = 8;
+    /** Personal access tokens per account; with MAX_OAUTH_TOKENS that is eight tokens in all. */
+    public const MAX_TOKENS = 6;
+    public const MAX_OAUTH_TOKENS = 2;
     public const MAX_APPS = 3;
     public const MAX_SECRETS = 2;
     public const MAX_SIDS = 4;

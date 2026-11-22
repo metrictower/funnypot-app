@@ -11,52 +11,52 @@ use PHPUnit\Framework\TestCase;
 
 final class MintFormsTest extends TestCase
 {
-    private static function never(): \Closure
+    private static function free(): \Closure
     {
         return static fn (string $x): bool => false;
     }
 
     public function test_join_rules_alone_and_all_at_once(): void
     {
-        self::assertSame([], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::never(), self::never()));
-        self::assertSame(['username' => 'username_invalid'], MintForms::join('a', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::never(), self::never()));
-        self::assertSame(['username' => 'username_taken'], MintForms::join('jdoe', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', static fn (string $u): bool => $u === 'jdoe', self::never()));
-        self::assertSame(['email' => 'email_taken'], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::never(), static fn (): bool => true));
-        self::assertSame(['password_confirmation' => 'password_mismatch'], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'other-one', self::never(), self::never()));
+        self::assertSame([], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()));
+        self::assertSame(['username' => 'username_invalid'], MintForms::join('a', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()));
+        self::assertSame(['username' => 'username_taken'], MintForms::join('jdoe', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', static fn (string $u): bool => $u === 'jdoe', self::free()));
+        self::assertSame(['email' => 'email_taken'], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), static fn (): bool => true));
+        self::assertSame(['password_confirmation' => 'password_mismatch'], MintForms::join('artex1', 'a@example.com', 'Passw0rd!x', 'other-one', self::free(), self::free()));
         self::assertSame(
             ['username' => 'username_invalid', 'email' => 'email_invalid', 'password' => 'password_length'],
-            MintForms::join('<x>', 'not-an-email', 'short', 'short', self::never(), self::never()),
+            MintForms::join('<x>', 'not-an-email', 'short', 'short', self::free(), self::free()),
             'every failure of the stage at once'
         );
-        self::assertSame(['password' => 'password_length'], MintForms::join('artex1', 'a@example.com', str_repeat('a', 73), str_repeat('a', 73), self::never(), self::never()));
+        self::assertSame(['password' => 'password_length'], MintForms::join('artex1', 'a@example.com', str_repeat('a', 73), str_repeat('a', 73), self::free(), self::free()));
         foreach (["a\0b", 'ab<', "a\u{e9}b", 'a b', '-ab'] as $bad) {
-            self::assertArrayHasKey('username', MintForms::join($bad, 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::never(), self::never()), $bad);
+            self::assertArrayHasKey('username', MintForms::join($bad, 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()), $bad);
         }
         foreach (['a@b', 'a"b@x.com', "a@x.com\n", 'a@x.c', str_repeat('a', 65) . '@x.com'] as $bad) {
-            self::assertArrayHasKey('email', MintForms::join('artex1', $bad, 'Passw0rd!x', 'Passw0rd!x', self::never(), self::never()), $bad);
+            self::assertArrayHasKey('email', MintForms::join('artex1', $bad, 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()), $bad);
         }
     }
 
     public function test_token_field_stage(): void
     {
-        self::assertSame([], MintForms::token('ci token', '30', ['read:user'], self::never()));
-        self::assertSame(['note' => 'note_blank'], MintForms::token('   ', '30', ['read:user'], self::never()));
-        self::assertSame(['note' => 'note_long'], MintForms::token(str_repeat('a', 101), '30', ['read:user'], self::never()));
+        self::assertSame([], MintForms::token('ci token', '30', ['read:user'], self::free()));
+        self::assertSame(['note' => 'note_blank'], MintForms::token('   ', '30', ['read:user'], self::free()));
+        self::assertSame(['note' => 'note_long'], MintForms::token(str_repeat('a', 101), '30', ['read:user'], self::free()));
         self::assertSame(['note' => 'note_taken'], MintForms::token('dup', '30', ['read:user'], static fn (): bool => true));
-        self::assertSame(['scopes' => 'scopes_none'], MintForms::token('n', '30', [], self::never()));
-        self::assertSame(['scopes' => 'scopes_none'], MintForms::token('n', '30', null, self::never()), 'a non-list scopes field counts as none');
-        self::assertSame(['scopes' => 'scopes_unknown'], MintForms::token('n', '30', ['read:user', 'repo'], self::never()));
-        self::assertSame(['expiration' => 'expiration_none'], MintForms::token('n', 'none', ['read:user'], self::never()));
-        self::assertSame(['expiration' => 'expiration_bad'], MintForms::token('n', '365', ['read:user'], self::never()));
+        self::assertSame(['scopes' => 'scopes_none'], MintForms::token('n', '30', [], self::free()));
+        self::assertSame(['scopes' => 'scopes_none'], MintForms::token('n', '30', null, self::free()), 'a non-list scopes field counts as none');
+        self::assertSame(['scopes' => 'scopes_unknown'], MintForms::token('n', '30', ['read:user', 'repo'], self::free()));
+        self::assertSame(['expiration' => 'expiration_none'], MintForms::token('n', 'none', ['read:user'], self::free()));
+        self::assertSame(['expiration' => 'expiration_bad'], MintForms::token('n', '365', ['read:user'], self::free()));
         foreach (['<script>', "a\"b", "a'b", 'a&b', "a\0b", "caf\u{e9}"] as $bad) {
-            self::assertSame(['note' => 'note_charset'], MintForms::token($bad, '30', ['read:user'], self::never()), $bad);
+            self::assertSame(['note' => 'note_charset'], MintForms::token($bad, '30', ['read:user'], self::free()), $bad);
         }
-        self::assertCount(3, MintForms::token(null, null, null, self::never()));
+        self::assertCount(3, MintForms::token(null, null, null, self::free()));
     }
 
     public function test_app_rules_and_callback_forms(): void
     {
-        self::assertSame([], MintForms::app('my-app', 'https://app.example.com', 'https://app.example.com/cb', '', self::never()));
+        self::assertSame([], MintForms::app('my-app', 'https://app.example.com', 'https://app.example.com/cb', '', self::free()));
         foreach (MintForms::CALLBACK_FORMS as $kind => $form) {
             foreach ($form['examples'] as $cb) {
                 self::assertTrue(MintForms::validCallback($cb), "{$kind}: {$cb}");
@@ -64,15 +64,15 @@ final class MintFormsTest extends TestCase
         }
         foreach (MintForms::REFUSED_CALLBACKS as $cb) {
             self::assertFalse(MintForms::validCallback($cb), $cb);
-            self::assertSame(['callback_url' => 'callback_invalid'], MintForms::app('a', 'https://a.example.com', $cb, '', self::never()), 'the ordinary invalid-callback error');
+            self::assertSame(['callback_url' => 'callback_invalid'], MintForms::app('a', 'https://a.example.com', $cb, '', self::free()), 'the ordinary invalid-callback error');
         }
         foreach (['http://evil.example/cb', 'javascript:alert(1)', 'https://a.example.com/"x', 'ftp://a.example.com/', 'https://a.example.com/#x', 'https://' . str_repeat('a', 200) . '.com', '//evil.example/cb', 'http://127.0.0.2/cb', 'http://localhost.evil.example/cb'] as $bad) {
             self::assertFalse(MintForms::validCallback($bad), $bad);
         }
-        self::assertSame(['description' => 'description_charset'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', '<b>', self::never()));
-        self::assertSame(['description' => 'description_long'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', str_repeat('a', 201), self::never()));
+        self::assertSame(['description' => 'description_charset'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', '<b>', self::free()));
+        self::assertSame(['description' => 'description_long'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', str_repeat('a', 201), self::free()));
         self::assertSame(['name' => 'app_name_taken'], MintForms::app('a', 'https://a.example.com', 'https://a.example.com/cb', '', static fn (): bool => true));
-        self::assertCount(3, MintForms::app(null, null, null, null, self::never()));
+        self::assertCount(3, MintForms::app(null, null, null, null, self::free()));
     }
 
     public function test_type_confusion_reads_as_missing_without_a_warning(): void
@@ -92,7 +92,7 @@ final class MintFormsTest extends TestCase
             self::assertNull($r->strList('scopes2'), 'a nested map is not a list of strings');
             self::assertNull($r->str('csrf_token'));
             self::assertNull($r->str('expiration'));
-            self::assertCount(3, MintForms::token($r->str('note'), $r->str('expiration'), $r->strList('scopes'), self::never()));
+            self::assertCount(3, MintForms::token($r->str('note'), $r->str('expiration'), $r->strList('scopes'), self::free()));
 
             $json = MintRequest::parse(new RequestContext('POST', '/api/v2/user', '', ['Content-Type' => 'application/json'], '[1,2,3]'), $match, '1.2.3.4');
             self::assertTrue($json->badJson, 'a JSON array where an object is expected');

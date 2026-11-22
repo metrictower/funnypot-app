@@ -58,7 +58,7 @@ for ($i = 0; $i < $rounds; $i++) {
             $p = $decoy->prepare(new RequestContext('POST', '/settings/tokens', '', $headers, http_build_query($fields)), (string) $args['ip']);
             if ($p !== null && $p->status === 303 && $p->header('Location') === '/settings/tokens') {
                 $facts['ok']++;
-            } elseif ($p !== null && $p->status === 422 && str_contains($p->body, 'at most 8 active tokens')) {
+            } elseif ($p !== null && $p->status === 422 && preg_match('/at most \\d+ active tokens/', $p->body) === 1) {
                 $facts['fail']++;
             } else {
                 $facts['other']++;
@@ -68,7 +68,12 @@ for ($i = 0; $i < $rounds; $i++) {
             $u = 'j' . substr(md5(getmypid() . '-' . $i), 0, 10);
             $fields = ['csrf_token' => $args['csrf'], 'username' => $u, 'email' => $u . '@example.com', 'password' => 'Passw0rd!x', 'password_confirmation' => 'Passw0rd!x'];
             $p = $decoy->prepare(new RequestContext('POST', '/join', '', $headers, http_build_query($fields)), (string) $args['ip']);
-            $p !== null && $p->status === 303 ? $facts['ok']++ : $facts['other']++;
+            if ($p !== null && $p->status === 303) {
+                $facts['ok']++;
+            } else {
+                $facts['other']++;
+                $facts['why'] ??= ($p === null ? 'null' : $p->status . ' ' . ($p->turn['outcome'] ?? ''));
+            }
             $facts['tokens'][] = $u;
             break;
         default:

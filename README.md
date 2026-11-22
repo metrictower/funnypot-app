@@ -159,6 +159,59 @@ Job creation returns explicit **202 Accepted** with `Location`, not PHP's implic
 real-front-controller integration test checks this alongside disabled-state behavior, the shared tarpit
 budget and the existing service-profile lookup's fail-neutral behavior on malformed status paths.
 
+A **token-mint account surface** (`src/App/Tarpit/Mint/`) gives an agent that has learned to "sign in,
+then turn the session into a durable credential" exactly that loop, and nothing at the end of it. It is
+a generic "<Company> account" (the persona's company): sign-up at `/join`, a Developer settings area
+with **personal access tokens** (`/settings/tokens`) and **OAuth applications**
+(`/settings/applications`), two-factor enrolment with a real RFC 6238 TOTP and recovery codes,
+confirm-access, an OAuth authorization-code flow with rotating refresh tokens, and a **member API** under
+both `/api/v2/` and `/v2/` (the two spellings core's `/api/v2` index and OpenAPI docs publish). Every
+credential works: a token authenticates, `GET …/user` returns the account. What it can reach is a
+member's view: organisation data (`users`, `orders`, `orders/{id}`, `orders/exports`) answers the
+**single-sign-on 403** for a personal token or JWT and the **owner-approval 403** for an OAuth token, the
+SSO page leads to a same-host identity provider that never signs anyone in, and approval stays pending.
+`admin:org` is refused, a member never sees an admin link, and the login API answers a persona member's
+username with "signs in through SSO" without looking at the password, so a leaked password is neither
+confirmed nor refuted.
+- **Form friction.** The mint forms (token, OAuth app, client secret, consent) run every true check
+  first, then a keyed picker (`FrictionPicker`) may answer with one plausible obstacle a real service
+  shows: a stale form, a lapsed session, a lapsed confirm window, a throttle, an edit conflict or a
+  transient save failure. Each is eligible only when its story is true (the form really is two minutes
+  old) and is applied as a real state change, so the next request agrees with it. The picker reads a
+  closed list of state fields, never the source, so the same history gives the same answer anywhere,
+  and every answer changes the next pick's inputs. `FUNNYPOT_TARPIT_TOKEN_FRICTION=0` keeps the true
+  checks and drops the obstacles.
+- **Where it answers.** A closed set of paths, owned by path alone. It joins `HoneypotController` at
+  the serve seam: detection, the hit row's fields and the AbuseIPDB / Threat Intel reports are built
+  exactly as for any request, and only the response body is the surface's. The row's `served` flag
+  tells the truth: an answer that discloses no object (every 401, and the 403/404 or no-session redirect
+  on an id-bearing path) is logged unserved and feeds the bulk-scan pin like the miss it replaces. The
+  serve delay is paid exactly when the engine served nothing, so latency never shows which answered. No
+  backup-archive or text-decoy path, no `.php` name and no other `/api/v2/*` path is ever owned. The
+  public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
+  one sign-up link, a sign-in to an account this source created signs in, and every other credential
+  takes the unchanged funnel byte for byte.
+- **Inert and closed.** Nothing fetches or executes; a callback URL is stored text, shown as text. No
+  answer is a 5xx or a 302, every header comes from a closed list, every redirect is one of the
+  surface's own pages, and OAuth never redirects at all: consent, the issued code, a denial and every
+  error render on the surface's own pages, and the client's `state` appears only in the consent POST's
+  answer, escaped. Nothing from a GET query or a path is ever echoed.
+- **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
+  hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
+  decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a
+  failed commit, a write cap) answers a coherent "couldn't save" or throttle page with nothing changed.
+  No raw secret is stored: tokens re-derive from their serials and secrets are kept as HMACs. Work is
+  bounded by a per-source **request ledger** (1,500 units an hour; no wall clock), input caps (16 KB
+  body, 64 pairs, JSON 8 KB / depth 4) and the store's caps (about 108 MB worst case; see
+  `docs/DATA-LAYER-DECISION.md`).
+- **Gates.** Wired only with `FUNNYPOT_TARPIT=1` and `FUNNYPOT_TARPIT_TOKEN_MINT=1`, in public mode, when
+  the identity bundle carries the `token-mint/v1` key (else `code=token-mint-key-missing`) and the store
+  migrates (else `code=token-mint-migration-failed`); otherwise every owned path answers as today.
+- **Bench.** `php scripts/bench/token-mint-loop.php [profile|all] [steps] [seeds]` drives a scripted
+  mint-and-use agent through the real `Router` (fast, slow, cookie-dropping and zero-think profiles) and
+  reports the friction histogram, mints, API calls and goal-proof bytes (always 0);
+  `scripts/bench/token-mint-report.php` summarises a store's attribution table.
+
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
 vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a probe carrying a
@@ -339,6 +392,7 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 | **Router / TR-069 worm trap** | **TR-069 / CWMP** (7547, alias 7548) poses as a vulnerable home broadband gateway (CPE) that mistakenly exposes its TR-064 / CWMP config service on the WAN port — the misconfiguration the 2016-era router worms (Mirai/Mozi/Gafgyt variants, CVE-2016-10372) hunt for. It accepts the worm's `SetNTPServers` / `SetParameterValues` / `Download` SOAP, returns a plausible success frame so the worm believes it succeeded and proceeds to its download step, and **captures the injected shell command + every malware C2 download URL, host, binary name and CPU arch** (ARM/MIPS/x86 multi-arch droppers) as high-value intel. Answers the ACS connection-request GET with a Digest `401`. 100% inert: the command is never executed and the captured URL is never fetched, resolved, or contacted; attacker SOAP is parsed by regex on the raw bytes (never a DOM/SimpleXML parser) so it cannot be turned into an XXE SSRF pivot. `FUNNYPOT_CWMP_MODE=low` answers a SOAP Fault instead. |
 | **SIP / VoIP PBX honeypot** | A high-interaction Asterisk-persona SIP service on 5060 (UDP + TCP) with RTP media on 10000/udp. Accepts weak/default SIP credentials (latched so a spray tool sees exactly one working password), then answers calls with a per-caller cycle of **real recorded voice personas** (Lenny, El Chango, 1913 "Cohen on the Telephone", …) that tarpit the caller — recording both ends as stereo audio with faint line-hiss so it never reads as dead silence. Captures **DTMF** (RFC 4733 + SIP INFO) and **SIP MESSAGE** smishing/spam bodies. Attributes each caller (User-Agent, tool guess — SIPVicious/sipcli/…, transport tells) and reports VoIP fraud to AbuseIPDB (category 8). Byte-faithful to Asterisk (Server-only headers, `501` to unknown methods, `received=/rport=`) to survive scanner fingerprinting. Hardened against RTP reflection/amplification + per-source call flooding (an adaptive admission throttle silently drops a sustained INVITE/REGISTER flood past a burst — no response bytes, no session, per-call logging collapsed to a rollup — and auto-recovers), fault-isolated so a bad message never crashes the listener; never bridges, dials, relays, or executes anything. Reachable on extra SIP ports (5061, 5080) for wider scanner discovery, with a companion **STUN** responder (3478/udp) rounding out the VoIP footprint (Binding-only, anti-amplification, no TURN relay). |
 | **Docker Engine API decoy** (opt-in) | A believable unauthenticated `dockerd` on 2375/4243 that engages a full container-escape playbook — a `create` for a non-local image returns `404 No such image` (inducing the bot's `POST /images/create`), the pull is answered with a **seeded, bounded, non-blocking fake progress stream that never contacts a registry**, then create → `start` → `inspect` → `logs` → `wait` → `exec` all return coherent, non-executing responses backed by a bounded/TTL'd phantom-container record (per attacker, invisible to others). It **parses the escape intent** — `HostConfig` binds (`/:/host`, docker.sock), `Privileged`, `PidMode`/`NetworkMode`/`IpcMode`/`UTSMode`/`UsernsMode`, `CgroupParent`, `CapAdd`, `SecurityOpt`, devices, plus a cryptojacking/dropper fingerprint — into a bounded, structured record classified `docker_escape` (critical) / `docker_api` / `docker_recon`. Read-only recon never reports; the intent verb (create/pull/start/exec) reports once through the sanitising `ReportComment` seam (env values, container names, and the `X-Registry-Auth` password — reduced to a seed-keyed HMAC token — never enter the public comment). Port-scoped: the distinctive Docker path shapes are claimed on any port, but bare `/version`/`/info` only on a Docker port (so a benign `/version` on :80 is not mis-reported). **100% inert** — no process, socket, registry, or host path is ever touched (structurally enforced by a source scan). Deterministic per deploy seed. Enable with `FUNNYPOT_DOCKER_API=1`. (2376/TLS is documented but not currently listened in `demo/nginx.conf` — a separate ticket.) |
+| **Token-mint account surface** (opt-in) | A generic company developer account where an agent can sign up, mint personal access tokens, register OAuth apps, enrol 2FA and call a member API under `/api/v2/` and `/v2/`; every credential authenticates, every organisation-data call ends at a single-sign-on or owner-approval 403, and the mint forms answer with true-to-the-moment friction. Rides the tarpit switch; see above. |
 | **Emulation catalog** | Auto-registering list of every capability; a sparse JSON file, or the dashboard, toggles each on or off. |
 | **Anti-fingerprint** | One coherent product persona per attacker (deterministic, spoof-proof seed) instead of an impossible "vulnerable to everything" host. Per-host self-signed certs, consistent `X-Powered-By`, a tamper-evident honeytoken cookie. |
 

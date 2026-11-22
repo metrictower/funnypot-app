@@ -24,7 +24,7 @@ final class MintStateTest extends TestCase
         $s->d['an'] = 4294967295;
         $s->d['rn'] = 4294967295;
         for ($a = 0; $a < MintState::MAX_ACCOUNTS; $a++) {
-            $pos = $s->addAccount('a' . self::maximal(38, 'Z9._-'), self::maximal(64, '%+._') . '@' . self::maximal(63, 'a.-') . '.' . str_repeat('z', 24), str_repeat('A', 43) . '=', self::NOW);
+            $pos = $s->addAccount($a . self::maximal(38, 'Z9._-'), $a . self::maximal(63, '%+._') . '@' . self::maximal(63, 'a.-') . '.' . str_repeat('z', 24), str_repeat('A', 43) . '=', self::NOW);
             $acct = &$s->d['a'][$pos];
             $acct['nm'] = self::maximal(160);
             $acct['bi'] = self::maximal(160);
@@ -35,11 +35,13 @@ final class MintStateTest extends TestCase
             $acct['rt'] = '/settings/applications/' . str_repeat('f', 12);
             $acct['fl'] = ['sc' => [4294967295, 4294967295]];
             $acct['rl'] = [4294967295, 4294967295];
-            for ($t = 0; $t < MintState::MAX_TOKENS + 4; $t++) {
-                $acct['k'][] = ['n' => 4294967295, 'v' => 63, 'k' => $t < MintState::MAX_TOKENS ? 'pat' : 'oat', 'id' => str_repeat('f', 12),
-                    'nt' => $t < MintState::MAX_TOKENS ? self::maximal(100) : '',
-                    'sc' => ['admin:org', 'orders:export', 'orders:read', 'read:org', 'read:user', 'user:write', 'users:read'],
-                    'c' => 4294967295, 'x' => 4294967295, 'lu' => 4294967295, 'ap' => 4294967295, 'rl' => [4294967295, 4294967295]];
+            for ($t = 0; $t < MintState::MAX_TOKENS + MintState::MAX_OAUTH_TOKENS; $t++) {
+                $pat = $t < MintState::MAX_TOKENS;
+                // admin:org is refused at mint and never stored; every other scope can be.
+                $acct['k'][] = ['n' => 4294967295, 'v' => 63, 'k' => $pat ? 'pat' : 'oat', 'id' => str_repeat('f', 12),
+                    'nt' => $pat ? self::maximal(100) : '',
+                    'sc' => ['orders:export', 'orders:read', 'read:org', 'read:user', 'user:write', 'users:read'],
+                    'c' => 4294967295, 'x' => 4294967295, 'lu' => 4294967295, 'ap' => $pat ? null : 4294967295, 'rl' => [4294967295, 4294967295]];
             }
             for ($p = 0; $p < MintState::MAX_APPS; $p++) {
                 $acct['ap'][] = ['n' => 4294967295, 'id' => str_repeat('f', 12), 'nm' => self::maximal(100), 'hp' => 'https://' . self::maximal(192, 'a/'),
@@ -112,8 +114,9 @@ final class MintStateTest extends TestCase
         self::assertCount(MintState::MAX_ACCOUNTS, $s->d['a'], 'dead sessions went next');
         self::assertCount(1, $s->d['a'][0]['s']);
         $lru = $s->d['a'][0]['u'];
-        self::assertTrue($s->fit($now, 40000));
-        self::assertLessThanOrEqual(40000, strlen($s->toJson()));
+        $budget = strlen($s->toJson()) - 1;
+        self::assertTrue($s->fit($now, $budget));
+        self::assertLessThanOrEqual($budget, strlen($s->toJson()));
         self::assertLessThan(MintState::MAX_ACCOUNTS, count($s->d['a']), 'then accounts');
         self::assertNotContains($lru, array_column($s->d['a'], 'u'), 'the least recently active account went first');
     }

@@ -161,8 +161,9 @@ final class MintApi
         switch ($r->route) {
             case 'user':
                 if ($method === 'PATCH') {
-                    $name = array_key_exists('name', $r->body) ? $r->str('name') : (string) $a['nm'];
-                    $bio = array_key_exists('bio', $r->body) ? $r->str('bio') : (string) $a['bi'];
+                    // A field that is absent, or not a string, keeps its stored value.
+                    $name = $r->str('name') ?? (string) $a['nm'];
+                    $bio = $r->str('bio') ?? (string) $a['bi'];
                     $errors = MintForms::profile($name, $bio);
                     if ($errors !== []) {
                         $list = [];

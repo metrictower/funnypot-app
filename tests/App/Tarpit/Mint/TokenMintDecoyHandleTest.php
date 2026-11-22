@@ -291,6 +291,8 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertSame('member', $p['role']);
         self::assertArrayNotHasKey('is_admin', $p);
         self::assertSame('member', self::json($h->get('/v2/user', '', 'default', MintHarness::IP, ['Authorization' => 'Bearer ' . $tok]))['role']);
+        $confused = $h->request('PATCH', '/api/v2/user', '', '{"name":["x"],"bio":{"a":1}}', ['Authorization' => 'Bearer ' . $tok, 'Content-Type' => 'application/json']);
+        self::assertSame('Ar Tex', self::json($confused)['name'], 'a non-string field reads as missing');
     }
 
     // --- 5. reflection canaries ----------------------------------------------------------------------

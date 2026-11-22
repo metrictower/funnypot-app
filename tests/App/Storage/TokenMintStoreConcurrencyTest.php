@@ -183,7 +183,7 @@ final class TokenMintStoreConcurrencyTest extends TestCase
         $page = $this->send('GET', '/join');
         $args = ['csrf' => self::csrf($page->body), 'rounds' => 50];
         $f = $this->race('join', $args, $args);
-        self::assertSame(100, $f[0]['ok'] + $f[1]['ok']);
+        self::assertSame(100, $f[0]['ok'] + $f[1]['ok'], (string) json_encode([$f[0]['why'] ?? null, $f[1]['why'] ?? null]));
         $s = $this->state();
         self::assertGreaterThanOrEqual(100, (int) $s->d['an'], 'every sign-up took a serial');
         self::assertCount(MintState::MAX_ACCOUNTS, $s->d['a']);

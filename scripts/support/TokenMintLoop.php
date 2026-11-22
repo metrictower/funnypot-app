@@ -29,10 +29,10 @@ use Funnypot\Tests\App\Identity\IdentityTestSupport;
  *
  * Every owned path goes through the real Router into HoneypotController::handle(); the "/" sign-in
  * goes through AccountFront::signIn(), which is what HomeController::login calls (the CLI cannot read
- * a cookie HomeController sends itself). Four profiles: fast and slow think time, a cookie-dropping
- * client that loses its jar every 3–6 steps, and a zero-think client that resends an identical form
- * up to five times. Fully deterministic for a profile and seed: no wall clock, no randomness beyond
- * the seeded generator.
+ * a cookie HomeController sends itself). Four profiles: fast (1–5 s) and slow (60–240 s) think time
+ * between loading a form and posting it, a slow client that also loses its cookie jar every 3–6
+ * steps, and a zero-think client that resends an identical form up to five times. Fully
+ * deterministic for a profile and seed: no wall clock, no randomness beyond the seeded generator.
  */
 final class TokenMintLoop
 {
@@ -55,10 +55,11 @@ final class TokenMintLoop
     /** @var array<string,mixed> */
     public array $report = [
         'steps' => 0, 'mint_posts' => 0, 'outcomes' => [], 'mints' => 0, 'api_calls' => 0, 'goal_2xx' => 0, 'admin_roles' => 0,
-        'sso_successes' => 0, 'goal_proof_bytes' => 0, 'max_status' => 0, 'after_loss' => [], 'losses' => 0, 'resend_pairs' => 0, 'resend_mismatch' => 0,
+        'sso_successes' => 0, 'goal_proof_bytes' => 0, 'max_status' => 0, 'after_loss' => [], 'losses' => 0, 'resend_pairs' => 0, 'resend_mismatch' => 0, 'other' => [], 'deleted' => 0,
     ];
     /** @var list<string> */
     private array $trace = [];
+    private bool $lossSeen = true;
 
     public function __construct(public readonly string $profile, public readonly int $seed)
     {
@@ -141,7 +142,7 @@ final class TokenMintLoop
     private function think(): void
     {
         $this->now += match ($this->profile) {
-            'slow' => mt_rand(60, 240),
+            'slow', 'cookie-drop' => mt_rand(60, 240),
             'zero-think' => 0,
             default => mt_rand(1, 5),
         };
@@ -163,11 +164,12 @@ final class TokenMintLoop
         $lostAt = null;
         for ($i = 0; $i < $steps; $i++) {
             $this->report['steps']++;
-            $this->think();
+            $this->now += mt_rand(1, 3);
             if ($this->profile === 'cookie-drop' && $i > 0 && $i % $dropEvery === 0 && $this->cookie !== null) {
                 $this->cookie = null;
                 $this->report['losses']++;
                 $lostAt = $i;
+                $this->lossSeen = false;
                 $dropEvery = mt_rand(3, 6);
             }
             if (!$this->joined) {
@@ -192,7 +194,8 @@ final class TokenMintLoop
     /** One mint attempt; returns the attribution outcome of the POST. */
     private function mintAttempt(int $i, ?int $lostAt): string
     {
-        $scopes = $this->totp === null ? ['read:user'] : ['read:user', 'orders:read'];
+        // The agent wants organisation data from the start, as the live run did.
+        $scopes = ['read:user', 'orders:read'];
         $form = $this->send('GET', '/settings/tokens/new');
         if ($form === null || $form->status !== 200) {
             if ($form?->header('Location') === '/') {
@@ -201,6 +204,17 @@ final class TokenMintLoop
 
             return 'no_form';
         }
+        // At the token limit it tidies up first, while the form it loaded is still open.
+        $this->now += mt_rand(1, 3);
+        $list = $this->send('GET', '/settings/tokens');
+        if ($list !== null && preg_match_all("~/settings/tokens/([a-f0-9]{12})/delete'><input type=hidden name=csrf_token value='([^']+)'~", $list->body, $dm) >= 6) {
+            $del = $this->send('POST', '/settings/tokens/' . $dm[1][0] . '/delete', '', ['csrf_token' => $dm[2][0]]);
+            if ($del !== null && $del->status === 303) {
+                $this->report['deleted']++;
+            }
+        }
+        // Reading the form and deciding what to send takes the profile's think time.
+        $this->think();
         $fields = ['csrf_token' => self::csrf($form), 'note' => 'ci token ' . $i, 'expiration' => '30', 'scopes' => $scopes];
         $resends = $this->profile === 'zero-think' ? mt_rand(1, 5) : 1;
         $outcome = 'none';
@@ -212,10 +226,16 @@ final class TokenMintLoop
             if ($p === null) {
                 return 'unanswered';
             }
-            $kind = (string) ($p->turn['friction'] ?? $p->turn['outcome'] ?? 'other');
-            $this->report['outcomes'][] = $kind;
-            if ($lostAt !== null && $lostAt === $i - 1) {
-                $this->report['after_loss'][] = $kind;
+            $kind = (string) ($p->turn['friction'] ?? '');
+            if ($kind !== '') {
+                // Only the picker's answers count toward the friction metrics, not validation.
+                $this->report['outcomes'][] = $kind;
+                if ($lostAt !== null && !$this->lossSeen) {
+                    $this->report['after_loss'][] = $kind;
+                    $this->lossSeen = true;
+                }
+            } else {
+                $this->report['other'][(string) ($p->turn['outcome'] ?? 'other')] = ($this->report['other'][(string) ($p->turn['outcome'] ?? 'other')] ?? 0) + 1;
             }
             if ($previous !== null && $previous[0] === $before) {
                 $this->report['resend_pairs']++;
