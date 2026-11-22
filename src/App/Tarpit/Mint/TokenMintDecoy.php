@@ -110,18 +110,18 @@ final class TokenMintDecoy
         if (!in_array($r->method, $allowed, true)) {
             $plan = $json
                 ? MintPlan::json(405, ['message' => MintVocabulary::text('method')])
-                : MintPlan::html(405, $this->c->pages->methodNotAllowed());
+                : MintPlan::html(405, $this->c->pages->methodNotAllowed($this->c->signedIn($r)));
 
             return $plan->with('Allow', implode(', ', $allowed))->attribute(['outcome' => 'method']);
         }
         if ($r->tooLarge) {
             return ($json
                 ? MintPlan::json(413, ['message' => MintVocabulary::text('body_too_large')])
-                : MintPlan::html(413, $this->c->pages->error('Request too large', MintVocabulary::text('body_too_large'), '/', 'Go home', false)))
+                : MintPlan::html(413, $this->c->pages->error('Request too large', MintVocabulary::text('body_too_large'), '/', 'Go home', $this->c->signedIn($r))))
                 ->attribute(['outcome' => 'too_large']);
         }
         if ($r->route === 'docs') {
-            return MintPlan::html(200, $this->c->pages->docs($this->c->session($r, $this->c->now()) !== null));
+            return MintPlan::html(200, $this->c->pages->docs($this->c->signedIn($r)));
         }
         if ($r->api) {
             return $this->api->handle($r);

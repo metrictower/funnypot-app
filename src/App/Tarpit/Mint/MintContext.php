@@ -68,22 +68,23 @@ final class MintContext
     // --- units -----------------------------------------------------------------------------------
 
     /** The 429 a source over its hourly units gets, or null. */
-    public function overUnits(TokenMintTx $tx, int $cost, bool $json): ?MintPlan
+    public function overUnits(TokenMintTx $tx, int $cost, bool $json, bool $signedIn = false): ?MintPlan
     {
         if ($tx->unitsUsed + $cost <= self::UNITS_PER_HOUR) {
             return null;
         }
         $retry = 3600 - ($tx->now % 3600);
 
-        return $this->throttledPlan($retry, $json);
+        return $this->throttledPlan($retry, $json, $signedIn);
     }
 
-    public function throttledPlan(int $retry, bool $json): MintPlan
+    /** The throttle answer; an HTML one shows the nav for the visitor's real session state. */
+    public function throttledPlan(int $retry, bool $json, bool $signedIn): MintPlan
     {
         $text = MintVocabulary::text('throttled', ['wait' => MintVocabulary::wait($retry)]);
         $plan = $json
             ? MintPlan::json(429, ['message' => $text, 'documentation_url' => '/docs/api'])
-            : MintPlan::html(429, $this->pages->error('Too many requests', $text, '/', 'Go home'));
+            : MintPlan::html(429, $this->pages->error('Too many requests', $text, '/', 'Go home', $signedIn));
 
         return $plan->with('Retry-After', (string) $retry)->attribute(['outcome' => 'throttled']);
     }
@@ -95,6 +96,25 @@ final class MintContext
     }
 
     // --- sessions --------------------------------------------------------------------------------
+
+    /**
+     * Whether the request carries a session that is live in committed state. A read only, for pages
+     * that show the nav without touching the account; any fault reads as signed out.
+     */
+    public function signedIn(MintRequest $r): bool
+    {
+        try {
+            $now = $this->now();
+            $sess = $this->session($r, $now);
+            if ($sess === null) {
+                return false;
+            }
+
+            return $this->liveAccount($this->store->load(bin2hex($sess['kref'])), $sess, $now) !== null;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
 
     /** @return array{kref:string,acct:int,sid:string,issuedAt:int}|null */
     public function session(MintRequest $r, int $now): ?array

@@ -400,7 +400,7 @@ final class AccountPages
     }
 
     /** A form-level answer: an expired form, a save failure, a conflict, a throttle. */
-    public function error(string $title, string $message, string $backHref, string $backLabel, bool $signedIn = true): string
+    public function error(string $title, string $message, string $backHref, string $backLabel, bool $signedIn): string
     {
         $main = '<div class=card><h1>' . self::e($title) . '</h1><p class=err>' . self::e($message) . '</p>'
             . "<p><a href='" . self::e($backHref) . "'>" . self::e($backLabel) . '</a></p></div>';
@@ -413,8 +413,8 @@ final class AccountPages
         return $this->layout('Not Found', '<div class=card><h1>Not Found</h1><p>' . $this->msg($messageKey) . "</p><p><a href='/'>Go home</a></p></div>", $signedIn);
     }
 
-    public function methodNotAllowed(): string
+    public function methodNotAllowed(bool $signedIn): string
     {
-        return $this->layout('Method Not Allowed', '<div class=card><h1>Method Not Allowed</h1></div>', false);
+        return $this->layout('Method Not Allowed', '<div class=card><h1>Method Not Allowed</h1></div>', $signedIn);
     }
 }

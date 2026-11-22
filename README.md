@@ -191,7 +191,8 @@ confirmed nor refuted.
   backup-archive or text-decoy path, no `.php` name and no other `/api/v2/*` path is ever owned. The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
-  takes the unchanged funnel byte for byte.
+  takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,
+  never the cookie alone, so a lapsed or signed-out session reads as signed out everywhere.
 - **Inert and closed.** Nothing fetches or executes; a callback URL is stored text, shown as text. No
   answer is a 5xx or a 302, every header comes from a closed list, every redirect is one of the
   surface's own pages, and OAuth never redirects at all: consent, the issued code, a denial and every

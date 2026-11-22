@@ -40,10 +40,10 @@ final class AccountFront
             };
             $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($sess, $now, $render) {
                 $units = MintContext::charge($tx, MintContext::COST_GET);
-                if (($over = $this->c->overUnits($tx, MintContext::COST_GET, false)) !== null) {
+                $pos = $this->c->liveAccount($s, $sess, $now);
+                if (($over = $this->c->overUnits($tx, MintContext::COST_GET, false, $pos !== null)) !== null) {
                     return MintContext::out(null, false, $units, $over);
                 }
-                $pos = $this->c->liveAccount($s, $sess, $now);
                 if ($s === null || $pos === null) {
                     return MintContext::out(null, false, $units, null);
                 }

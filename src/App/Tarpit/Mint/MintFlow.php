@@ -83,10 +83,10 @@ final class MintFlow
         $cost ??= $form ? MintContext::COST_POST : MintContext::COST_GET;
         $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $sess, $now, $cost, $body) {
             $units = MintContext::charge($tx, $cost);
-            if (($over = $this->c->overUnits($tx, $cost, false)) !== null) {
+            $pos = $this->c->liveAccount($s, $sess, $now);
+            if (($over = $this->c->overUnits($tx, $cost, false, $pos !== null)) !== null) {
                 return MintContext::out(null, false, $units, $over);
             }
-            $pos = $this->c->liveAccount($s, $sess, $now);
             if ($s === null || $pos === null) {
                 return MintContext::out(null, false, $units, $this->noSession($r));
             }
@@ -123,7 +123,7 @@ final class MintFlow
     public function formFailure(string $why, string $back, bool $signedIn): MintPlan
     {
         if ($why === TokenMintStore::FAIL_CAP) {
-            return $this->c->throttledPlan(300, false)->attribute(['outcome' => 'store_cap']);
+            return $this->c->throttledPlan(300, false, $signedIn)->attribute(['outcome' => 'store_cap']);
         }
 
         return MintPlan::html(422, $this->c->pages->error('Something went wrong', MintVocabulary::text('transient'), $back, 'Back', $signedIn))
@@ -165,10 +165,11 @@ final class MintFlow
         if ($this->c->csrf->verify($r->str(CsrfCodec::FIELD), $kref, 'join', 0, $now) === null) {
             return $this->csrfFailure('/join', false);
         }
+        $signedIn = $this->c->signedIn($r);
         [$k, $k8] = MintContext::rowKeys($kref);
-        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $kref, $now) {
+        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $kref, $now, $signedIn) {
             $units = MintContext::charge($tx, MintContext::COST_POST);
-            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false)) !== null) {
+            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false, $signedIn)) !== null) {
                 return MintContext::out(null, false, $units, $over);
             }
             $state = $s ?? $this->c->newState($kref, $now);
@@ -201,7 +202,7 @@ final class MintFlow
             return MintContext::out($state, true, $units, $plan);
         });
 
-        return $res['ok'] ? $res['value'] : $this->formFailure((string) $res['failure'], '/join', false);
+        return $res['ok'] ? $res['value'] : $this->formFailure((string) $res['failure'], '/join', $signedIn);
     }
 
     private function signoutPost(MintRequest $r): MintPlan
@@ -414,7 +415,7 @@ final class MintFlow
                 return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
-                return [$this->c->throttledPlan((int) $a['ru'] - $now, false), false];
+                return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];
             }
             if (count(array_filter($a['k'], static fn (array $t): bool => $t['k'] === 'pat')) >= MintState::MAX_TOKENS) {
                 return [$form(['note' => 'token_limit']), false];
@@ -527,13 +528,13 @@ final class MintFlow
                 $d = [60, 120, 300][$this->c->friction->draw('throttle', $state, $shape, $history, 3)];
                 $s->d['a'][$pos]['ru'] = $now + $d;
 
-                return $this->c->throttledPlan($d, false);
+                return $this->c->throttledPlan($d, false, true);
             case 'edit_conflict':
                 $s->d['a'][$pos]['ce']++;
 
-                return MintPlan::html(409, $this->c->pages->error('Edit conflict', MintVocabulary::text('edit_conflict'), $formPage, 'Review and resubmit'));
+                return MintPlan::html(409, $this->c->pages->error('Edit conflict', MintVocabulary::text('edit_conflict'), $formPage, 'Review and resubmit', true));
             default:
-                return MintPlan::html(422, $this->c->pages->error('Something went wrong', MintVocabulary::text('transient'), $formPage, 'Back'));
+                return MintPlan::html(422, $this->c->pages->error('Something went wrong', MintVocabulary::text('transient'), $formPage, 'Back', true));
         }
     }
 
@@ -586,7 +587,7 @@ final class MintFlow
                 return [MintPlan::html(422, $this->c->pages->appNew($this->csrf($sess, 'app_create', $s, $pos, $now), $values, $errors))->attribute(['outcome' => 'invalid']), false];
             }
             if ((int) $a['ru'] > $now) {
-                return [$this->c->throttledPlan((int) $a['ru'] - $now, false), false];
+                return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];
             }
             $shape = 'app_create|' . intdiv(strlen((string) $fields['name']), 10) . '|' . (str_starts_with((string) $fields['callback_url'], 'https') ? 's' : 'l');
             $kind = $this->pick($s, $pos, $sess, $now, $issued, false, $shape);
@@ -662,7 +663,7 @@ final class MintFlow
                 return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
-                return [$this->c->throttledPlan((int) $a['ru'] - $now, false), false];
+                return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];
             }
             $shape = 'app_secret|' . count($app['sx']);
             $kind = $this->pick($s, $pos, $sess, $now, $issued, true, $shape);

@@ -59,7 +59,7 @@ final class OAuthFlow
             }
             $app = $s->d['a'][$pos]['ap'][$ap];
             if ($redirect !== null && $redirect !== '' && !hash_equals((string) $app['cb'], $redirect)) {
-                return MintPlan::html(400, $this->c->pages->error('Redirect URI mismatch', MintVocabulary::text('redirect_mismatch'), '/settings/applications', 'Back to applications'))->attribute(['outcome' => 'redirect_mismatch']);
+                return MintPlan::html(400, $this->c->pages->error('Redirect URI mismatch', MintVocabulary::text('redirect_mismatch'), '/settings/applications', 'Back to applications', true))->attribute(['outcome' => 'redirect_mismatch']);
             }
             $n = (int) $s->d['rn'];
             $s->d['rn'] = $n + 1;
@@ -97,7 +97,7 @@ final class OAuthFlow
             $scopes = ScopeSet::normalise((array) $req['sc']);
             $sensitive = ScopeSet::anySensitive($scopes);
             if ($sensitive && $a['tf'] === null) {
-                return [MintPlan::html(422, $this->c->pages->error('Two-factor authentication required', MintVocabulary::text('scope_2fa'), '/settings/security', 'Set up two-factor authentication')), false];
+                return [MintPlan::html(422, $this->c->pages->error('Two-factor authentication required', MintVocabulary::text('scope_2fa'), '/settings/security', 'Set up two-factor authentication', true)), false];
             }
             if ($sensitive && (int) $a['cu'] <= $now) {
                 $s->d['a'][$pos]['rt'] = '/settings/applications';
@@ -105,7 +105,7 @@ final class OAuthFlow
                 return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
-                return [$this->c->throttledPlan((int) $a['ru'] - $now, false), false];
+                return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];
             }
             $shape = 'authorize|' . implode(',', $scopes);
             $kind = $this->flow->pick($s, $pos, $sess, $now, $issued, $sensitive, $shape);
@@ -344,9 +344,10 @@ final class OAuthFlow
             return $page('csrf', 422);
         }
         [$k, $k8] = MintContext::rowKeys($kref);
-        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($kref, $user, $now, $page) {
+        $signedIn = $this->c->signedIn($r);
+        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($kref, $user, $now, $page, $signedIn) {
             $units = MintContext::charge($tx, MintContext::COST_SIGNIN);
-            if (($over = $this->c->overUnits($tx, MintContext::COST_SIGNIN, false)) !== null) {
+            if (($over = $this->c->overUnits($tx, MintContext::COST_SIGNIN, false, $signedIn)) !== null) {
                 return MintContext::out(null, false, $units, $over);
             }
             $state = $s ?? $this->c->newState($kref, $now);

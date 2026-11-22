@@ -355,6 +355,48 @@ final class TokenMintDecoyHandleTest extends TestCase
         }
     }
 
+    /** The nav a page shows: the signed-in one has Sign out, the signed-out one Sign in. */
+    private static function nav(string $body): string
+    {
+        $in = str_contains($body, "<a href='/signout'>Sign out</a>");
+        $out = str_contains($body, "<a href='/'>Sign in</a>");
+        self::assertNotSame($in, $out, 'exactly one nav');
+
+        return $in ? 'in' : 'out';
+    }
+
+    public function test_the_nav_always_matches_the_live_session(): void
+    {
+        $h = $this->h();
+        $h->join();
+        self::assertSame('in', self::nav($h->get('/docs/api')['body']));
+        self::assertSame('in', self::nav($h->request('PUT', '/settings/tokens', '', '{}', ['Content-Type' => 'application/json'])['body']), 'a signed-in 405');
+        self::assertSame('in', self::nav($h->request('POST', '/settings/profile', '', str_repeat('a', 17000))['body']), 'a signed-in 413');
+
+        // Signing out where the client keeps its cookie: every page now reads as signed out.
+        $kept = $h->jars['default']['session'];
+        $so = $h->get('/signout');
+        $h->post('/signout', ['csrf_token' => MintHarness::csrf($so['body'])]);
+        $h->jars['default']['session'] = $kept;
+        self::assertSame(303, $h->get('/settings/tokens')['status']);
+        self::assertSame('out', self::nav($h->get('/docs/api')['body']), 'docs after the session died');
+        self::assertSame('out', self::nav($h->request('PUT', '/settings/tokens', '', '{}', ['Content-Type' => 'application/json'])['body']));
+        self::assertSame('out', self::nav($h->request('POST', '/join', '', str_repeat('a', 17000))['body']));
+
+        // A signed-out source over its hourly units gets the throttle page with the signed-out nav.
+        $ip = '45.89.0.1';
+        $idp = $h->get('/idp/' . $h->persona->slug . '/signin', '', 'idp', $ip);
+        $throttled = null;
+        for ($i = 0; $i < 520 && $throttled === null; $i++) {
+            $r = $h->post('/idp/' . $h->persona->slug . '/signin', ['csrf_token' => MintHarness::csrf($idp['body']), 'username' => 'x', 'password' => 'y'], 'idp', $ip);
+            if ($r['status'] === 429) {
+                $throttled = $r;
+            }
+        }
+        self::assertNotNull($throttled, 'the unit ledger shed the source');
+        self::assertSame('out', self::nav($throttled['body']));
+    }
+
     // --- 6. content type and status table ------------------------------------------------------------
 
     public function test_status_and_content_type_table(): void
