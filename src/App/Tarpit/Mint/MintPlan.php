@@ -77,7 +77,7 @@ final class MintPlan
     /** The on-site pages a redirect may name. */
     public static function allowedLocation(string $location, MintPersona $persona): bool
     {
-        if (in_array($location, ['/', '/settings/confirm', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $persona->slug . '/signin'], true)) {
+        if (in_array($location, ['/', '/settings/reauth', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $persona->slug . '/signin'], true)) {
             return true;
         }
 

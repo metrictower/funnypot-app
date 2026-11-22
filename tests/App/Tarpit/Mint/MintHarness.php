@@ -337,7 +337,7 @@ final class MintHarness
                 if (preg_match('/([a-z]{2,4}_pat_[0-9A-Za-z]{31})/', $list['body'], $m) === 1) {
                     return $m[1];
                 }
-            } elseif ($loc === '/settings/confirm') {
+            } elseif ($loc === '/settings/reauth') {
                 $this->confirm($jar, $ip, $password, $this->totp);
             } elseif ($loc === '/') {
                 $this->signIn($username, $password, $jar, $ip);
@@ -369,7 +369,7 @@ final class MintHarness
             $loc = $r['plan']?->header('Location');
             if ($loc === '/') {
                 $this->signIn('artex1', 'Passw0rd!x', $jar, $ip);
-            } elseif ($loc === '/settings/confirm') {
+            } elseif ($loc === '/settings/reauth') {
                 $this->confirm($jar, $ip, 'Passw0rd!x', $this->totp);
             } elseif (($r['status'] ?? 0) === 429) {
                 $this->now += (int) ($r['plan']?->header('Retry-After') ?? 60) + 1;
@@ -381,14 +381,14 @@ final class MintHarness
     /** Pass confirm-access (with the account's TOTP when 2FA is on). */
     public function confirm(string $jar = 'default', string $ip = self::IP, string $password = 'Passw0rd!x', ?string $totpSecret = null): array
     {
-        $page = $this->get('/settings/confirm', '', $jar, $ip);
+        $page = $this->get('/settings/reauth', '', $jar, $ip);
         $fields = ['csrf_token' => self::csrf($page['body']), 'password' => $password];
         if ($totpSecret !== null) {
             $this->now += 31;
             $fields['otp'] = \Funnypot\App\Tarpit\Mint\Totp::code($totpSecret, \Funnypot\App\Tarpit\Mint\Totp::step($this->now));
         }
 
-        return $this->post('/settings/confirm', $fields, $jar, $ip);
+        return $this->post('/settings/reauth', $fields, $jar, $ip);
     }
 
     /** Enable 2FA; returns [raw secret, recovery codes]. @return array{0:string,1:list<string>} */

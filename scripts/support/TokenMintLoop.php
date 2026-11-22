@@ -272,14 +272,14 @@ final class TokenMintLoop
 
             return 'minted';
         }
-        if ($loc === '/settings/confirm') {
-            $page = $this->send('GET', '/settings/confirm');
+        if ($loc === '/settings/reauth') {
+            $page = $this->send('GET', '/settings/reauth');
             $f = ['csrf_token' => self::csrf($page), 'password' => 'Passw0rd!x'];
             if ($this->totp !== null) {
                 $this->now += 31;
                 $f['otp'] = Totp::code($this->totp, Totp::step($this->now));
             }
-            $this->send('POST', '/settings/confirm', '', $f);
+            $this->send('POST', '/settings/reauth', '', $f);
 
             return 'confirm';
         }

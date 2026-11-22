@@ -101,14 +101,14 @@ final class MintCrawl
             $loc = $p->header('Location');
             if ($loc === '/') {
                 $this->signIn();
-            } elseif ($loc === '/settings/confirm') {
-                $page = $this->send('GET', '/settings/confirm');
+            } elseif ($loc === '/settings/reauth') {
+                $page = $this->send('GET', '/settings/reauth');
                 $f = ['csrf_token' => self::csrf($page->body), 'password' => 'Passw0rd!x'];
                 if ($totp !== null) {
                     $this->now += 31;
                     $f['otp'] = Totp::code($totp, Totp::step($this->now));
                 }
-                $this->send('POST', '/settings/confirm', '', $f);
+                $this->send('POST', '/settings/reauth', '', $f);
             } elseif ($p->status === 429) {
                 $this->now += (int) ($p->header('Retry-After') ?? 60) + 1;
             }
@@ -162,8 +162,8 @@ final class MintCrawl
         $this->send('POST', '/settings/profile', '', ['csrf_token' => self::csrf($prof->body), 'name' => '<b>', 'bio' => str_repeat('a', 200)]);
         $this->send('POST', '/settings/profile', '', ['csrf_token' => self::csrf($prof->body), 'name' => 'Ar Tex', 'bio' => 'ci owner']);
         $this->send('POST', '/settings/profile', '', ['csrf_token' => 'stale']);
-        $conf = $this->send('GET', '/settings/confirm');
-        $this->send('POST', '/settings/confirm', '', ['csrf_token' => self::csrf($conf->body), 'password' => 'wrong-pass']);
+        $conf = $this->send('GET', '/settings/reauth');
+        $this->send('POST', '/settings/reauth', '', ['csrf_token' => self::csrf($conf->body), 'password' => 'wrong-pass']);
 
         // tokens, through friction
         $new = $this->send('GET', '/settings/tokens/new', 'scopes=read:user,orders:read');

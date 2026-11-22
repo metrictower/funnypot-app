@@ -85,14 +85,14 @@ final class TokenMintDecoyHandleTest extends TestCase
         $h->now += 40;
         $form = $h->get('/settings/tokens/new');
         $needs = $h->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => 'orders', 'expiration' => '30', 'scopes' => ['orders:read']]);
-        self::assertSame('/settings/confirm', $needs['plan']->header('Location'));
-        $page = $h->get('/settings/confirm');
-        $ok = $h->post('/settings/confirm', ['csrf_token' => MintHarness::csrf($page['body']), 'password' => 'Passw0rd!x', 'recovery_code' => $codes[0]]);
+        self::assertSame('/settings/reauth', $needs['plan']->header('Location'));
+        $page = $h->get('/settings/reauth');
+        $ok = $h->post('/settings/reauth', ['csrf_token' => MintHarness::csrf($page['body']), 'password' => 'Passw0rd!x', 'recovery_code' => $codes[0]]);
         self::assertSame(303, $ok['status']);
         self::assertSame('/settings/tokens', $ok['plan']->header('Location'));
         $h->now += 1000; // let the confirm window lapse
-        $page = $h->get('/settings/confirm');
-        $reuse = $h->post('/settings/confirm', ['csrf_token' => MintHarness::csrf($page['body']), 'password' => 'Passw0rd!x', 'recovery_code' => $codes[0]]);
+        $page = $h->get('/settings/reauth');
+        $reuse = $h->post('/settings/reauth', ['csrf_token' => MintHarness::csrf($page['body']), 'password' => 'Passw0rd!x', 'recovery_code' => $codes[0]]);
         self::assertSame(422, $reuse['status'], 'a recovery code works once');
         $ok = $h->confirm('default', MintHarness::IP, 'Passw0rd!x', $secret);
         self::assertSame(303, $ok['status'], 'a computed TOTP passes confirm');
@@ -314,7 +314,7 @@ final class TokenMintDecoyHandleTest extends TestCase
         $q = 'FPMINTQcanary';
         $query = http_build_query(['description' => $q, 'scopes' => $q, 'client_id' => $q, 'redirect_uri' => $q, 'scope' => $q, 'state' => $q, 'authorization_request' => $q]);
         $paths = [
-            '/join', '/signout', '/settings/profile', '/settings/security', '/settings/confirm', '/settings/tokens', '/settings/tokens/new',
+            '/join', '/signout', '/settings/profile', '/settings/security', '/settings/reauth', '/settings/tokens', '/settings/tokens/new',
             '/settings/applications', '/settings/applications/new', '/settings/applications/fpmintcanary7q', '/login/oauth/authorize',
             '/orgs/' . $slug . '/sso', '/idp/' . $slug . '/signin', '/docs/api',
             '/api/v2/user', '/v2/users/FpMintCanary7Q', '/api/v2/users/FpMintCanary7Q', '/api/v2/orders/fpmintcanary7q', '/v2/orgs/' . $slug,
@@ -457,7 +457,7 @@ final class TokenMintDecoyHandleTest extends TestCase
             self::assertContains($n, MintPlan::HEADER_NAMES, "{$what} header {$n}");
             if ($n === 'Location') {
                 self::assertTrue(
-                    in_array($v, ['/', '/settings/confirm', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $slug . '/signin'], true)
+                    in_array($v, ['/', '/settings/reauth', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $slug . '/signin'], true)
                     || preg_match('~\A/settings/applications/[a-f0-9]{12}\z~', $v) === 1,
                     "{$what} Location {$v}"
                 );
@@ -755,8 +755,8 @@ final class TokenMintDecoyHandleTest extends TestCase
 
                 return ['c' => MintHarness::csrf($page['body']), 'otp' => Totp::code(MintHarness::base32decode($m[1]), Totp::step($h->now))];
             }, fn (array $d): array => $h->post('/settings/security', ['csrf_token' => $d['c'], 'otp' => $d['otp']])],
-            'confirm' => [fn (): array => ['c' => MintHarness::csrf($h->get('/settings/confirm')['body'])],
-                fn (array $d): array => $h->post('/settings/confirm', ['csrf_token' => $d['c'], 'password' => 'Passw0rd!x'])],
+            'confirm' => [fn (): array => ['c' => MintHarness::csrf($h->get('/settings/reauth')['body'])],
+                fn (array $d): array => $h->post('/settings/reauth', ['csrf_token' => $d['c'], 'password' => 'Passw0rd!x'])],
         ];
         $snapshot = static function (MintHarness $h): string {
             $db = new \PDO('sqlite:' . $h->dir . '/token-mint.sqlite');

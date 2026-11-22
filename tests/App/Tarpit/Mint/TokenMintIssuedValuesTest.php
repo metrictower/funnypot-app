@@ -112,9 +112,7 @@ final class TokenMintIssuedValuesTest extends TestCase
         $form = static fn (string $name): array => [
             static fn (array $vs): RequestContext => new RequestContext('POST', '/login/oauth/access_token', '', MintCorpus::F, self::fields($vs, $name, false)),
             static fn (array $vs): RequestContext => new RequestContext('POST', '/login/oauth/access_token', '', MintCorpus::F, 'grant_type=x&' . self::fields($vs, $name, true)),
-            // Any JSON body on /settings/confirm reads as XSS to core whatever it holds (the path ends in a
-            // script function name), so JSON travels on a form endpoint that does not.
-            static fn (array $vs): RequestContext => new RequestContext('POST', '/settings/tokens', '', MintCorpus::J, (string) json_encode([$name => $vs[0], 'more' => $vs, 'password' => 'x'])),
+            static fn (array $vs): RequestContext => new RequestContext('POST', '/settings/reauth', '', MintCorpus::J, (string) json_encode([$name => $vs[0], 'more' => $vs, 'password' => 'x'])),
         ];
         $bearer = [
             static fn (array $vs): RequestContext => new RequestContext('GET', '/api/v2/user', self::fields($vs, 'access_token', true), []),
@@ -197,8 +195,8 @@ final class TokenMintIssuedValuesTest extends TestCase
         $raw = strtolower(Totp::base32(substr(hash_hmac('sha256', 'recovery|' . bin2hex($kref) . '|abcdef0123456789|1|20753297|0|0', $c->keys->key('totp'), true), 0, 7)));
         self::assertSame('qezso-xmlns', substr($raw, 0, 5) . '-' . substr($raw, 5, 5), 'sanity: the first pick');
         $confirm = static fn (string $code): array => [
-            new RequestContext('POST', '/settings/confirm', '', MintCorpus::F, 'csrf_token=' . str_repeat('A', 36) . '&password=x&recovery_code=' . $code),
-            new RequestContext('POST', '/settings/tokens', '', MintCorpus::J, (string) json_encode(['recovery_code' => $code, 'password' => 'x'])),
+            new RequestContext('POST', '/settings/reauth', '', MintCorpus::F, 'csrf_token=' . str_repeat('A', 36) . '&password=x&recovery_code=' . $code),
+            new RequestContext('POST', '/settings/reauth', '', MintCorpus::J, (string) json_encode(['recovery_code' => $code, 'password' => 'x'])),
         ];
         self::assertTrue($this->trips($confirm('qezso-xmlns')[0]), 'sanity: core flags the first pick');
         $code = $c->recoveryCodes($kref, $s, 1, 20753297)[0];

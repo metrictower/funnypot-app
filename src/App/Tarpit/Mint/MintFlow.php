@@ -291,7 +291,7 @@ final class MintFlow
         return $this->withSession($r, function (MintState $s, int $pos, array $sess, int $now) use ($r) {
             $a = $s->d['a'][$pos];
             if ($this->c->csrf->verify($r->str(CsrfCodec::FIELD), $sess['sid'], 'confirm', (int) $a['ce'], $now) === null) {
-                return $this->csrfFailure('/settings/confirm');
+                return $this->csrfFailure('/settings/reauth');
             }
             $kref = $this->sessKref($sess);
             $retry = fn (string $err): MintPlan => MintPlan::html(422, $this->c->pages->confirm($this->csrf($sess, 'confirm', $s, $pos, $now), $a['tf'] !== null, [$err === 'confirm_password' ? 'password' : 'otp' => $err]))->attribute(['outcome' => 'invalid']);
@@ -317,12 +317,12 @@ final class MintFlow
             $s->d['a'][$pos]['cu'] = $now + 900;
             $to = (string) $a['rt'];
             $s->d['a'][$pos]['rt'] = '';
-            if (!MintPlan::allowedLocation($to, $this->c->persona) || $to === '/settings/confirm') {
+            if (!MintPlan::allowedLocation($to, $this->c->persona) || $to === '/settings/reauth') {
                 $to = '/settings/tokens';
             }
 
             return [MintPlan::redirect($to, $this->c->persona)->attribute(['outcome' => 'confirmed']), true];
-        }, true, '/settings/confirm');
+        }, true, '/settings/reauth');
     }
 
     /** The source reference a session belongs to. */
@@ -411,7 +411,7 @@ final class MintFlow
             if ($sensitive && (int) $a['cu'] <= $now) {
                 $s->d['a'][$pos]['rt'] = '/settings/tokens';
 
-                return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
+                return [MintPlan::redirect('/settings/reauth', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
                 return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];
@@ -522,7 +522,7 @@ final class MintFlow
                 $s->d['a'][$pos]['cu'] = $now;
                 $s->d['a'][$pos]['rt'] = $listPage;
 
-                return MintPlan::redirect('/settings/confirm', $this->c->persona);
+                return MintPlan::redirect('/settings/reauth', $this->c->persona);
             case 'throttled':
                 $d = [60, 120, 300][$this->c->friction->draw('throttle', $state, $shape, $history, 3)];
                 $s->d['a'][$pos]['ru'] = $now + $d;
@@ -659,7 +659,7 @@ final class MintFlow
             if ((int) $a['cu'] <= $now) {
                 $s->d['a'][$pos]['rt'] = $page;
 
-                return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
+                return [MintPlan::redirect('/settings/reauth', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
                 return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];

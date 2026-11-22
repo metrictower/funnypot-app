@@ -43,7 +43,7 @@ final class MintCorpus
     public static function ownedPaths(string $slug): array
     {
         $paths = [
-            '/join', '/signout', '/settings/profile', '/settings/security', '/settings/confirm', '/settings/tokens', '/settings/tokens/new',
+            '/join', '/signout', '/settings/profile', '/settings/security', '/settings/reauth', '/settings/tokens', '/settings/tokens/new',
             '/settings/tokens/12/delete', '/settings/applications', '/settings/applications/new', '/settings/applications/12',
             '/settings/applications/12/secrets', '/settings/applications/12/delete', '/login/oauth/authorize', '/login/oauth/access_token',
             '/orgs/' . $slug . '/sso', '/idp/' . $slug . '/signin', '/docs/api',
@@ -76,9 +76,9 @@ final class MintCorpus
             ['POST', '/settings/profile', '', "{$c}&name=Ar+Tex&bio=build%2Fci+owner%3A+team%40example.com%2C+v2.0-rc_1+%2B1%3Dok", $F],
             ['GET', '/settings/security', '', null, []],
             ['POST', '/settings/security', '', "{$c}&otp=123456", $F],
-            ['GET', '/settings/confirm', '', null, []],
-            ['POST', '/settings/confirm', '', "{$c}&password=Passw0rd%21x&otp=123456", $F],
-            ['POST', '/settings/confirm', '', "{$c}&password=Passw0rd%21x&recovery_code=abcde-23456", $F],
+            ['GET', '/settings/reauth', '', null, []],
+            ['POST', '/settings/reauth', '', "{$c}&password=Passw0rd%21x&otp=123456", $F],
+            ['POST', '/settings/reauth', '', "{$c}&password=Passw0rd%21x&recovery_code=abcde-23456", $F],
             ['GET', '/settings/tokens', '', null, []],
             ['GET', '/settings/tokens/new', 'scopes=read%3Auser%2Corders%3Aread', null, []],
             ['POST', '/settings/tokens', '', "{$c}&note=deploy+key+for+ci%2Fcd%3A+build%40host%2B1%3Dok%2C+v2.0-rc_1&expiration=30&scopes%5B%5D=read%3Auser&scopes%5B%5D=orders%3Aread&scopes%5B%5D=orders%3Aexport", $F],
@@ -153,6 +153,7 @@ final class MintCorpus
             '/api/v2/users/config.json', '/api/v2/users/id_rsa', '/v2/users/id_rsa.pub', '/api/v2/users/actuator', '/v2/users/Command',
             '/api/v2/orders/system32', '/settings/applications/system32', '/api/v2/users/a.b',
             '/api/v2/users/timeout', '/v2/users/Busybox', '/api/v2/users/xmlns', '/settings/tokens/5cwindows/delete', '/api/v2/users/pg_catalog',
+            '/settings/confirm',
         ];
     }
 }

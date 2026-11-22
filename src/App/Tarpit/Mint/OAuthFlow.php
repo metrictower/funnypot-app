@@ -102,7 +102,7 @@ final class OAuthFlow
             if ($sensitive && (int) $a['cu'] <= $now) {
                 $s->d['a'][$pos]['rt'] = '/settings/applications';
 
-                return [MintPlan::redirect('/settings/confirm', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
+                return [MintPlan::redirect('/settings/reauth', $this->c->persona)->attribute(['outcome' => 'needs_confirm']), true];
             }
             if ((int) $a['ru'] > $now) {
                 return [$this->c->throttledPlan((int) $a['ru'] - $now, false, true), false];

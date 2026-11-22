@@ -80,8 +80,8 @@ final class TokenMintStoreConcurrencyTest extends TestCase
         $page = (string) $created->header('Location');
         $show = $this->send('GET', $page);
         preg_match('~<p>Client ID</p><p class=mono>([a-f0-9]{20})</p>~', $show->body, $cm);
-        $confirm = $this->send('GET', '/settings/confirm');
-        $this->send('POST', '/settings/confirm', '', ['csrf_token' => self::csrf($confirm->body), 'password' => 'Passw0rd!x']);
+        $confirm = $this->send('GET', '/settings/reauth');
+        $this->send('POST', '/settings/reauth', '', ['csrf_token' => self::csrf($confirm->body), 'password' => 'Passw0rd!x']);
         $show = $this->send('GET', $page);
         $this->send('POST', $page . '/secrets', '', ['csrf_token' => self::csrf(substr($show->body, (int) strpos($show->body, '/secrets')))]);
         $show = $this->send('GET', $page);

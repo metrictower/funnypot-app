@@ -175,7 +175,7 @@ final class AccountPages
     public function confirm(string $csrf, bool $twoFactor, array $errors): string
     {
         $main = '<div class=card><h1>Verify it is you</h1><p class=muted>' . $this->msg('confirm_intro') . '</p>'
-            . "<form method=post action='/settings/confirm'>" . self::csrf($csrf)
+            . "<form method=post action='/settings/reauth'>" . self::csrf($csrf)
             . $this->input('Password', 'password', [], $errors, 'password', ' autocomplete=current-password')
             . ($twoFactor
                 ? $this->input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')

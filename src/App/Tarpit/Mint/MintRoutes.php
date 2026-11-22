@@ -53,7 +53,7 @@ final class MintRoutes
         '/signout' => ['signout', ['GET', 'POST']],
         '/settings/profile' => ['profile', ['GET', 'POST']],
         '/settings/security' => ['security', ['GET', 'POST']],
-        '/settings/confirm' => ['confirm', ['GET', 'POST']],
+        '/settings/reauth' => ['confirm', ['GET', 'POST']],
         '/settings/tokens' => ['tokens', ['GET', 'POST']],
         '/settings/tokens/new' => ['token_new', ['GET']],
         '/settings/applications' => ['apps', ['GET', 'POST']],
