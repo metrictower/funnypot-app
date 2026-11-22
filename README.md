@@ -132,6 +132,8 @@ under the tarpit): an agent that "fixes" its payload is kept fixing it.
 - **Bounded.** One request's answer has a hard budget (operands looked at, fake-filesystem entries visited,
   pattern length, output bytes and about 30 ms of work across every command in the line). Past it the
   answer is the output so far, like a killed command, so a 4 KB `grep -r` or `find` line stays cheap.
+  Linux's path limits apply after expansion (a name over 255 bytes or a path over 4096 answers `File name
+  too long`), and a line expansion grows past 64 KB answers `Argument list too long`.
 - **Reflection.** Attacker text is echoed only from the body of a non-GET request, in a small safe charset,
   length-capped and HTML-escaped. A GET or query-string command whose answer would echo any of it gets the
   landing. Variables, `${IFS}` field splitting and globs expand before any applet looks at its arguments,
