@@ -36,12 +36,12 @@ final class SsrfStoreTest extends TestCase
 
     private static function write(SsrfStore $s, string $owner, string $source, int $now, int $units = 3, bool $change = true): array
     {
-        return $s->transact($owner, $source, $now, static function (?SsrfState $st, SsrfTx $tx) use ($now, $units, $change): SsrfOutcome {
+        return $s->transact($owner, $source, $now, new \Funnypot\Tests\App\Storage\ClosureDecision(static function (?SsrfState $st, SsrfTx $tx) use ($now, $units, $change): SsrfOutcome {
             $st ??= SsrfState::fresh($now);
             $st->d['hn'] = (int) $st->d['hn'] + 1;
 
             return new SsrfOutcome($st, $change, $units, $tx->unitsUsed);
-        });
+        }));
     }
 
     private function ledger(SsrfStore $s, string $source): array
@@ -105,7 +105,7 @@ final class SsrfStoreTest extends TestCase
         self::assertCount(SsrfState::MAX_IMPORTS, $s->d['i']);
         self::assertCount(SsrfState::MAX_VERIFICATIONS, $s->d['st']['v']);
         $store = $this->store();
-        self::assertTrue($store->transact('o', 's', 5, static fn (?SsrfState $x, SsrfTx $tx): SsrfOutcome => new SsrfOutcome($s, true, 1, null))['ok']);
+        self::assertTrue($store->transact('o', 's', 5, new \Funnypot\Tests\App\Storage\ClosureDecision(static fn (?SsrfState $x, SsrfTx $tx): SsrfOutcome => new SsrfOutcome($s, true, 1, null)))['ok']);
         self::assertSame($s->toJson(), $store->load('o')?->toJson());
     }
 
@@ -178,12 +178,12 @@ final class SsrfStoreTest extends TestCase
     public function test_a_row_over_the_cap_is_refused_whole(): void
     {
         $s = $this->store();
-        $r = $s->transact('o', 's', 1, static function (?SsrfState $x, SsrfTx $tx): SsrfOutcome {
+        $r = $s->transact('o', 's', 1, new \Funnypot\Tests\App\Storage\ClosureDecision(static function (?SsrfState $x, SsrfTx $tx): SsrfOutcome {
             $st = SsrfState::fresh(1);
             $st->d['pad'] = str_repeat('x', SsrfState::ROW_CAP);
 
             return new SsrfOutcome($st, true, 1, null);
-        });
+        }));
         self::assertSame(SsrfStore::FAIL_STORE, $r['failure']);
         self::assertNull($s->load('o'));
     }

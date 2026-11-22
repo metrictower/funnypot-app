@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\App\Tarpit\Ssrf;
 
+use Funnypot\App\Storage\SsrfDecision;
 use Funnypot\App\Storage\SsrfKeyIndex;
 use Funnypot\App\Storage\SsrfOutcome;
 use Funnypot\App\Storage\SsrfStore;
@@ -39,7 +40,7 @@ use Throwable;
  * hooks. Every request runs in one store transaction that charges the source's units first; a source
  * over UNITS_PER_HOUR gets a 429. Nothing here reads a clock but the token-mint surface's injected one.
  */
-final class SsrfDecoy
+final class SsrfDecoy implements SsrfDecision
 {
     public const UNITS_PER_HOUR = 1200;
     public const COST_GET = 1;
@@ -59,6 +60,9 @@ final class SsrfDecoy
     private SsrfIds $ids;
     private string $headerSlug;
     private ?IssuedValue $issued = null;
+
+    /** @var array{0:MintRequest,1:array<string,mixed>,2:string,3:int,4:int,5:bool}|null the request a store transaction is deciding */
+    private ?array $pending = null;
     private int $faults = 0;
     private ?Throwable $lastFault = null;
 
@@ -233,27 +237,37 @@ final class SsrfDecoy
     /**
      * Run a request's decision inside one store transaction: charge, throttle, decide.
      *
-     * @param callable(?SsrfState,SsrfTx):array{0:MintPlan,1:?SsrfState,2:bool} $decide
+     * @param array<string,mixed> $who
      * @return array{ok:bool,failure:?string,value:mixed}
      */
-    private function transact(MintRequest $r, string $owner, string $ip, int $now, callable $decide): array
+    private function transact(MintRequest $r, array $who, string $ip, int $now): array
     {
         $this->index->advance($now);
-        $cost = $this->cost($r);
-        $changes = $r->readMethod() !== 'GET';
+        $this->pending = [$r, $who, $ip, $now, $this->cost($r), $r->readMethod() !== 'GET'];
+        try {
+            return $this->store->transact((string) $who['owner'], $this->sk->ledger($ip), $now, $this);
+        } finally {
+            $this->pending = null;
+        }
+    }
 
-        return $this->store->transact($owner, $this->sk->ledger($ip), $now, function (?SsrfState $s, SsrfTx $tx) use ($r, $cost, $changes, $now, $decide): SsrfOutcome {
-            $units = $tx->unitsUsed > self::UNITS_PER_HOUR ? 0 : $cost;
-            if ($tx->unitsUsed + $cost > self::UNITS_PER_HOUR) {
-                return new SsrfOutcome(null, false, $units, $this->throttled(3600 - $now % 3600, $r->api, 'ledger_429'));
-            }
-            if ($changes && $tx->capReached) {
-                return new SsrfOutcome(null, false, $units, $this->throttled(300, $r->api, 'cap'));
-            }
-            [$plan, $state, $change] = $decide($s, $tx);
+    /** The store transaction's decision for the pending request: charge first, then throttle, then route. */
+    public function decide(?SsrfState $state, SsrfTx $tx): SsrfOutcome
+    {
+        if ($this->pending === null) {
+            throw new \LogicException('no request is pending');
+        }
+        [$r, $who, $ip, $now, $cost, $changes] = $this->pending;
+        $units = $tx->unitsUsed > self::UNITS_PER_HOUR ? 0 : $cost;
+        if ($tx->unitsUsed + $cost > self::UNITS_PER_HOUR) {
+            return new SsrfOutcome(null, false, $units, $this->throttled(3600 - $now % 3600, $r->api, 'ledger_429'));
+        }
+        if ($changes && $tx->capReached) {
+            return new SsrfOutcome(null, false, $units, $this->throttled(300, $r->api, 'cap'));
+        }
+        [$plan, $next, $change] = $r->api ? $this->apiRoute($r, $state, $who, $ip, $now) : $this->uiRoute($r, $state, $who, $ip, $now);
 
-            return new SsrfOutcome($state, $change, $units, $plan);
-        });
+        return new SsrfOutcome($next, $change, $units, $plan);
     }
 
     // --- UI ----------------------------------------------------------------------------------------
@@ -266,7 +280,7 @@ final class SsrfDecoy
             return MintPlan::redirect('/', $this->c->persona, !$r->pattern)->attribute(['outcome' => 'no_session']);
         }
         $who['owner'] = $this->sk->owner($who['k'], $who['epoch'], $who['acct']);
-        $res = $this->transact($r, $who['owner'], $ip, $now, fn (?SsrfState $s, SsrfTx $tx): array => $this->uiRoute($r, $s, $who, $ip, $now));
+        $res = $this->transact($r, $who, $ip, $now);
         if ($res['ok']) {
             return $res['value'];
         }
@@ -375,16 +389,17 @@ final class SsrfDecoy
         $errors = [];
         $vals = [];
         $urlField = $json ? 'url' : 'payload_url';
-        foreach ([
-            'content_type' => static fn ($v): array => SsrfForms::contentType($v),
-            'secret' => static fn ($v): array => SsrfForms::secret($v),
-            'events' => static fn ($v): array => SsrfForms::events($v),
-            'active' => static fn ($v): array => SsrfForms::active($v),
-        ] as $field => $check) {
+        foreach (['content_type', 'secret', 'events', 'active'] as $field) {
             if ($partial && !array_key_exists($field, $r->body)) {
                 continue;
             }
-            [$vals[$field], $err] = $check($r->body[$field] ?? null);
+            $v = $r->body[$field] ?? null;
+            [$vals[$field], $err] = match ($field) {
+                'content_type' => SsrfForms::contentType($v),
+                'secret' => SsrfForms::secret($v),
+                'events' => SsrfForms::events($v),
+                default => SsrfForms::active($v),
+            };
             if ($err !== null) {
                 $errors[$field] = $err;
             }
@@ -894,7 +909,7 @@ final class SsrfDecoy
         }
         $pos = (int) $row->accountPosBySerial((int) $cred['acct']);
         $who = ['owner' => $this->sk->owner((string) $cred['k'], $row->epoch(), (int) $cred['acct']), 'login' => (string) $row->d['a'][$pos]['u']];
-        $res = $this->transact($r, $who['owner'], $ip, $now, fn (?SsrfState $s, SsrfTx $tx): array => $this->apiRoute($r, $s, $who, $ip, $now));
+        $res = $this->transact($r, $who, $ip, $now);
         if ($res['ok']) {
             if ($this->touchDue($row, $pos, $cred, $now)) {
                 $this->touch($cred, $now);

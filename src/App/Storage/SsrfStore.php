@@ -87,12 +87,11 @@ final class SsrfStore
     }
 
     /**
-     * Run $fn inside BEGIN IMMEDIATE on account $owner and source $source.
+     * Run a decision inside BEGIN IMMEDIATE on account $owner and source $source.
      *
-     * @param callable(?SsrfState, SsrfTx):SsrfOutcome $fn
      * @return array{ok:bool,failure:?string,value:mixed}
      */
-    public function transact(string $owner, string $source, int $now, callable $fn): array
+    public function transact(string $owner, string $source, int $now, SsrfDecision $decision): array
     {
         $db = $this->db();
         if ($db === null) {
@@ -124,10 +123,7 @@ final class SsrfStore
             $capReached = $writes >= $this->limits['source_writes_hr'] || $gauge >= $this->limits['global_writes_hr'];
 
             $db->exec('SAVEPOINT decision');
-            $out = $fn($state, new SsrfTx($now, $units, $capReached));
-            if (!$out instanceof SsrfOutcome) {
-                throw new \LogicException('transaction body must return an outcome');
-            }
+            $out = $decision->decide($state, new SsrfTx($now, $units, $capReached));
             $failure = null;
             $change = $out->state !== null && $out->stateChange;
             if ($change && $capReached) {

@@ -22,12 +22,12 @@ $failed = 0;
 if ($mode === 'store') {
     $store = new SsrfStore($db);
     for ($i = 0; $i < (int) $n; $i++) {
-        $r = $store->transact('shared-owner', 'src-' . getmypid(), 1000, static function (?SsrfState $s, SsrfTx $tx): SsrfOutcome {
+        $r = $store->transact('shared-owner', 'src-' . getmypid(), 1000, new \Funnypot\Tests\App\Storage\ClosureDecision(static function (?SsrfState $s, SsrfTx $tx): SsrfOutcome {
             $s ??= SsrfState::fresh(1000);
             $s->d['hn'] = (int) $s->d['hn'] + 1;
 
             return new SsrfOutcome($s, true, 4, null);
-        });
+        }));
         $r['ok'] ? $ok++ : $failed++;
     }
 } elseif ($mode === 'index') {

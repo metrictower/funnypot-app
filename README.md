@@ -275,9 +275,12 @@ byte-identical) needs a token with `webhooks:write`, `imports:write` or `storage
 form offers only while this is wired. The account nav gains Webhooks, Imports and Export.
 
 - **Nothing is fetched.** There is no fetch, DNS or socket code: a fake network decides where a request
-  would have gone and what it would have got, and the result is shown as escaped text. A pin on every
-  file this feature edits outside its namespace forbids it gaining a call, a class or a parent
-  (`SsrfNoOutboundTest`).
+  would have gone and what it would have got, and the result is shown as escaped text. Four checks keep
+  it that way (`SsrfNoOutboundTest`): a static allowlist over the namespace (pure built-ins, listed
+  classes and static calls, no parent class outside it, no anonymous class, no indirect call); the bench
+  in a child PHP with every network-capable function disabled by exact name (the child checks each is
+  gone), URL wrappers off and no `exec`; recording stream wrappers around the same journey; and a pin on
+  every file this feature edits outside its namespace.
 - **Egress model.** The platform's workers reach internal zones (`*.internal`, the persona's domain,
   single-label names) and private address space directly; every other name goes to an egress proxy that
   denies it before resolving ("Request denied by egress policy"), and the import worker may reach
@@ -309,6 +312,11 @@ form offers only while this is wired. The account nav gains Webhooks, Imports an
   migrates (else `code=ssrf-decoy-migration-failed`); otherwise every owned path answers as today. A fault
   in its own code gives that request today's answer and logs `code=ssrf-decoy-fault` (class and line).
   It joins at the same serve seam, after the token-mint surface, for a disjoint path set.
+- **Bench.** `SsrfPivotBenchTest` drives a scripted SSRF-pivot crawler (`scripts/support/SsrfPivotCrawler.php`)
+  through the real controller for 300 steps: it keeps finding new internal targets (over 200 distinct),
+  every queued target came from a body the honeypot produced, nothing opens a URL, no answer is goal
+  proof, every leaked-key family gets a known, restricted or expired verdict, and a crawler that never
+  waits is throttled.
 
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
