@@ -386,4 +386,28 @@ final class ContextPolluterTest extends TestCase
             'a deep Range cost more memory than a head Range — the log is not offset-addressable (O(1) Range broken)'
         );
     }
+
+    /**
+     * settings.py without the SSRF gateway pointers is byte-identical to the body served before the
+     * pointers existed (hashes recorded on the base commit), for three seeds at two caps.
+     */
+    public function test_settings_py_bytes_unchanged_without_pointers(): void
+    {
+        $golden = [
+            '4242/262144' => '6d7e713fb5ce811692372042509aaa9d04d8c320e7d5a31a2785c8ff791f73ff',
+            '4242/2097152' => 'c409815c4d90690490915aabc510a98a8f23e155b47cc76e31be9104b15742dd',
+            '7/262144' => 'eaf034c38259278f5b79d583eb7048c05f93aa00580c0443d325ba74aca8b1b4',
+            '7/2097152' => 'c2a0ea9079053a3a708123dcae8e0bf847e9775ddb4193953e255addefc6615c',
+            '1234567/262144' => '9761be88c5fb24d40e171d1092eceee786b7cf88f9dbc578bc68fa10fe89d26a',
+            '1234567/2097152' => '6236ffad1a224930fe78a76e6be7b2ffadb29d2d417080b00a01c5aee82b8bec',
+        ];
+        foreach ($golden as $key => $want) {
+            [$seed, $cap] = array_map('intval', explode('/', $key));
+            $h = hash_init('sha256');
+            foreach ((new ConfigDump($seed))->chunks($cap) as $c) {
+                hash_update($h, $c);
+            }
+            self::assertSame($want, hash_final($h), "settings.py bytes for {$key}");
+        }
+    }
 }

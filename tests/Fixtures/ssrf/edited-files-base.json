@@ -1,0 +1,518 @@
+{
+    "base": "1059dbee371739186d1df2e5835b38877f0bba68",
+    "files": {
+        "src/App/Tarpit/ConfigDump.php": {
+            "calls": [
+                "connection_aborted",
+                "hash",
+                "hexdec",
+                "strlen",
+                "substr"
+            ],
+            "new": [],
+            "static": [
+                "Funnypot\\App\\Tarpit\\InertSecret::apikey",
+                "Funnypot\\App\\Tarpit\\InertSecret::derive",
+                "Funnypot\\App\\Tarpit\\InertSecret::flag",
+                "Funnypot\\App\\Tarpit\\InertSecret::resettoken",
+                "Funnypot\\App\\Tarpit\\InertSecret::stripekey",
+                "Funnypot\\App\\Tarpit\\SeededStream::clock",
+                "Funnypot\\Core\\Support\\PersonaIdentity::fromseed"
+            ],
+            "extends": []
+        },
+        "src/App/Http/PolluterController.php": {
+            "calls": [
+                "gmdate",
+                "hrtime",
+                "in_array",
+                "max",
+                "min",
+                "preg_match",
+                "sprintf",
+                "str_split",
+                "strcspn",
+                "strlen",
+                "substr",
+                "trim"
+            ],
+            "new": [
+                "Funnypot\\App\\AiApi\\StreamEmitter",
+                "Funnypot\\App\\Engagement\\EngagementEvent",
+                "Funnypot\\App\\Tarpit\\ConfigDump",
+                "Funnypot\\App\\Tarpit\\HostileFormat",
+                "Funnypot\\App\\Tarpit\\LogRabbitHole",
+                "Funnypot\\App\\Tarpit\\ShadowBait"
+            ],
+            "static": [
+                "Funnypot\\App\\Engagement\\EngagementRecorder::useragentof",
+                "Funnypot\\App\\Engagement\\LureId::forpolluterpath"
+            ],
+            "extends": []
+        },
+        "src/App/Http/HoneypotController.php": {
+            "calls": [
+                "array_filter",
+                "array_map",
+                "array_pad",
+                "array_slice",
+                "array_values",
+                "basename",
+                "count",
+                "explode",
+                "file_get_contents",
+                "gmdate",
+                "header",
+                "http_response_code",
+                "in_array",
+                "ip2long",
+                "is_file",
+                "preg_replace",
+                "random_int",
+                "sprintf",
+                "strlen",
+                "strpos",
+                "strtolower",
+                "substr",
+                "usleep"
+            ],
+            "new": [],
+            "static": [
+                "Funnypot\\App\\Emulation\\EmulationPolicy::frompackage",
+                "Funnypot\\App\\Render\\PanelRoute::mountedatroot",
+                "Funnypot\\App\\Tarpit\\Mint\\IssuedValue::forengine",
+                "Funnypot\\App\\ThreatIntel\\AbuseIpdb::categoriesforwebclass",
+                "Funnypot\\App\\ThreatIntel\\AttackClassifier::severityfor",
+                "Funnypot\\App\\ThreatIntel\\ReportComment::build",
+                "Funnypot\\Core\\Honeypot::default",
+                "Funnypot\\Core\\Http\\ResponseEmitter::emit",
+                "Funnypot\\Core\\Log4ShellProbe::present",
+                "self::decoyforpath",
+                "self::ipincidr",
+                "self::ipincidrlist",
+                "self::istrustedpeer",
+                "self::servebelievable404",
+                "self::servedelayfor"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/MintContext.php": {
+            "calls": [
+                "array_map",
+                "array_slice",
+                "base64_encode",
+                "bin2hex",
+                "count",
+                "hash_hmac",
+                "hexdec",
+                "preg_match",
+                "strtolower",
+                "strtr",
+                "substr"
+            ],
+            "new": [
+                "Funnypot\\App\\Storage\\TokenMintOutcome",
+                "Funnypot\\App\\Tarpit\\Mint\\AccountPages",
+                "Funnypot\\App\\Tarpit\\Mint\\CsrfCodec",
+                "Funnypot\\App\\Tarpit\\Mint\\FrictionPicker",
+                "Funnypot\\App\\Tarpit\\Mint\\SessionCodec",
+                "Funnypot\\App\\Tarpit\\Mint\\TokenCodec",
+                "LogicException"
+            ],
+            "static": [
+                "Funnypot\\App\\Tarpit\\InertSecret::isclean",
+                "Funnypot\\App\\Tarpit\\Mint\\DecoyPrincipalResolver::sessionclaim",
+                "Funnypot\\App\\Tarpit\\Mint\\JwtCodec::encode",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::html",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::json",
+                "Funnypot\\App\\Tarpit\\Mint\\MintState::fresh",
+                "Funnypot\\App\\Tarpit\\Mint\\MintState::sidlive",
+                "Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::text",
+                "Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::wait",
+                "Funnypot\\App\\Tarpit\\Mint\\Totp::base32",
+                "self::step"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/ScopeSet.php": {
+            "calls": [
+                "array_filter",
+                "array_intersect",
+                "array_keys",
+                "array_values",
+                "preg_split",
+                "sort",
+                "substr"
+            ],
+            "new": [],
+            "static": [
+                "self::known",
+                "self::normalise"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/MintFlow.php": {
+            "calls": [
+                "array_filter",
+                "array_keys",
+                "array_map",
+                "array_search",
+                "array_slice",
+                "array_splice",
+                "array_values",
+                "bin2hex",
+                "count",
+                "hash_equals",
+                "implode",
+                "in_array",
+                "intdiv",
+                "is_array",
+                "max",
+                "min",
+                "preg_match",
+                "str_starts_with",
+                "strcasecmp",
+                "strlen",
+                "substr"
+            ],
+            "new": [
+                "LogicException"
+            ],
+            "static": [
+                "Funnypot\\App\\Tarpit\\Mint\\FrictionPicker::eligible",
+                "Funnypot\\App\\Tarpit\\Mint\\MintContext::charge",
+                "Funnypot\\App\\Tarpit\\Mint\\MintContext::out",
+                "Funnypot\\App\\Tarpit\\Mint\\MintContext::rowkeys",
+                "Funnypot\\App\\Tarpit\\Mint\\MintForms::app",
+                "Funnypot\\App\\Tarpit\\Mint\\MintForms::join",
+                "Funnypot\\App\\Tarpit\\Mint\\MintForms::profile",
+                "Funnypot\\App\\Tarpit\\Mint\\MintForms::token",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::allowedlocation",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::html",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::redirect",
+                "Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::text",
+                "Funnypot\\App\\Tarpit\\Mint\\ScopeSet::anysensitive",
+                "Funnypot\\App\\Tarpit\\Mint\\ScopeSet::normalise",
+                "Funnypot\\App\\Tarpit\\Mint\\ScopeSet::parseparam",
+                "Funnypot\\App\\Tarpit\\Mint\\Totp::base32",
+                "Funnypot\\App\\Tarpit\\Mint\\Totp::verify"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/MintForms.php": {
+            "calls": [
+                "array_key_exists",
+                "hash_equals",
+                "preg_match",
+                "strlen",
+                "trim"
+            ],
+            "new": [],
+            "static": [
+                "Funnypot\\App\\Tarpit\\Mint\\MintRoutes::corekeyed",
+                "Funnypot\\App\\Tarpit\\Mint\\ScopeSet::known",
+                "self::text",
+                "self::validcallback",
+                "self::validhomepage"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/AccountPages.php": {
+            "calls": [
+                "array_map",
+                "count",
+                "gmdate",
+                "htmlspecialchars",
+                "implode",
+                "in_array",
+                "rawurlencode"
+            ],
+            "new": [],
+            "static": [
+                "Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::text",
+                "self::csrf",
+                "self::css",
+                "self::date",
+                "self::e"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/MintPlan.php": {
+            "calls": [
+                "array_filter",
+                "array_values",
+                "header",
+                "htmlspecialchars",
+                "http_response_code",
+                "in_array",
+                "json_encode",
+                "preg_match",
+                "strcasecmp"
+            ],
+            "new": [
+                "LogicException",
+                "self"
+            ],
+            "static": [
+                "self::allowedlocation"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/TokenMintDecoy.php": {
+            "calls": [
+                "basename",
+                "error_log",
+                "get_class",
+                "implode",
+                "in_array",
+                "sprintf",
+                "time"
+            ],
+            "new": [
+                "Funnypot\\App\\Tarpit\\Mint\\DecoyPrincipalResolver",
+                "Funnypot\\App\\Tarpit\\Mint\\MintApi",
+                "Funnypot\\App\\Tarpit\\Mint\\MintContext",
+                "Funnypot\\App\\Tarpit\\Mint\\MintFlow",
+                "Funnypot\\App\\Tarpit\\Mint\\MintKeys",
+                "Funnypot\\App\\Tarpit\\Mint\\MintRoutes",
+                "Funnypot\\App\\Tarpit\\Mint\\OAuthFlow",
+                "self"
+            ],
+            "static": [
+                "Funnypot\\App\\Tarpit\\Mint\\MintContext::rowkeys",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPersona::fromseed",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::empty",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::html",
+                "Funnypot\\App\\Tarpit\\Mint\\MintPlan::json",
+                "Funnypot\\App\\Tarpit\\Mint\\MintRequest::parse",
+                "Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::text",
+                "self::logfault",
+                "self::nondisclosing"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/DecoyPrincipalResolver.php": {
+            "calls": [
+                "base64_decode",
+                "base64_encode",
+                "bin2hex",
+                "hash_equals",
+                "hex2bin",
+                "is_string",
+                "pack",
+                "preg_match",
+                "rtrim",
+                "strlen",
+                "strtr",
+                "substr",
+                "trim",
+                "unpack"
+            ],
+            "new": [],
+            "static": [
+                "Funnypot\\App\\Tarpit\\Mint\\JwtCodec::decode",
+                "Funnypot\\App\\Tarpit\\Mint\\JwtCodec::lookslikejwt",
+                "self::parsesessionclaim"
+            ],
+            "extends": []
+        },
+        "src/App/Tarpit/Mint/IssuedValue.php": {
+            "calls": [
+                "array_unique",
+                "explode",
+                "in_array",
+                "str_replace"
+            ],
+            "new": [
+                "Funnypot\\Core\\RequestContext",
+                "LogicException",
+                "self"
+            ],
+            "static": [
+                "Funnypot\\App\\Tarpit\\InertSecret::isclean",
+                "self::bearerprobe",
+                "self::pathprobe",
+                "self::probe"
+            ],
+            "extends": []
+        },
+        "src/App/Config/AppConfig.php": {
+            "calls": [
+                "array_filter",
+                "array_map",
+                "array_unique",
+                "array_values",
+                "explode",
+                "getenv",
+                "in_array",
+                "max",
+                "min",
+                "rtrim",
+                "strlen",
+                "strtolower",
+                "trim"
+            ],
+            "new": [
+                "self"
+            ],
+            "static": [
+                "self::build"
+            ],
+            "extends": []
+        },
+        "src/App/Config/ConfigRegistry.php": {
+            "calls": [
+                "array_filter",
+                "array_keys",
+                "array_map",
+                "array_search",
+                "array_values",
+                "explode",
+                "implode",
+                "in_array",
+                "is_array",
+                "is_bool",
+                "is_numeric",
+                "max",
+                "min",
+                "preg_match",
+                "strtolower",
+                "trim"
+            ],
+            "new": [],
+            "static": [
+                "self::schema"
+            ],
+            "extends": []
+        },
+        "demo/index.php": {
+            "calls": [
+                "array_column",
+                "array_map",
+                "array_merge",
+                "dirname",
+                "error_get_last",
+                "error_log",
+                "file_get_contents",
+                "getenv",
+                "header",
+                "headers_sent",
+                "http_response_code",
+                "in_array",
+                "ini_set",
+                "is_string",
+                "mkdir",
+                "register_shutdown_function",
+                "rtrim",
+                "set_exception_handler",
+                "time"
+            ],
+            "new": [
+                "Funnypot\\App\\Admin\\AdminAuth",
+                "Funnypot\\App\\Admin\\ServiceProfileAdmin",
+                "Funnypot\\App\\AiApi\\AiApiRouter",
+                "Funnypot\\App\\AiApi\\AiChatHandler",
+                "Funnypot\\App\\AiApi\\AiChatPromptBuilder",
+                "Funnypot\\App\\AiApi\\AiPromptCapture",
+                "Funnypot\\App\\AiApi\\AiToolStateStore",
+                "Funnypot\\App\\AiApi\\NonsenseFallback",
+                "Funnypot\\App\\AiApi\\WordSwap",
+                "Funnypot\\App\\AiApi\\WrongLanguageCode",
+                "Funnypot\\App\\Config\\ConfigStore",
+                "Funnypot\\App\\Docker\\DockerApiResponder",
+                "Funnypot\\App\\Docker\\DockerApiRouter",
+                "Funnypot\\App\\Docker\\PhantomStore",
+                "Funnypot\\App\\Engagement\\EngagementRecorder",
+                "Funnypot\\App\\Engagement\\EpisodeResolver",
+                "Funnypot\\App\\Engagement\\NoopEngagementStore",
+                "Funnypot\\App\\Engagement\\SignedHandle",
+                "Funnypot\\App\\Http\\AttritionController",
+                "Funnypot\\App\\Http\\ConsoleRouter",
+                "Funnypot\\App\\Http\\CoreConfigFactory",
+                "Funnypot\\App\\Http\\CorporateController",
+                "Funnypot\\App\\Http\\DashboardController",
+                "Funnypot\\App\\Http\\DownloadRouter",
+                "Funnypot\\App\\Http\\HomeController",
+                "Funnypot\\App\\Http\\HoneypotController",
+                "Funnypot\\App\\Http\\LabyrinthController",
+                "Funnypot\\App\\Http\\PolluterController",
+                "Funnypot\\App\\Http\\Router",
+                "Funnypot\\App\\Http\\SleepDecoy",
+                "Funnypot\\App\\Llm\\CircuitBreaker",
+                "Funnypot\\App\\Llm\\LlmClient",
+                "Funnypot\\App\\Llm\\LlmFakeResponder",
+                "Funnypot\\App\\Llm\\LlmGenBudget",
+                "Funnypot\\App\\Llm\\LlmOutputSanitizer",
+                "Funnypot\\App\\Llm\\LlmResponseProfiles",
+                "Funnypot\\App\\Llm\\ProbeClassifier",
+                "Funnypot\\App\\Llm\\ProbeGate",
+                "Funnypot\\App\\Llm\\VelocityTracker",
+                "Funnypot\\App\\Render\\PageShellRenderer",
+                "Funnypot\\App\\Render\\SkinSet",
+                "Funnypot\\App\\Render\\Skins\\AdminLteSkin",
+                "Funnypot\\App\\Render\\Skins\\GrafanaSkin",
+                "Funnypot\\App\\Service\\ServiceProfilePreparer",
+                "Funnypot\\App\\Service\\ServiceProfileResolver",
+                "Funnypot\\App\\Service\\ServiceProfileStore",
+                "Funnypot\\App\\Service\\ServiceStatusReader",
+                "Funnypot\\App\\Shell\\ConsoleSessionStore",
+                "Funnypot\\App\\Storage\\FakePersistenceStore",
+                "Funnypot\\App\\Storage\\LlmFakeCache",
+                "Funnypot\\App\\Storage\\RawCapture",
+                "Funnypot\\App\\Storage\\SqliteAttritionStore",
+                "Funnypot\\App\\Storage\\SqliteEngagementStore",
+                "Funnypot\\App\\Storage\\SqliteHitStore",
+                "Funnypot\\App\\Storage\\TarpitBudget",
+                "Funnypot\\App\\Storage\\TokenMintStore",
+                "Funnypot\\App\\Tarpit\\Attrition\\AttritionArtifactRenderer",
+                "Funnypot\\App\\Tarpit\\Attrition\\AttritionEntryIssuer",
+                "Funnypot\\App\\Tarpit\\Attrition\\AttritionTokenCodec",
+                "Funnypot\\App\\Tarpit\\Mint\\AccountFront",
+                "Funnypot\\App\\ThreatIntel\\AbuseIpdb",
+                "Funnypot\\App\\ThreatIntel\\AttackClassifier",
+                "Funnypot\\App\\ThreatIntel\\Blocklist",
+                "Funnypot\\App\\ThreatIntel\\OperatorBlocklist",
+                "Funnypot\\App\\ThreatIntel\\ThreatIntelReporter",
+                "Funnypot\\Core\\Honeytoken",
+                "Funnypot\\Core\\Support\\Chrome\\GenericSkin",
+                "Funnypot\\Core\\Support\\Chrome\\PhpMyAdminSkin",
+                "Funnypot\\Core\\Support\\Chrome\\WordpressSkin",
+                "Geo"
+            ],
+            "static": [
+                "Funnypot\\App\\AiApi\\AiApiRouter::isaisurface",
+                "Funnypot\\App\\AiApi\\AiPromptCapture::defaultpath",
+                "Funnypot\\App\\AiApi\\AiToolStateStore::defaultpath",
+                "Funnypot\\App\\Config\\AppConfig::fromstore",
+                "Funnypot\\App\\Config\\ConfigStore::defaultdbpath",
+                "Funnypot\\App\\Docker\\DockerApiRouter::isdockersurface",
+                "Funnypot\\App\\Engagement\\AnalyticsKey::resolve",
+                "Funnypot\\App\\Engagement\\EngagementCaps::fromconfig",
+                "Funnypot\\App\\Http\\EarlyIngressGuard::accepts",
+                "Funnypot\\App\\Http\\HoneypotController::clientip",
+                "Funnypot\\App\\Http\\HoneypotController::istrustedpeer",
+                "Funnypot\\App\\Http\\LabyrinthController::entryhint",
+                "Funnypot\\App\\Identity\\HttpIdentity::load",
+                "Funnypot\\App\\Identity\\IdentityPaths::forstorage",
+                "Funnypot\\App\\Identity\\IdentityPaths::fromenvironment",
+                "Funnypot\\App\\Identity\\ServiceProfileIdentity::load",
+                "Funnypot\\App\\Render\\ArtifactVersion::current",
+                "Funnypot\\App\\Render\\Fake\\FakeSecrets::fromseed",
+                "Funnypot\\App\\Render\\Fake\\FrozenClock::epoch",
+                "Funnypot\\App\\Service\\EffectiveServiceProfileReader::profilefromenvironment",
+                "Funnypot\\App\\Service\\ServiceCapabilityPolicy::fromenvironment",
+                "Funnypot\\App\\Service\\ServiceCatalog::frompackage",
+                "Funnypot\\App\\Service\\ServicePaths::fromenvironment",
+                "Funnypot\\App\\Storage\\RawCapture::defaultpath",
+                "Funnypot\\App\\Storage\\SqliteEngagementStore::defaultpath",
+                "Funnypot\\App\\Tarpit\\Attrition\\AttritionLimits::fromconfig",
+                "Funnypot\\App\\Tarpit\\Mint\\TokenMintDecoy::build",
+                "Funnypot\\Core\\Ai\\ModelCatalog::frompackage",
+                "Funnypot\\Core\\RequestContext::fromglobals",
+                "Funnypot\\Core\\Support\\PersonaIdentity::fromseed",
+                "Funnypot\\Core\\Support\\VisualPersona::fromseed"
+            ],
+            "extends": []
+        }
+    }
+}
