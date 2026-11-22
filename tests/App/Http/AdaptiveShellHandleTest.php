@@ -469,9 +469,21 @@ final class AdaptiveShellHandleTest extends TestCase
         self::assertGreaterThan(1000, $n, 'every applet and builtin was swept');
     }
 
+    /**
+     * One turn stays bounded whatever the line asks: memory, no warnings, and the same page on a host
+     * whose clock runs 2 ms per read (it would have cut the longer lines short under a 30 ms
+     * wall-time budget). Time itself is reported by scripts/bench/cmdi-work-budget.php, not asserted.
+     */
     public function test_one_turn_stays_cheap_whatever_the_line_asks(): void
     {
-        $h = $this->harness(['env' => ['FUNNYPOT_JITTER_MS' => '0']]);
+        // One fixed date for both, so /proc/uptime agrees; only the backstop's clock differs.
+        $date = static fn (): int => 1795000000;
+        $h = $this->harness(['env' => ['FUNNYPOT_JITTER_MS' => '0'], 'clock' => $date]);
+        $now = 0;
+        $slow = $this->harness(['env' => ['FUNNYPOT_JITTER_MS' => '0'], 'clock' => $date, 'hrClock' => static function () use (&$now): int {
+            return $now += 2_000_000;
+        }]);
+        $longest = 0;
         $fill = static function (string $head, string $operand): string {
             while (strlen($head) + strlen($operand) + 1 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
                 $head .= ' ' . $operand;
@@ -503,28 +515,27 @@ final class AdaptiveShellHandleTest extends TestCase
             }
             foreach (['GET long $PATH path' => $joined] as $name => $line) {
                 $h->fetch('GET', '/admin/root/html', 'cmd=id', null, '203.0.113.71');
-                $t = hrtime(true);
                 $body = $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($line), null, '203.0.113.71')['body'];
-                $ms = (hrtime(true) - $t) / 1e6;
                 self::assertSame($h->rewriter->landing(FootholdIdentity::www()), $body, "{$name}: the attacker path is never shown on a GET");
-                self::assertLessThan(100.0, $ms, sprintf('%s: one request took %.0f ms', $name, $ms));
             }
             foreach (['long $PATH path' => $joined, 'grep -r' => $fill('grep -r a', '/'), 'grep -rv' => $fill('grep -rv Q', '/'), 'find' => $fill('find', '/'),
                 'find -name' => 'find / / / -name ' . str_repeat('a', 1100), 'du' => $fill('du -sh', '/'), 'all segments' => $fill('grep -r a /', ';grep -r a /')] as $name => $line) {
                 $h->post('/admin/root/post', 'id', '203.0.113.70');
                 memory_reset_peak_usage();
                 $base = memory_get_usage();
-                $t = hrtime(true);
                 $body = $h->post('/admin/root/post', $line, '203.0.113.70', 'pct20')['body'];
-                $ms = (hrtime(true) - $t) / 1e6;
                 self::assertStringContainsString('<title>Shell</title>', $body, $name);
-                self::assertLessThan(150.0, $ms, sprintf('%s: one request took %.0f ms', $name, $ms));
                 self::assertLessThan(16 * 1048576, memory_get_peak_usage() - $base, "{$name}: peak memory");
+                $slow->post('/admin/root/post', 'id', '203.0.113.70');
+                $now = 0;
+                self::assertSame($body, $slow->post('/admin/root/post', $line, '203.0.113.70', 'pct20')['body'], "{$name}: the same page on a slow host");
+                $longest = max($longest, $now);
             }
         } finally {
             restore_error_handler();
         }
         self::assertSame([], $warnings, 'no warning reaches the log');
+        self::assertGreaterThan(30_000_000, $longest, 'one request\'s slow clock really ran past the old wall-time budget');
     }
 
     // --- 6. the sleep decoy ----------------------------------------------------------------------

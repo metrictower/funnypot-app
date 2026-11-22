@@ -320,19 +320,22 @@ final class AdaptiveShellTest extends TestCase
 
             return true;
         });
-        $worst = 0.0;
+        $step = ['nodes' => 400, 'read' => 1024, 'matches' => 400, 'printed' => 12288, 'expanded' => 64];
+        $policy = self::policy();
+        $most = 0;
         try {
             foreach (\Funnypot\App\Tarpit\Cmdi\FootholdFacts::commandNames() as $applet) {
                 foreach ($forms as $name => $make) {
                     $line = $make($applet);
                     foreach (['POST', 'GET'] as $m) {
                         $ctx = $m === 'POST' ? self::ctx('POST', '/admin/root/post', '', 'cmd=' . rawurlencode($line)) : self::ctx('GET', '/admin/root/html', 'cmd=' . rawurlencode($line));
-                        $t = hrtime(true);
-                        $turn = $h->shell->prepare($ctx, '198.51.100.45', $det, self::policy());
-                        $ms = (hrtime(true) - $t) / 1e6;
+                        $turn = $h->shell->prepare($ctx, '198.51.100.45', $det, $policy);
                         self::assertNotNull($turn, "{$name}: {$applet}");
-                        $worst = max($worst, $ms);
-                        self::assertLessThan(30.0, $ms, sprintf('%s %s %s took %.1f ms', $m, $applet, $name, $ms));
+                        self::assertFalse($turn->backstop, "{$m} {$applet} {$name}");
+                        foreach (\Funnypot\App\Tarpit\Cmdi\FootholdFacts::BUDGET as $unit => $max) {
+                            self::assertLessThanOrEqual($max + $step[$unit], $turn->work[$unit] ?? 0, "{$m} {$applet} {$name}: {$unit}");
+                        }
+                        $most = max($most, array_sum($turn->work));
                     }
                 }
             }
@@ -340,7 +343,70 @@ final class AdaptiveShellTest extends TestCase
             restore_error_handler();
         }
         self::assertSame([], $warnings, 'no warning reaches the log');
-        self::assertGreaterThan(0.0, $worst);
+        self::assertGreaterThan(0, $most);
+    }
+
+    /**
+     * A slow host changes nothing: a clock that runs 2 ms per read would have cut the longer of these
+     * short under a 30 ms wall-time budget, and every page still matches a stopped clock's.
+     */
+    public function test_a_slow_host_gets_the_same_pages(): void
+    {
+        $now = 0;
+        $slowClock = static function () use (&$now): int {
+            return $now += 2_000_000;
+        };
+        $longest = 0;
+        $det = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        $policy = self::policy();
+        $lines = ['grep -r root /etc', 'find /', 'find / -name "*.env"', 'grep -ri password /run /etc', 'ls -laR /',
+            'cat /run/deploy/app.env', 'find / / / / / / / / / /', 'id; find /; cat /run/deploy/app.env', ''];
+        foreach (['www-data', 'root'] as $pin) {
+            // One fixed date for both, so /proc/uptime agrees; only the backstop's clock differs.
+            $still = $this->harness(['pin' => $pin, 'clock' => static fn (): int => 1795000000, 'hrClock' => static fn (): int => 0]);
+            $slow = $this->harness(['pin' => $pin, 'clock' => static fn (): int => 1795000000, 'hrClock' => $slowClock]);
+            foreach ($lines as $line) {
+                foreach (['POST', 'GET'] as $m) {
+                    $ctx = $m === 'POST' ? self::ctx('POST', '/admin/root/post', '', ConsoleHarness::form($line, 'pct20')) : self::ctx('GET', '/admin/root/html', 'cmd=' . rawurlencode($line));
+                    $pages = [];
+                    foreach ([$still, $slow] as $h) {
+                        $now = 0;
+                        $turn = $h->shell->prepare($ctx, '198.51.100.46', $det, $policy);
+                        $longest = max($longest, $now);
+                        self::assertNotNull($turn, $line);
+                        $core = new SynthesizedResponse(200, [], 'core', $det);
+                        $h->shell->render($turn, $core);
+                        $pages[] = [$core->body, $turn->work, $turn->backstop];
+                    }
+                    self::assertSame($pages[0], $pages[1], "{$m} {$line} as {$pin}");
+                }
+            }
+        }
+        self::assertGreaterThan(30_000_000, $longest, 'one request\'s slow clock really ran past the old wall-time budget');
+    }
+
+    /** Only a host far slower than any normal answer trips the backstop: the plain landing, logged. */
+    public function test_the_wall_clock_backstop_serves_the_landing_and_logs_it(): void
+    {
+        $now = 0;
+        $h = $this->harness(['hrClock' => static function () use (&$now): int {
+            return $now += 600_000_000;
+        }]);
+        $det = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        $turn = $h->shell->prepare(self::ctx('POST', '/admin/root/post', '', ConsoleHarness::form('find /', 'pct20')), '198.51.100.47', $det, self::policy());
+        self::assertNotNull($turn);
+        self::assertTrue($turn->backstop);
+        self::assertTrue($turn->landingOnly);
+        self::assertFalse($turn->executes, 'nothing ran, so no sleep is honoured');
+        $core = new SynthesizedResponse(200, [], 'core', $det);
+        self::assertTrue($h->shell->serve($turn, $core));
+        self::assertSame($h->rewriter->landing($turn->identity), $core->body, 'the plain landing');
+        self::assertStringContainsString('legacy audit-archive export is still live', $core->body, 'onward pointer and all');
+        $h->shell->commit($turn, 0);
+        self::assertSame('backstop', $h->store->writes[0]['sub'] ?? null, 'the attribution log records it');
+
+        $quick = $h->shell->prepare(self::ctx('POST', '/admin/root/post', '', ConsoleHarness::form('id', 'pct20')), '198.51.100.47', $det, self::policy());
+        self::assertFalse($quick->backstop, 'a short command reads the clock only when it starts');
     }
 
     public function test_a_store_fault_never_escapes(): void

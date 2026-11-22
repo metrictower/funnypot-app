@@ -46,14 +46,25 @@ final class FootholdFacts
     private const MAX_OUTPUT = 12288;
 
     /**
-     * One request's work, whatever the line asks for: operands an applet looks at, table entries
-     * visited, the longest pattern matched, and wall time across every command of the request. When
-     * the budget runs out the answer is what was produced so far, the way a killed command's is.
+     * One request's work, across every command of the request, counted in units that do not depend
+     * on how busy the host is: table entries visited, bytes read from files, pattern tests, bytes
+     * printed, and bytes added by expansion. The same line always does the same work and so always
+     * gets the same answer. When a limit is reached the answer is what was produced so far, the way a
+     * killed command's is. A full walk of the table is about 340 entries, 6 KB and 230 lines, so any
+     * one command on a real path finishes well inside these. Printing stops at four capture buffers:
+     * the page shows one, so the limit never changes what is seen.
      */
+    public const BUDGET = ['nodes' => 3000, 'read' => 65536, 'matches' => 8192, 'printed' => 4 * self::MAX_OUTPUT, 'expanded' => self::MAX_EXPANDED];
+    /** Operands an applet looks at, and the longest pattern it matches. */
     private const MAX_ARGS = 64;
-    private const MAX_NODES = 3000;
     private const MAX_PATTERN = 128;
-    private const MAX_WORK_NS = 30_000_000;
+    /**
+     * A coarse wall-clock backstop for a host so overloaded that even a bounded line runs long. It
+     * sits far above what any line costs inside BUDGET, is read only once every BACKSTOP_EVERY
+     * checks, and never shapes a normal answer: when it trips, the console serves the plain landing.
+     */
+    public const BACKSTOP_NS = 500_000_000;
+    private const BACKSTOP_EVERY = 64;
     /** Linux's NAME_MAX and PATH_MAX: past them every applet gets ENAMETOOLONG. */
     private const NAME_MAX = 255;
     private const PATH_MAX = 4096;
@@ -133,14 +144,20 @@ final class FootholdFacts
     /** @var array<string,list<string>> */
     private array $children = [];
     private bool $mayReflect = true;
-    private int $nodes = 0;
-    private ?int $deadline = null;
+    /** @var array<string,int> this request's work so far, keyed like BUDGET */
+    private array $work = ['nodes' => 0, 'read' => 0, 'matches' => 0, 'printed' => 0, 'expanded' => 0];
+    private int $checks = 0;
+    private ?int $startedNs = null;
+    /** True while the landing runs: its commands are fixed, so it never depends on the budget. */
+    private bool $unbudgeted = false;
     /** The applet being run, for the ENAMETOOLONG line ('' while the shell itself resolves the command). */
     private string $applet = '';
     /** @var list<string> directories this identity cannot enter, for a linear "is it under one?" check */
     private array $deniedDirs = [];
     /** @var callable():int */
     private $clock;
+    /** @var callable():int monotonic nanoseconds, read only by the backstop */
+    private $hrClock;
 
     public function __construct(
         private FootholdIdentity $id,
@@ -148,8 +165,10 @@ final class FootholdFacts
         private string $registry,
         private string $phpVersion,
         ?callable $clock = null,
+        ?callable $hrClock = null,
     ) {
         $this->clock = $clock ?? static fn (): int => time();
+        $this->hrClock = $hrClock ?? static fn (): int => hrtime(true);
         $this->buildFs();
     }
 
@@ -157,13 +176,13 @@ final class FootholdFacts
      * Facts for this deployment's persona. The host and registry are the same strings the labyrinth
      * pages and the panel header show; the PHP version is the one the X-Powered-By header claims.
      */
-    public static function forPersona(int $personaSeed, FootholdIdentity $id, string $poweredBy = '', ?callable $clock = null): self
+    public static function forPersona(int $personaSeed, FootholdIdentity $id, string $poweredBy = '', ?callable $clock = null, ?callable $hrClock = null): self
     {
         // host.name is not a persona field, so every page that shows a host uses this same fallback.
         $host = self::personaField($personaSeed, 'host.name', self::HOST_FALLBACK);
         $registry = 'registry.int.' . self::personaField($personaSeed, 'company.domain', 'corevance.internal');
 
-        return new self($id, $host, $registry, self::phpVersionFrom($poweredBy, $personaSeed), $clock);
+        return new self($id, $host, $registry, self::phpVersionFrom($poweredBy, $personaSeed), $clock, $hrClock);
     }
 
     public static function personaField(int $seed, string $path, string $fallback): string
@@ -220,6 +239,20 @@ final class FootholdFacts
      */
     public function landingTranscript(): string
     {
+        // Fixed commands with a fixed answer: no budget or clock is consulted, and this request's work
+        // tally is left as it was.
+        $saved = [$this->work, $this->checks];
+        $this->unbudgeted = true;
+        try {
+            return $this->landingSteps();
+        } finally {
+            $this->unbudgeted = false;
+            [$this->work, $this->checks] = $saved;
+        }
+    }
+
+    private function landingSteps(): string
+    {
         $steps = $this->id->isRoot()
             ? []
             : [['id'], ['sudo', '-i'], ['cat', '/etc/shadow'], ['ls', '-a', '/root']];
@@ -252,11 +285,14 @@ final class FootholdFacts
      * a query string; attacker text outside the safe charset is never echoed at all.
      *
      * @param list<string> $argv
+     * @throws WorkBackstop when the request has run past the wall-clock backstop
      */
     public function run(array $argv, bool $mayReflect = true): ?string
     {
         $this->mayReflect = $mayReflect;
-        $this->deadline ??= hrtime(true) + self::MAX_WORK_NS;
+        if (!$this->unbudgeted) {
+            $this->startedNs ??= ($this->hrClock)();
+        }
         if ($this->spent()) {
             return '';
         }
@@ -284,15 +320,38 @@ final class FootholdFacts
             return $mayReflect ? '' : null;
         }
 
-        return strlen($out) > self::MAX_OUTPUT ? substr($out, 0, self::MAX_OUTPUT) : $out;
+        $out = strlen($out) > self::MAX_OUTPUT ? substr($out, 0, self::MAX_OUTPUT) : $out;
+        $this->work['printed'] += strlen($out);
+
+        return $out;
+    }
+
+    /** This request's work so far, in BUDGET's units. @return array<string,int> */
+    public function work(): array
+    {
+        return $this->work;
     }
 
     /** True once this request's work budget is used up, or $out is already a full answer. */
     private function spent(string $out = ''): bool
     {
-        return strlen($out) >= self::MAX_OUTPUT
-            || $this->nodes > self::MAX_NODES
-            || ($this->deadline !== null && hrtime(true) > $this->deadline);
+        if (strlen($out) >= self::MAX_OUTPUT) {
+            return true;
+        }
+        if ($this->unbudgeted) {
+            return false;
+        }
+        if (++$this->checks % self::BACKSTOP_EVERY === 0 && $this->startedNs !== null
+            && ($this->hrClock)() - $this->startedNs > self::BACKSTOP_NS) {
+            throw new WorkBackstop();
+        }
+        foreach (self::BUDGET as $unit => $max) {
+            if ($this->work[$unit] > $max) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** True when $name runs here: an applet on PATH, a builtin, or a known binary. */
@@ -963,7 +1022,7 @@ final class FootholdFacts
                 continue;
             }
             $kb = 4;
-            $this->nodes += count($this->fs);
+            $this->work['nodes'] += count($this->fs);
             foreach ($this->fs as $path => $e) {
                 if ($path !== $abs && str_starts_with($path, rtrim($abs, '/') . '/')) {
                     $kb += max(4, (int) (ceil(($e['size'] ?? 0) / 4096) * 4));
@@ -1131,7 +1190,8 @@ final class FootholdFacts
                 $out .= 'total ' . (4 * max(1, count($names))) . "\n";
             }
             foreach ($names as $n) {
-                if (++$this->nodes > self::MAX_NODES || strlen($out) >= self::MAX_OUTPUT) {
+                $this->work['nodes']++;
+                if ($this->spent($out)) {
                     break;
                 }
                 $child = $n === '.' ? $real : ($n === '..' ? $this->parent($real) : rtrim($real, '/') . '/' . $n);
@@ -1205,7 +1265,10 @@ final class FootholdFacts
                 : "{$applet}: {$shown}: Permission denied\n"];
         }
 
-        return [$this->content($this->resolve($abs), $applet), null];
+        $c = $this->content($this->resolve($abs), $applet);
+        $this->work['read'] += strlen($c);
+
+        return [$c, null];
     }
 
     /** @param list<string> $a */
@@ -1418,6 +1481,7 @@ final class FootholdFacts
                 if (strlen($out) >= self::MAX_OUTPUT) {
                     break;
                 }
+                $this->work['matches']++;
                 if ($match($line) !== str_contains($flags, 'v')) {
                     $count++;
                     if (!str_contains($flags, 'c') && !str_contains($flags, 'l')) {
@@ -1580,8 +1644,11 @@ final class FootholdFacts
                 if (strlen($out) >= self::MAX_OUTPUT) {
                     break;
                 }
-                if ($name !== null && (strlen($name) > self::MAX_PATTERN || str_contains($name, "\0") || !fnmatch($name, basename($p)))) {
-                    continue;
+                if ($name !== null) {
+                    $this->work['matches']++;
+                    if (strlen($name) > self::MAX_PATTERN || str_contains($name, "\0") || !fnmatch($name, basename($p))) {
+                        continue;
+                    }
                 }
                 $out .= ($r === '.' || $r === './' ? '.' . substr($p, strlen(self::CWD)) : $p) . "\n";
             }
@@ -1598,7 +1665,7 @@ final class FootholdFacts
      */
     private function walk(string $abs, string &$errors, string $applet): array
     {
-        $this->nodes++;
+        $this->work['nodes']++;
         $out = [$abs];
         if ($this->type($abs) !== 'd') {
             return $out;
@@ -1616,6 +1683,7 @@ final class FootholdFacts
             }
             $child = rtrim($abs, '/') . '/' . $n;
             if ($this->fs[$child]['t'] === 'l') {
+                $this->work['nodes']++;
                 $out[] = $child;
                 continue;
             }
@@ -2524,6 +2592,7 @@ final class FootholdFacts
                 $split = $split || $m[1] === 'u';
                 $v = $this->shellVar($m[2]);
                 $total += strlen($v);
+                $this->work['expanded'] += strlen($v);
                 if ($total > self::MAX_EXPANDED) {
                     throw new ArgListTooLong();
                 }
@@ -2574,7 +2643,8 @@ final class FootholdFacts
             return [];
         }
         $names = $this->children[$abs] ?? [];
-        $this->nodes += count($names);
+        $this->work['nodes'] += count($names);
+        $this->work['matches'] += count($names);
         sort($names, SORT_STRING);
         $hits = [];
         foreach ($names as $n) {

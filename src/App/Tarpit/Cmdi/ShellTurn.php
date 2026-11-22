@@ -32,6 +32,10 @@ final class ShellTurn
         public readonly SourceState $stateAfter,
         /** What this turn changes in the source's history ({@see SourceState::delta()}). @var array<string,mixed> */
         public readonly array $delta = [],
+        /** The work this turn's commands did ({@see FootholdFacts::work()}). @var array<string,int> */
+        public readonly array $work = [],
+        /** True when the wall-clock backstop cut the turn short and the landing was served. */
+        public readonly bool $backstop = false,
     ) {
     }
 
@@ -43,7 +47,7 @@ final class ShellTurn
             'value_source' => $this->valueSource,
             'simple' => $this->simple ? 1 : 0,
             'kind' => $this->outcome === null ? 'landing' : $this->outcome->kind,
-            'sub' => $this->landingOnly ? 'landing' : ($this->outcome->sub ?? ''),
+            'sub' => $this->backstop ? 'backstop' : ($this->landingOnly ? 'landing' : ($this->outcome->sub ?? '')),
             'family' => $this->outcome?->family ?? '',
             'msg_id' => $this->outcome?->msgId ?? '',
             'owned_by_rule' => $this->coreRule,

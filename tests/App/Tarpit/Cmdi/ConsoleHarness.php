@@ -49,6 +49,7 @@ require_once dirname(__DIR__, 4) . '/demo/lib/geo.php';
  *   sleeps    by-reference array: wires the sleep decoy with a spy sleeper that records ms
  *   store     a console store to use instead of a fresh spy
  *   clock     the facts clock
+ *   hrClock   the work backstop's nanosecond clock
  */
 final class ConsoleHarness
 {
@@ -99,7 +100,7 @@ final class ConsoleHarness
         $h->store = $o['store'] ?? new SpyCmdiStore();
         if (($o['shell'] ?? true) === true) {
             [$pick, $idKey] = AdaptiveShell::keysFrom($identity->filesystemKey());
-            $h->shell = new AdaptiveShell($h->config, $h->rewriter, $h->store, $pick, $idKey, $o['clock'] ?? null);
+            $h->shell = new AdaptiveShell($h->config, $h->rewriter, $h->store, $pick, $idKey, $o['clock'] ?? null, $o['hrClock'] ?? null);
         }
         if (($o['abuse'] ?? false) === true) {
             $h->abuse = new AbuseIpdb('KEY', $h->dir . '/intel.sqlite', ['10.0.0.1']);

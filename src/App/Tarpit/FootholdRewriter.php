@@ -103,10 +103,13 @@ final class FootholdRewriter
         return $this->chrome($this->facts($id), $output . '$ ');
     }
 
-    /** @param callable():int|null $clock */
-    public function facts(FootholdIdentity $id, ?callable $clock = null): FootholdFacts
+    /**
+     * @param callable():int|null $clock
+     * @param callable():int|null $hrClock monotonic nanoseconds for the work backstop
+     */
+    public function facts(FootholdIdentity $id, ?callable $clock = null, ?callable $hrClock = null): FootholdFacts
     {
-        return FootholdFacts::forPersona($this->personaSeed, $id, $this->poweredBy, $clock);
+        return FootholdFacts::forPersona($this->personaSeed, $id, $this->poweredBy, $clock, $hrClock);
     }
 
     private function chrome(FootholdFacts $facts, string $pre): string

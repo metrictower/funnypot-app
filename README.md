@@ -129,9 +129,17 @@ under the tarpit): an agent that "fixes" its payload is kept fixing it.
   useless "success". A plain `$NAME`/`${NAME}` expands from the same environment `env` prints (unset is
   empty); only a `${…}` ash really rejects gets `bad substitution`. A resend replays the same answer, nothing
   ever executes, and no answer is progress.
-- **Bounded.** One request's answer has a hard budget (operands looked at, fake-filesystem entries visited,
-  pattern length, output bytes and about 30 ms of work across every command in the line). Past it the
-  answer is the output so far, like a killed command, so a 4 KB `grep -r` or `find` line stays cheap.
+- **Bounded.** One request's answer has a hard work budget across every command in the line, counted in
+  units that do not depend on host load (`FootholdFacts::BUDGET`). The units are fake-filesystem entries
+  visited, bytes read, pattern tests, bytes printed and bytes added by expansion. Operand count and pattern
+  length are capped as well. Past the budget the answer is the output so far, like a killed command, so a
+  4 KB `grep -r` or `find` line stays cheap. The same line always does the same work and gets the same
+  answer, however busy the host is. The landing never consults the budget.
+
+  A wall-clock backstop (500 ms) is the only time check. It is only a guard against a badly overloaded
+  host and never shapes a normal answer: if it trips, the turn gets the plain landing and its attribution
+  row is logged with `sub = backstop`. `scripts/bench/cmdi-work-budget.php` reports what the worst lines
+  cost on a host; the tests assert work units, never time.
   Linux's path limits apply after expansion (a name over 255 bytes or a path over 4096 answers `File name
   too long`), and a line expansion grows past 64 KB answers `Argument list too long`.
 - **Reflection.** Attacker text is echoed only from the body of a non-GET request, in a small safe charset,

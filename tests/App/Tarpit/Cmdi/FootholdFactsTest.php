@@ -38,9 +38,23 @@ final class FootholdFactsTest extends TestCase
         'mount', 'free', 'free -m', 'uptime', 'w', 'who', 'date', 'du -sh', 'uname -a', 'env', 'printenv',
     ];
 
-    private static function facts(FootholdIdentity $id, string $poweredBy = ''): FootholdFacts
+    private static function facts(FootholdIdentity $id, string $poweredBy = '', ?callable $hrClock = null): FootholdFacts
     {
-        return FootholdFacts::forPersona(self::SEED, $id, $poweredBy, static fn (): int => self::NOW);
+        return FootholdFacts::forPersona(self::SEED, $id, $poweredBy, static fn (): int => self::NOW, $hrClock);
+    }
+
+    /**
+     * Every unit stays within its limit, give or take the one step that crossed it: a whole-table
+     * `du`, one directory's glob, one file's lines, or one capped command's output.
+     *
+     * @param array<string,int> $work
+     */
+    private static function assertWithinBudget(array $work, string $why): void
+    {
+        $step = ['nodes' => 400, 'read' => 1024, 'matches' => 400, 'printed' => 12288, 'expanded' => 64];
+        foreach (FootholdFacts::BUDGET as $unit => $max) {
+            self::assertLessThanOrEqual($max + $step[$unit], $work[$unit], "{$why}: {$unit}");
+        }
     }
 
     private static function sh(FootholdFacts $f, string $cmd): string
@@ -397,7 +411,7 @@ final class FootholdFactsTest extends TestCase
         self::assertSame('', self::sh(self::facts(FootholdIdentity::root()), 'kill 1'));
     }
 
-    /** One request's work is bounded whatever the line asks for: time, memory, and no warnings. */
+    /** One request's work is bounded whatever the line asks for: work units, memory, and no warnings. */
     public function test_worst_case_commands_stay_within_the_budget(): void
     {
         $roots = array_fill(0, 2000, '/');
@@ -424,13 +438,14 @@ final class FootholdFactsTest extends TestCase
                     $f = self::facts($id);
                     memory_reset_peak_usage();
                     $base = memory_get_usage();
-                    $t = hrtime(true);
                     $out = $f->run($argv);
-                    $ms = (hrtime(true) - $t) / 1e6;
                     self::assertIsString($out, $name);
                     self::assertLessThanOrEqual(12288, strlen((string) $out), "{$name}: the output is capped");
-                    self::assertLessThan(60.0, $ms, sprintf('%s as %s took %.1f ms', $name, $id->name, $ms));
+                    self::assertWithinBudget($f->work(), "{$name} as {$id->name}");
                     self::assertLessThan(8 * 1048576, memory_get_peak_usage() - $base, "{$name}: peak memory");
+                    $again = self::facts($id);
+                    self::assertSame($out, $again->run($argv), "{$name}: the same line gets the same answer");
+                    self::assertSame($f->work(), $again->work(), "{$name}: and does the same work");
                 }
             }
         } finally {
@@ -449,19 +464,20 @@ final class FootholdFactsTest extends TestCase
 
             return $head;
         };
-        $f = self::facts(FootholdIdentity::www());
+        // One table per line, as one request gets: the expansion budget is per request.
+        $f = static fn (): FootholdFacts => self::facts(FootholdIdentity::www());
         $lex = static fn (string $line): array => \Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv;
         $long = '/' . str_repeat('a', 300);
-        self::assertSame("cat: can't open '" . substr($long, 0, FootholdFacts::PATH_CAP) . "...': File name too long\n", $f->run(['cat', $long]), 'a component over 255 bytes');
-        $path = self::sh($f, 'printenv PATH');
+        self::assertSame("cat: can't open '" . substr($long, 0, FootholdFacts::PATH_CAP) . "...': File name too long\n", $f()->run(['cat', $long]), 'a component over 255 bytes');
+        $path = self::sh($f(), 'printenv PATH');
         $prefix = substr(str_repeat(trim($path), 3), 0, FootholdFacts::PATH_CAP);
-        self::assertSame("cat: can't open '{$prefix}...': File name too long\n", $f->run($lex($fill('cat ', '$PATH'))), 'a 42 KB path from $PATH');
-        self::assertSame("ls: {$prefix}...: File name too long\n", $f->run($lex($fill('ls -la ', '$PATH'))));
-        self::assertSame("stat: can't stat '{$prefix}...': File name too long\n", $f->run($lex($fill('stat ', '$PATH'))));
-        self::assertStringStartsWith("sh: cd: line 0: can't cd to {$prefix}...: File name too long", (string) $f->run($lex($fill('cd ', '$PATH'))));
-        self::assertSame("sh: {$prefix}...: File name too long\n", $f->run($lex($fill('', '$PATH'))), 'the shell resolving a too-long command');
-        self::assertNull($f->run($lex($fill('cat ', '$PATH')), false), 'from a GET the attacker path is never shown');
-        self::assertNull($f->run(['cat', $long], false));
+        self::assertSame("cat: can't open '{$prefix}...': File name too long\n", $f()->run($lex($fill('cat ', '$PATH'))), 'a 42 KB path from $PATH');
+        self::assertSame("ls: {$prefix}...: File name too long\n", $f()->run($lex($fill('ls -la ', '$PATH'))));
+        self::assertSame("stat: can't stat '{$prefix}...': File name too long\n", $f()->run($lex($fill('stat ', '$PATH'))));
+        self::assertStringStartsWith("sh: cd: line 0: can't cd to {$prefix}...: File name too long", (string) $f()->run($lex($fill('cd ', '$PATH'))));
+        self::assertSame("sh: {$prefix}...: File name too long\n", $f()->run($lex($fill('', '$PATH'))), 'the shell resolving a too-long command');
+        self::assertNull($f()->run($lex($fill('cat ', '$PATH')), false), 'from a GET the attacker path is never shown');
+        self::assertNull($f()->run(['cat', $long], false));
     }
 
     public function test_expansion_growth_is_capped(): void
@@ -469,9 +485,8 @@ final class FootholdFactsTest extends TestCase
         // More markers than a 4 KB line can hold: the cap answers E2BIG instead of building the value.
         $argv = ['cat', str_repeat("\x00uPATH\x00", 1200)];
         $f = self::facts(FootholdIdentity::www());
-        $t = hrtime(true);
         self::assertSame("sh: cat: Argument list too long\n", $f->run($argv));
-        self::assertLessThan(30.0, (hrtime(true) - $t) / 1e6);
+        self::assertLessThanOrEqual(FootholdFacts::BUDGET['expanded'], $f->work()['expanded'], 'no oversized value is built');
     }
 
     public function test_the_long_path_repro_stays_within_the_budget(): void
@@ -483,11 +498,72 @@ final class FootholdFactsTest extends TestCase
         $argv = \Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv;
         foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
             foreach ([true, false] as $reflect) {
-                $t = hrtime(true);
-                self::facts($id)->run($argv, $reflect);
-                self::assertLessThan(30.0, (hrtime(true) - $t) / 1e6, "{$id->name}, reflect=" . var_export($reflect, true));
+                $f = self::facts($id);
+                $f->run($argv, $reflect);
+                self::assertWithinBudget($f->work(), "{$id->name}, reflect=" . var_export($reflect, true));
+                self::assertSame(0, $f->work()['nodes'], 'a too-long path is refused before any walk');
             }
         }
+    }
+
+    /**
+     * The answer never depends on the host's speed. A clock that runs 2 ms per read would have cut the
+     * longer of these short under a 30 ms wall-time budget; here they match a stopped clock byte for byte.
+     */
+    public function test_answers_do_not_depend_on_the_clock(): void
+    {
+        $lines = [
+            'grep -r root /etc', 'find /', 'find / -name *.env', 'grep -r a /', 'grep -ri password /run /etc',
+            'ls -laR /', 'du -sh /', 'ls -la /usr/bin', 'cat /run/deploy/app.env', 'find / / / / / / / / / /',
+        ];
+        $elapsed = 0;
+        foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+            foreach ($lines as $line) {
+                $now = 0;
+                $slow = self::facts($id, '', static function () use (&$now): int {
+                    return $now += 2_000_000;
+                });
+                $still = self::facts($id, '', static fn (): int => 0);
+                self::assertSame($still->run(explode(' ', $line)), $slow->run(explode(' ', $line)), "{$line} as {$id->name}");
+                self::assertSame($still->work(), $slow->work(), "{$line}: the same work");
+                $elapsed = max($elapsed, $now);
+            }
+            self::assertSame(self::facts($id, '', static fn (): int => 0)->landingTranscript(), self::facts($id, '', static function () use (&$now): int {
+                return $now += 2_000_000;
+            })->landingTranscript());
+        }
+        self::assertGreaterThan(30_000_000, $elapsed, 'the slow clock really ran past the old wall-time budget');
+    }
+
+    /** The landing runs fixed commands: no clock is read, and a spent budget changes nothing in it. */
+    public function test_the_landing_never_depends_on_the_budget(): void
+    {
+        foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+            $fresh = self::facts($id)->landingTranscript();
+            self::assertStringContainsString('legacy audit-archive export is still live', $fresh, 'the onward pointer is always there');
+            $f = self::facts($id, '', static function (): int {
+                throw new \LogicException('the landing read the clock');
+            });
+            self::assertSame($fresh, $f->landingTranscript());
+            $spent = self::facts($id);
+            $spent->run(array_merge(['du', '-sh'], array_fill(0, 64, '/')));
+            self::assertGreaterThan(FootholdFacts::BUDGET['nodes'], $spent->work()['nodes']);
+            $before = $spent->work();
+            self::assertSame($fresh, $spent->landingTranscript(), 'a spent budget changes nothing in the landing');
+            self::assertSame($before, $spent->work(), 'and the landing adds nothing to the tally');
+        }
+    }
+
+    /** Only a host far slower than any normal answer trips the wall-clock backstop. */
+    public function test_the_wall_clock_backstop_trips_only_far_past_the_budget(): void
+    {
+        $now = 0;
+        $f = self::facts(FootholdIdentity::www(), '', static function () use (&$now): int {
+            return $now += 600_000_000;
+        });
+        self::assertSame("uid=33(www-data) gid=33(www-data) groups=33(www-data)\n", $f->run(['id']), 'a short command never reads the clock again');
+        $this->expectException(\Funnypot\App\Tarpit\Cmdi\WorkBackstop::class);
+        $f->run(['find', '/']);
     }
 
     public function test_getent_matches_whole_fields(): void

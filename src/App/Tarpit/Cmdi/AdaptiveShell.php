@@ -50,6 +50,8 @@ final class AdaptiveShell
 
     /** @var callable():int|null */
     private $clock;
+    /** @var callable():int|null */
+    private $hrClock;
 
     public function __construct(
         private AppConfig $config,
@@ -58,8 +60,10 @@ final class AdaptiveShell
         private string $pickKey,
         private string $identityKey,
         ?callable $clock = null,
+        ?callable $hrClock = null,
     ) {
         $this->clock = $clock;
+        $this->hrClock = $hrClock;
     }
 
     /**
@@ -148,7 +152,14 @@ final class AdaptiveShell
                 return new ShellTurn($ip, $ctx->path, $identity, $cmd['source'], $inConsole, true, false, null, '', null, false, $state);
             }
             $picked = OutcomePicker::pick($lex, $state, $this->pickKey);
-            [$output, $outcome, $executes, $sleep] = $this->answer($lex, $picked, $this->page->facts($identity, $this->clock), $mayReflect);
+            $facts = $this->page->facts($identity, $this->clock, $this->hrClock);
+            $backstop = false;
+            try {
+                [$output, $outcome, $executes, $sleep] = $this->answer($lex, $picked, $facts, $mayReflect);
+            } catch (WorkBackstop $e) {
+                // Only a badly overloaded host gets here. The turn is logged and the plain landing served.
+                [$output, $outcome, $executes, $sleep, $backstop] = [null, $picked, false, null, true];
+            }
 
             return new ShellTurn(
                 $ip,
@@ -166,6 +177,8 @@ final class AdaptiveShell
                 // segment changes this answer only, so a later resend of the shape answers as before.
                 $state->apply($delta = SourceState::delta($lex, $picked)),
                 $delta,
+                $facts->work(),
+                $backstop,
             );
         } catch (Throwable $e) {
             return null;

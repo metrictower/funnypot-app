@@ -270,7 +270,8 @@ Concretely:
    > within 25 ms is dropped (measured: 2–3 of 16 writers lined up on one
    > source), never a 500. `cmdi_turns` is the operator's attribution log
    > (outcome, identity, value source, owning rule, delay), never served,
-   > FIFO-capped at 20,000 rows and purged after 7 days. Every fault fails
+   > FIFO-capped at 20,000 rows and purged after 7 days. A turn that tripped
+   > the console's wall-clock backstop is logged with `sub = backstop`. Every fault fails
    > open to a stateless turn.
 3. An hourly rollup table plus maintained counters so the 3-second dashboard
    tick stops doing full-table GROUP BYs. This is the only real scaling work,
