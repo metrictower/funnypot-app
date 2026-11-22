@@ -128,6 +128,47 @@ final class MintFormsTest extends TestCase
         }
     }
 
+    public function test_a_multipart_form_reads_the_parsed_fields_under_the_same_caps(): void
+    {
+        $match = ['route' => 'join', 'methods' => ['GET', 'POST'], 'params' => [], 'api' => false, 'pattern' => false];
+        $saved = [$_POST, $_SERVER['CONTENT_TYPE'] ?? null, $_SERVER['CONTENT_LENGTH'] ?? null];
+        try {
+            // PHP parses a multipart body itself and hands no raw body over.
+            $_SERVER['CONTENT_TYPE'] = 'multipart/form-data; boundary=----x';
+            $_SERVER['CONTENT_LENGTH'] = '512';
+            $_POST = ['csrf_token' => 'abc', 'username' => 'artex1', 'scopes' => ['read:user', 'orders:read']];
+            $r = MintRequest::parse(new RequestContext('POST', '/join', '', [], null), $match, '1.2.3.4');
+            self::assertFalse($r->tooLarge);
+            self::assertSame('abc', $r->str('csrf_token'));
+            self::assertSame('artex1', $r->str('username'));
+            self::assertSame(['read:user', 'orders:read'], $r->strList('scopes'));
+
+            $_POST = array_fill_keys(array_map(static fn (int $i): string => 'k' . $i, range(1, 200)), 'v');
+            self::assertCount(MintRequest::MAX_PAIRS, MintRequest::parse(new RequestContext('POST', '/join', '', [], null), $match, '1.2.3.4')->body);
+
+            $_SERVER['CONTENT_LENGTH'] = (string) (MintRequest::MAX_BODY + 1);
+            $big = MintRequest::parse(new RequestContext('POST', '/join', '', [], null), $match, '1.2.3.4');
+            self::assertTrue($big->tooLarge);
+            self::assertSame([], $big->body);
+
+            unset($_SERVER['CONTENT_LENGTH']);
+            self::assertSame([], MintRequest::parse(new RequestContext('POST', '/join', '', [], null), $match, '1.2.3.4')->body, 'no length, nothing read');
+            $_SERVER['CONTENT_LENGTH'] = '512';
+            self::assertSame([], MintRequest::parse(new RequestContext('GET', '/join', '', [], null), $match, '1.2.3.4')->body, 'a GET reads no form');
+            $_SERVER['CONTENT_TYPE'] = 'application/x-www-form-urlencoded';
+            self::assertSame([], MintRequest::parse(new RequestContext('POST', '/join', '', [], null), $match, '1.2.3.4')->body, 'only multipart reads the parsed fields');
+        } finally {
+            $_POST = $saved[0];
+            foreach (['CONTENT_TYPE' => $saved[1], 'CONTENT_LENGTH' => $saved[2]] as $k => $v) {
+                if ($v === null) {
+                    unset($_SERVER[$k]);
+                } else {
+                    $_SERVER[$k] = $v;
+                }
+            }
+        }
+    }
+
     public function test_control_characters_are_a_charset_error_never_blank(): void
     {
         foreach (["\0", "\t\n", "\x0B", "\r", str_repeat("\0", 160), " \0 "] as $v) {

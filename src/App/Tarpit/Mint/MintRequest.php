@@ -10,8 +10,10 @@ use Funnypot\Core\RequestContext;
  * One request to the account surface, parsed under hard caps before anything reads it: the body is at
  * most 16 KB (larger is 413), a form body and the query string keep only their first 64 pairs before
  * parse_str() (so PHP's input-variable limit can never warn), JSON is at most 8 KB and four levels
- * deep, and a cookie header at most 4 KB. Field accessors are type-strict: a value that is not the
- * expected scalar or list of strings reads as missing, never as a warning.
+ * deep, and a cookie header at most 4 KB. A multipart form, whose body PHP parses itself and never
+ * hands over raw, is read from the parsed fields under the same size and pair caps; uploaded files are
+ * ignored. Field accessors are type-strict: a value that is not the expected scalar or list of strings
+ * reads as missing, never as a warning.
  */
 final class MintRequest
 {
@@ -56,9 +58,18 @@ final class MintRequest
         $json = false;
         $badJson = false;
         $body = [];
-        if (!$tooLarge && $raw !== '' && !in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
-            // FastCGI hands Content-Type over as CONTENT_TYPE, outside the HTTP_* headers.
-            $ctype = strtolower($headers['content-type'] ?? (is_string($_SERVER['CONTENT_TYPE'] ?? null) ? $_SERVER['CONTENT_TYPE'] : ''));
+        $hasBody = !in_array($method, ['GET', 'HEAD', 'OPTIONS'], true);
+        // FastCGI hands Content-Type and Content-Length over outside the HTTP_* headers.
+        $ctype = strtolower($headers['content-type'] ?? (is_string($_SERVER['CONTENT_TYPE'] ?? null) ? $_SERVER['CONTENT_TYPE'] : ''));
+        if ($hasBody && $raw === '' && str_contains($ctype, 'multipart/form-data')) {
+            $length = $headers['content-length'] ?? (is_string($_SERVER['CONTENT_LENGTH'] ?? null) ? $_SERVER['CONTENT_LENGTH'] : '');
+            if (ctype_digit($length) && (int) $length > self::MAX_BODY) {
+                $tooLarge = true;
+            } elseif (ctype_digit($length)) {
+                $body = array_slice($_POST, 0, self::MAX_PAIRS, true);
+            }
+        }
+        if (!$tooLarge && $raw !== '' && $hasBody) {
             $first = ltrim($raw)[0] ?? '';
             if (str_contains($ctype, 'json') || ($ctype === '' && ($first === '{' || $first === '['))) {
                 $json = true;

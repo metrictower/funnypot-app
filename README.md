@@ -216,7 +216,10 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   No raw secret is stored: tokens re-derive from their serials and secrets are kept as HMACs. Work is
   bounded by a per-source **request ledger** (1,500 units an hour; no wall clock), input caps (16 KB
   body, 64 pairs, JSON 8 KB / depth 4) and the store's caps (about 108 MB worst case; see
-  `docs/DATA-LAYER-DECISION.md`).
+  `docs/DATA-LAYER-DECISION.md`). A multipart form (`curl -F`), whose raw body PHP never hands over, is
+  read from PHP's parsed fields under the same caps: a declared length over 16 KB is 413, only the
+  first 64 fields count, uploaded files are ignored, and a request with no declared length reads as
+  an empty form.
 - **Gates.** Wired only with `FUNNYPOT_TARPIT=1` and `FUNNYPOT_TARPIT_TOKEN_MINT=1`, in public mode, when
   the identity bundle carries the `token-mint/v1` key (else `code=token-mint-key-missing`) and the store
   migrates (else `code=token-mint-migration-failed`); otherwise every owned path answers as today. If the
