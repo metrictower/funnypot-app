@@ -59,6 +59,7 @@ use Funnypot\App\Storage\SsrfStore;
 use Funnypot\App\Tarpit\Ssrf\SsrfDecoy;
 use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
 use Composer\InstalledVersions;
+use Funnypot\App\Config\BuildStamp;
 use Funnypot\App\Tarpit\Attrition\AttritionArtifactRenderer;
 use Funnypot\App\Tarpit\Attrition\AttritionEntryIssuer;
 use Funnypot\App\Tarpit\Attrition\AttritionLimits;
@@ -439,7 +440,7 @@ if ($config->tarpitEnabled && $config->tokenMintEnabled && $config->mode === 'pu
                     max(1, $config->tarpitBytesPerRespMb) * 1024 * 1024,
                     $config->ssrfCredPointers,
                     $config->ssrfDenylist,
-                    (string) InstalledVersions::getReference('metrictower/funnypot-core') . '|' . (string) (InstalledVersions::getRootPackage()['reference'] ?? ''),
+                    BuildStamp::value(dirname(__DIR__)) . '|' . (string) InstalledVersions::getReference('metrictower/funnypot-core'),
                 );
             }
         } else {

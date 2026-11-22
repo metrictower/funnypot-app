@@ -19,9 +19,24 @@ http_response_code(200);
 ob_start();
 require dirname(__DIR__, 3) . '/demo/index.php';
 $body = (string) ob_get_clean();
+// With the infra wiki on this branch, ask the composition root's own SSRF network what a live wiki host
+// and an unknown name in the same zone resolve to (the second-lander coherence check).
+$wiki = null;
+if (isset($ssrf) && $ssrf !== null && class_exists('Funnypot\\App\\Tarpit\\InfraWiki')) {
+    $class = 'Funnypot\\App\\Tarpit\\InfraWiki';
+    foreach ((new $class($personaSeed))->services() as $s) {
+        if (($s['status'] ?? '') !== 'archived') {
+            $host = strtolower((string) $s['host']);
+            $zone = substr($host, (int) strpos($host, '.') + 1);
+            $wiki = ['host' => $host, 'node' => $ssrf->network()->directory()->lookup($host)?->key, 'unknown' => $ssrf->network()->directory()->lookup('zzunknown0.' . $zone)?->key];
+            break;
+        }
+    }
+}
 echo json_encode([
     'status' => http_response_code(),
     'wired' => isset($tokenMint) && $tokenMint !== null,
     'ssrf' => isset($ssrf) && $ssrf !== null,
+    'wiki' => $wiki,
     'body' => $body,
 ], JSON_THROW_ON_ERROR), "\n";

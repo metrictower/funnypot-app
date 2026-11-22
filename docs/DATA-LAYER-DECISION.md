@@ -348,9 +348,11 @@ The SSRF proof-bait keeps its state in `ssrf-decoy.sqlite` (`FUNNYPOT_SSRF_DB`),
 - **Key index** (`ssrf_keyidx`, `ssrf_meta`) — 12-byte keyed hashes of every key and settings.py host the
   app's generators serve, under a version tag; no raw value. One slice per request at most (the small
   sources, then 2,048 settings.py sections), taken without waiting for the lock. The version is the
-  deploy id (persona, polluter cap, pointer flag, installed package references) checked per request plus
-  a generator fingerprint recomputed only when the deploy id changes and hourly; a new version takes a
-  new tag and old rows are deleted 4,096 at a time. About 80 B per settings.py section: 0.8 MB at the
+  deploy id (persona, polluter cap, pointer flag, filesystem key, the image's baked build id or, without
+  one, a hash of the generator sources, and the installed core reference, so an app-only deploy moves it)
+  checked per request, plus a generator fingerprint recomputed when the deploy id changes and hourly; a
+  new version takes a new tag and old rows are deleted 4,096 at a time. Until the index is complete under
+  a fingerprint checked within the hour, a key it does not know is answered as transient, never invalid. About 80 B per settings.py section: 0.8 MB at the
   default 8 MB cap, about 49 MB at the 512 MB maximum (twice that while an old version drains).
 
 Every request runs load, charge, decide and write inside one `BEGIN IMMEDIATE` on the state file and

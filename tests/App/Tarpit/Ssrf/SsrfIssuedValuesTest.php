@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
+use Funnypot\App\Tarpit\Ssrf\SsrfForms;
 use Funnypot\Core\RequestContext;
 use PHPUnit\Framework\TestCase;
 
@@ -52,11 +53,15 @@ final class SsrfIssuedValuesTest extends TestCase
                         }
                     }
                 }
+                $eventSets = [...array_map(static fn (string $e): array => [$e], array_keys(SsrfForms::EVENTS)), array_keys(SsrfForms::EVENTS)];
                 foreach ($forms as [$action, $token]) {
-                    $body = 'csrf_token=' . $token . '&content_type=json&events%5B%5D=token&active=1&payload_url=' . rawurlencode('http://172.16.0.5/hook');
-                    $r = new RequestContext('POST', $action, '', SsrfCorpus::F, $body);
-                    self::assertFalse(SsrfCorpus::flags($r), "seed {$seed}: the form token for {$action}");
-                    $values++;
+                    foreach ($eventSets as $events) {
+                        $ev = implode('', array_map(static fn (string $e): string => '&events%5B%5D=' . rawurlencode($e), $events));
+                        $body = 'csrf_token=' . $token . '&content_type=json' . $ev . '&active=0&active=1&payload_url=' . rawurlencode('http://172.16.0.5/hook');
+                        $r = new RequestContext('POST', $action, '', SsrfCorpus::F, $body);
+                        self::assertFalse(SsrfCorpus::flags($r), "seed {$seed}: the form token for {$action} with " . implode(',', $events));
+                        $values++;
+                    }
                 }
             } finally {
                 $tour->cleanup();

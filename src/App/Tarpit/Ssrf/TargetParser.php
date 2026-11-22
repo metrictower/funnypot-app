@@ -22,8 +22,8 @@ final class TargetParser
 
     private const ALLOWED = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~:/?#@!$&\'()*+,;=%-[]';
 
-    /** Query names whose values are credentials, masked wherever a URL is stored or shown. */
-    public const MASKED_QUERY = ['x-amz-credential', 'x-amz-signature', 'x-amz-security-token', 'signature'];
+    /** Query names whose values are credentials (SigV4 and SigV2), masked wherever a URL is stored or shown. */
+    public const MASKED_QUERY = ['x-amz-credential', 'x-amz-signature', 'x-amz-security-token', 'signature', 'awsaccesskeyid', 'securitytoken'];
 
     /** @var array<string,true>|null */
     private static ?array $allowed = null;
@@ -203,21 +203,28 @@ final class TargetParser
         $parts = [];
         foreach ($labels as $l) {
             $steps += strlen($l);
-            if ($l === '' || strlen($l) > 12) {
+            if ($l === '' || strlen($l) > 63) {
                 return null;
             }
+            // Leading zeros carry no value, so they never count toward the overflow bound below.
             if (str_starts_with($l, '0x')) {
-                $hex = substr($l, 2);
+                $hex = ltrim(substr($l, 2), '0');
+                if (strlen($hex) > 8) {
+                    return null;
+                }
                 if ($hex !== '' && !ctype_xdigit($hex)) {
                     return null;
                 }
                 $parts[] = $hex === '' ? 0 : (int) hexdec($hex);
             } elseif (strlen($l) > 1 && $l[0] === '0') {
-                if (preg_match('/\A[0-7]+\z/', $l) !== 1) {
+                if (preg_match('/\A[0-7]+\z/', $l) !== 1 || strlen(ltrim($l, '0')) > 11) {
                     return null;
                 }
                 $parts[] = (int) octdec($l);
             } elseif (ctype_digit($l)) {
+                if (strlen($l) > 10) {
+                    return null;
+                }
                 $parts[] = (int) $l;
             } else {
                 return null;
@@ -240,7 +247,8 @@ final class TargetParser
 
     /**
      * The URL as stored and shown: userinfo replaced by `***`, and the value of every credential-bearing
-     * query parameter replaced by `***`. Everything else stays as written.
+     * query parameter, in every pair, replaced by `***`. Everything else stays as written. Masking can
+     * lengthen a URL slightly, so a caller that stores the result checks it still fits MAX_URL.
      */
     public static function mask(string $url): string
     {
@@ -261,7 +269,7 @@ final class TargetParser
         if ($q !== false) {
             $hash = strpos($tail, '#', $q);
             $query = $hash === false ? substr($tail, $q + 1) : substr($tail, $q + 1, $hash - $q - 1);
-            $pairs = explode('&', $query, 65);
+            $pairs = explode('&', $query);
             foreach ($pairs as $i => $pair) {
                 $eq = strpos($pair, '=');
                 $name = strtolower(rawurldecode($eq === false ? $pair : substr($pair, 0, $eq)));
@@ -276,7 +284,8 @@ final class TargetParser
     }
 
     /**
-     * The query's name/value pairs (names lowercased), at most 64, without any warning.
+     * The query's name/value pairs (names lowercased), first occurrence of each name, without any warning.
+     * A URL is at most MAX_URL bytes, so this is at most 256 pairs.
      *
      * @return array<string,string>
      */
@@ -286,7 +295,7 @@ final class TargetParser
         if ($query === '') {
             return $out;
         }
-        foreach (array_slice(explode('&', $query, 65), 0, 64) as $pair) {
+        foreach (explode('&', $query) as $pair) {
             $eq = strpos($pair, '=');
             $name = strtolower(rawurldecode($eq === false ? $pair : substr($pair, 0, $eq)));
             if ($name !== '' && !isset($out[$name])) {

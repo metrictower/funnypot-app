@@ -30,7 +30,10 @@ final class SsrfFp0814PrecedenceTest extends TestCase
             self::assertFalse((bool) $shell::isConsolePath($p), "{$p} is the SSRF decoy's, never a console path");
             self::assertDoesNotMatchRegularExpression('~\\.php\\z~i', $p);
         }
-        $controller = (string) file_get_contents(dirname(__DIR__, 4) . '/src/App/Http/HoneypotController.php');
+        $controller = '';
+        foreach (token_get_all((string) file_get_contents(dirname(__DIR__, 4) . '/src/App/Http/HoneypotController.php')) as $t) {
+            $controller .= is_array($t) ? (in_array($t[0], [T_COMMENT, T_DOC_COMMENT], true) ? '' : $t[1]) : $t;
+        }
         self::assertStringContainsString('tokenMint?->owns(', $controller, 'gate G keeps the token-mint condition');
         self::assertStringContainsString('ssrf?->owns(', $controller, 'gate G stands down on an SSRF-owned path, so a sticky console never takes it');
     }

@@ -85,15 +85,15 @@ final class SsrfPages
     private function hookForm(string $action, string $csrf, array $values, array $errors, bool $edit): string
     {
         $ct = (string) ($values['content_type'] ?? 'json');
-        $events = (array) ($values['events'] ?? ['token']);
+        $events = (array) ($values['events'] ?? [SsrfForms::DEFAULT_EVENT]);
         $active = (bool) ($values['active'] ?? true);
         $opts = '';
         foreach (SsrfForms::CONTENT_TYPES as $c) {
             $opts .= "<option value='{$c}'" . ($ct === $c ? ' selected' : '') . '>application/' . ($c === 'json' ? 'json' : 'x-www-form-urlencoded') . '</option>';
         }
         $boxes = '';
-        foreach (SsrfForms::EVENTS as $ev) {
-            $boxes .= "<label class=scope><input type=checkbox name='events[]' value='{$ev}'" . (in_array($ev, $events, true) ? ' checked' : '') . '>' . ucfirst($ev) . ' events</label>';
+        foreach (SsrfForms::EVENTS as $ev => $label) {
+            $boxes .= "<label class=scope><input type=checkbox name='events[]' value='{$ev}'" . (in_array($ev, $events, true) ? ' checked' : '') . '>' . self::e($label) . '</label>';
         }
 
         return "<form method=post action='" . self::e($action) . "'>" . self::csrf($csrf)
@@ -165,7 +165,7 @@ final class SsrfPages
         }
         $attempts = '';
         foreach ($r->attempts as $a) {
-            $attempts .= '<tr><td>' . self::e(self::when($a['at'])) . '</td><td>' . self::e(str_replace('_', ' ', $a['state'])) . '</td><td>'
+            $attempts .= '<tr><td>' . self::e(self::when($a['at'])) . '</td><td>' . self::e(strtr($a['state'], ['_' => ' '])) . '</td><td>'
                 . ($a['ms'] > 0 ? $a['ms'] . ' ms' : '') . '</td><td>' . self::e((string) ($a['error'] ?? '')) . '</td></tr>';
         }
         $main = '<div class=card><h1>Delivery ' . self::e((string) $d['id']) . '</h1>'

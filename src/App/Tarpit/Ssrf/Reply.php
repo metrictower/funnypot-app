@@ -13,7 +13,7 @@ namespace Funnypot\App\Tarpit\Ssrf;
 final class Reply
 {
     public const MAX_EXCERPT = 2048;
-    public const PROTOCOLS = ['http', 'banner', 'empty', 'reset'];
+    public const PROTOCOLS = ['http', 'banner', 'empty', 'conn_reset'];
 
     private function __construct(
         public readonly string $protocol,

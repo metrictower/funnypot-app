@@ -64,6 +64,10 @@ final class EgressPolicy
         if ($h === 'instance-data' || $h === 'instance-data.ec2.internal') {
             return 'metadata';
         }
+        // The company's public site is served from outside, like any public name.
+        if ($this->domain !== '' && ($h === $this->domain || $h === 'www.' . $this->domain)) {
+            return 'proxied';
+        }
         if (!str_contains($h, '.') || str_ends_with($h, '.internal')
             || ($this->domain !== '' && ($h === $this->domain || str_ends_with($h, '.' . $this->domain)))) {
             return 'internal';

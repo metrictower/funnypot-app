@@ -93,6 +93,10 @@ final class Network
         if ($egress === 'loopback' && !in_array($t->port, NodeAnswers::LOOPBACK_PORTS, true)) {
             return new Resolution($egress, 'refused', null, $t->port);
         }
+        // Instance metadata listens on plain HTTP port 80 only; any other port, or TLS, is a closed port.
+        if ($egress === 'metadata' && ($t->port !== 80 || $t->scheme !== 'http')) {
+            return new Resolution($egress, 'refused', null, $t->port);
+        }
         if (isset($simple[$egress])) {
             return new Resolution($egress, $simple[$egress], null, $t->port);
         }

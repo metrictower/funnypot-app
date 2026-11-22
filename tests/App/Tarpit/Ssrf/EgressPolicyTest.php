@@ -72,6 +72,8 @@ final class EgressPolicyTest extends TestCase
             [5, 'http://app.' . self::domain() . '/', 'internal', 'open'],
             [6, 'http://example.com/', 'proxied', 'proxy_denied'],
             [6, 'http://127.0.0.1.nip.io/', 'proxied', 'proxy_denied'],
+            [6, 'https://' . self::domain() . '/', 'proxied', 'proxy_denied'],
+            [6, 'https://www.' . self::domain() . '/login', 'proxied', 'proxy_denied'],
             [7, 'http://0:22/', 'loopback', 'loopback'],
             [7, 'http://127.1:6379/', 'loopback', 'loopback'],
             [7, 'http://127.1:1/', 'loopback', 'refused'],
@@ -151,6 +153,21 @@ final class EgressPolicyTest extends TestCase
         for ($i = 1; $g->node($i) === null; $i++) {
         }
         self::assertSame('open', $net->resolve(self::t('http://' . $g->name($i) . ':' . $g->node($i)->ports[0] . '/'), self::SOURCE, Role::Hook)->outcome);
+    }
+
+    public function test_ipv6_ula_source_is_its_own_slash_64(): void
+    {
+        $net = self::net();
+        $src = 'fd12:3456:789a:1::2';
+        foreach (['[fd12:3456:789a:1::2]', '[fd12:3456:789a:1:ffff::9]'] as $h) {
+            $r = $net->resolve(self::t('http://' . $h . ':8080/'), $src, Role::Hook);
+            self::assertSame('source', $r->egress, $h);
+            self::assertSame('timeout', $r->outcome, $h);
+        }
+        foreach (['[fd12:3456:789a:2::2]', '[fd12:3456:789b:1::2]'] as $h) {
+            self::assertSame('private_other', $net->resolve(self::t('http://' . $h . ':8080/'), $src, Role::Hook)->egress, $h);
+        }
+        self::assertSame('private_other', $net->resolve(self::t('http://[fd12:3456:789a:1::2]:8080/'), self::SOURCE, Role::Hook)->egress, 'an IPv4 source has no /64');
     }
 
     public function test_public_source_gets_no_special_case(): void

@@ -180,4 +180,15 @@ final class InternalNetTest extends TestCase
         self::assertStringContainsString('Received HTTP/0.9 when not allowed', $kinds['ssh']);
         self::assertSame(NodeAnswers::LOOPBACK_PORTS, [22, 6379, 8080, 9090]);
     }
+
+    public function test_imds_listens_on_plain_http_port_80_only(): void
+    {
+        $w = SsrfCorpus::network();
+        foreach (['http://0xa9fea9fe:22/', 'http://2852039166:6379/', 'https://0xa9fea9fe/latest/meta-data/', 'https://169.254.169.254:80/', 'http://instance-data:22/',
+            'http://[fd00:ec2::254]:3306/', 'http://169.254.169.254:8080/latest/meta-data/'] as $url) {
+            self::assertSame('|Failed to connect: connection refused', self::fetch($w, $url)[0], "{$url} is a closed port");
+        }
+        self::assertSame('401', self::fetch($w, 'http://169.254.169.254:80/latest/meta-data/')[1]);
+        self::assertSame('401', self::fetch($w, 'http://[fd00:ec2::254]/latest/meta-data/')[1]);
+    }
 }

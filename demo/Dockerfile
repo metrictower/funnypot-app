@@ -47,6 +47,10 @@ COPY resources ./resources
 COPY demo ./demo
 COPY bin ./bin
 
+# The build id the SSRF decoy's served-key index versions on: a hash of the app's code, its compiled
+# resources and the installed packages, so every image (app-only deploys included) rebuilds the index.
+RUN find src resources vendor/composer/installed.php -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1 > /app/build-id
+
 # The storage mount stays 0777 (legacy data volume); the install identity lives beneath it in a private
 # 0700 root-owned directory that identity:prepare creates and validates on every boot.
 RUN chmod +x /entrypoint.sh /app/bin/funnypot \

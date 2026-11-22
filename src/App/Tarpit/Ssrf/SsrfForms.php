@@ -16,7 +16,13 @@ namespace Funnypot\App\Tarpit\Ssrf;
  */
 final class SsrfForms
 {
-    public const EVENTS = ['token', 'member', 'order', 'export'];
+    /**
+     * Event name => label. Every name is quiet in the engine's eyes in every combination the hook form can
+     * send (SsrfRouteQuietTest re-derives that from the rendered form); a bare `export` value is flagged
+     * by core's rules.
+     */
+    public const EVENTS = ['token.created' => 'Token created', 'member.added' => 'Member added', 'order.created' => 'Order created', 'export.completed' => 'Export completed'];
+    public const DEFAULT_EVENT = 'token.created';
     public const KINDS = ['orders_csv' => 'Orders (CSV)', 'orders_json' => 'Orders (JSON)', 'mirror' => 'Mirror a Git repository'];
     public const CONTENT_TYPES = ['json', 'form'];
 
@@ -61,6 +67,10 @@ final class SsrfForms
         if ($denylist && EgressPolicy::denylisted($t)) {
             return [null, 'url_denied'];
         }
+        // The URL is stored masked and re-parsed on every send, so the masked form must parse too.
+        if (TargetParser::parse(TargetParser::mask($value)) === null) {
+            return [null, 'url_invalid'];
+        }
         if ($purpose === 'storage' && strpbrk($value, '?#') !== false) {
             return [null, 'endpoint_query'];
         }
@@ -94,7 +104,7 @@ final class SsrfForms
     public static function events(mixed $value): array
     {
         if ($value === null) {
-            return [['token'], null];
+            return [[self::DEFAULT_EVENT], null];
         }
         if (is_string($value)) {
             $value = [$value];
@@ -104,13 +114,13 @@ final class SsrfForms
         }
         $out = [];
         foreach ($value as $e) {
-            if (!is_string($e) || !in_array($e, self::EVENTS, true)) {
+            if (!is_string($e) || !isset(self::EVENTS[$e])) {
                 return [[], 'events_invalid'];
             }
             $out[$e] = true;
         }
 
-        return [array_values(array_intersect(self::EVENTS, array_keys($out))), null];
+        return [array_values(array_intersect(array_keys(self::EVENTS), array_keys($out))), null];
     }
 
     /** @return array{0:string,1:?string} */

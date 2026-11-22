@@ -108,7 +108,7 @@ final class SsrfDecoy implements SsrfDecision
             $indexPath,
             $sk->key('keyidx'),
             new KeyIndexBuilder($personaSeed, $filesystemKey, $capBytes),
-            SsrfKeyIndex::deployId($sk->key('keyidx'), $personaSeed, $capBytes, $credPointers, $buildStamp),
+            SsrfKeyIndex::deployId($sk->key('keyidx'), $personaSeed, $capBytes, $credPointers, $buildStamp, $filesystemKey),
         );
         $net = Network::build($sk, $personaSeed, $capBytes, $index, $credPointers, $extraHosts);
 

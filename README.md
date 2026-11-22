@@ -267,8 +267,9 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
 
 **SSRF proof-bait** (`src/App/Tarpit/Ssrf/`, opt-in `FUNNYPOT_TARPIT_SSRF=1`, needs the token-mint
 surface wired) adds the three "fetch a URL for me" features an agent tries first once signed in, on the
-same account: **webhooks** (create, send a test delivery, recent deliveries with request and response
-tabs, redeliver to the current URL), **imports** into a personal sandbox (orders CSV/JSON from a URL, or
+same account: **webhooks** (events `token.created`, `member.added`, `order.created` and
+`export.completed`; create, send a test delivery, recent deliveries with request and response tabs,
+redeliver to the current URL), **imports** into a personal sandbox (orders CSV/JSON from a URL, or
 mirror a Git repository) and an S3-compatible **export destination** with "verify connection". The UI
 needs a live account session; the API (`/api/v2/user/hooks…`, `…/imports…`, `…/storage…`, both prefixes,
 byte-identical) needs a token with `webhooks:write`, `imports:write` or `storage:write`, scopes the token
@@ -277,30 +278,41 @@ form offers only while this is wired. The account nav gains Webhooks, Imports an
 - **Nothing is fetched.** There is no fetch, DNS or socket code: a fake network decides where a request
   would have gone and what it would have got, and the result is shown as escaped text. Four checks keep
   it that way (`SsrfNoOutboundTest`): a static allowlist over the namespace (pure built-ins, listed
-  classes and static calls, no parent class outside it, no anonymous class, no indirect call); the bench
-  in a child PHP with every network-capable function disabled by exact name (the child checks each is
-  gone), URL wrappers off and no `exec`; recording stream wrappers around the same journey; and a pin on
-  every file this feature edits outside its namespace.
+  classes and static calls, no parent class outside it, no anonymous class, and no dynamic call of any
+  shape: nothing is called through a variable, an expression, a string literal, an array element or a
+  computed method or static name, `new` takes only a written class name, a callback argument is only a
+  closure or an allowlisted `f(...)`, and no argument to any function or method is a string naming a
+  function or `Class::method`, or a `[object or class, 'method']` pair); the bench in a child PHP started
+  with `-n` that disables every function of every loaded extension outside a short pure list, plus
+  core's stream, socket, DNS, mail and exec functions (the child checks each is gone and that no other
+  extension loaded), with URL wrappers off; recording stream wrappers around the same journey for every
+  URL operation; and a pin on every file this feature edits outside its namespace.
 - **Egress model.** The platform's workers reach internal zones (`*.internal`, the persona's domain,
   single-label names) and private address space directly; every other name goes to an egress proxy that
-  denies it before resolving ("Request denied by egress policy"), and the import worker may reach
-  `github.com:443` only. So the agent's own listener, its DNS server, rebinding names and any public
-  address fail before a byte could leave, whatever their DNS says; its own private /24 times out. Every
-  IPv4 spelling is canonicalised (`2130706433`, `0x7f000001`, `127.1`, `0`); a naive create-time denylist
-  (`FUNNYPOT_SSRF_DENYLIST`, on) refuses only the literal spellings a quick filter would catch.
+  denies it before resolving ("Request denied by egress policy"), the company's public site (the apex
+  and `www`) included, and the import worker may reach `github.com:443` only. So the agent's own
+  listener, its DNS server, rebinding names and any public address fail before a byte could leave,
+  whatever their DNS says; its own private /24 (or IPv6 ULA /64) times out. Every IPv4 spelling is
+  canonicalised (`2130706433`, `0x7f000001`, `127.1`, `0`, any run of leading zeros); a naive
+  create-time denylist (`FUNNYPOT_SSRF_DENYLIST`, on) refuses only the literal spellings a quick filter
+  would catch.
 - **The fake network.** A per-deploy /16 of generated hosts (API services, admin consoles, metrics,
   registries, databases, caches, SSH) whose names only this deploy can produce, whose listings name 6–12
   more hosts so a crawl never ends, plus the hosts other surfaces already leaked: settings.py's hosts, the
   fleet console's servers (answering as the console reports them), and the infra wiki once both are on
-  `main`. Instance metadata requires session tokens (reads 401, a token request without its TTL header
-  400, any other PUT 403), and nothing here can send that header. No answer carries a record, a
-  credential or a clone.
+  `main`. Instance metadata listens on plain HTTP port 80 only (any other port, or TLS, is refused like a
+  closed port) and requires session tokens (reads 401, a token request without its TTL header 400, any
+  other PUT 403), and nothing here can send that header. No answer carries a record, a credential or a
+  clone.
 - **Credential gateways.** settings.py names `sts.<region>.internal` and
   `payments-gw.<region>.internal:8443` (`FUNNYPOT_SSRF_CRED_POINTERS`, on; off keeps settings.py's bytes).
   A key this honeypot served (persona and per-source core keys re-rendered through core's own renderer,
   and every key the app's generators serve, through a keyed-hash index) is known but never signs
-  (`SignatureDoesNotMatch`) or is restricted (`key_restricted`); any other key is invalid, or rate limited
-  while the index is still being built. Nothing is ever a 2xx.
+  (`SignatureDoesNotMatch`) or is restricted (`key_restricted`); any other key is invalid once the index
+  is complete for this deploy and checked within the hour, and rate limited until then. The deploy id
+  moves with the image's baked `build-id` (a hash over src/, resources/ and the installed-package map;
+  without it, a hash of the generator sources), so an app-only deploy rebuilds the index. Nothing is ever
+  a 2xx.
 - **State and bounds.** Its own `ssrf-decoy.sqlite` (`FUNNYPOT_SSRF_DB`) and `ssrf-decoy-keyidx.sqlite`
   beside it. One JSON row per account, keyed by the token-mint row, its epoch and the account serial;
   URLs stored masked, credentials only as keyed references, no raw IP. Work is bounded by a per-source
@@ -310,7 +322,8 @@ form offers only while this is wired. The account nav gains Webhooks, Imports an
   default polluter cap (see `docs/DATA-LAYER-DECISION.md`).
 - **Gates.** Wired only with the token-mint surface wired and `FUNNYPOT_TARPIT_SSRF=1`, when the store
   migrates (else `code=ssrf-decoy-migration-failed`); otherwise every owned path answers as today. A fault
-  in its own code gives that request today's answer and logs `code=ssrf-decoy-fault` (class and line).
+  in its own code gives that request today's answer and logs `code=ssrf-decoy-fault` (class and line);
+  a key index that cannot open logs `code=ssrf-keyidx-open-failed` and leaves unknown keys transient.
   It joins at the same serve seam, after the token-mint surface, for a disjoint path set.
 - **Bench.** `SsrfPivotBenchTest` drives a scripted SSRF-pivot crawler (`scripts/support/SsrfPivotCrawler.php`)
   through the real controller for 300 steps: it keeps finding new internal targets (over 200 distinct),

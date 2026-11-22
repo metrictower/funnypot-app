@@ -60,8 +60,16 @@ final class SsrfNucleiMatcherTest extends TestCase
         self::assertNotNull(self::satisfied("# HELP go_goroutines Number of goroutines.\nkube-state-metrics up", array_merge($lists, [['go_goroutines', 'kube-state-metrics']])), 'positive control: a planted Go metrics body');
         $checked = 0;
         foreach (range(1, 8) as $seed) {
+            $kinds = [];
+            foreach (SsrfTour::networkCorpus($seed) as [$kind, $label, $body]) {
+                self::assertNull(self::satisfied($body, $lists), "seed {$seed} network answer {$label} satisfies a nuclei template");
+                $kinds[$kind] = ($kinds[$kind] ?? 0) + 1;
+                $checked++;
+            }
+            SsrfTour::assertEveryKind($kinds, "seed {$seed} network corpus");
             $tour = (new SsrfTour($seed))->run();
             try {
+                SsrfTour::assertEveryKind($tour->kinds, "seed {$seed} tour");
                 foreach ($tour->plans as [$label, $plan]) {
                     $texts = [$plan->body, html_entity_decode($plan->body, ENT_QUOTES)];
                     $j = json_decode($plan->body, true);
@@ -78,5 +86,12 @@ final class SsrfNucleiMatcherTest extends TestCase
             }
         }
         self::assertGreaterThan(2000, $checked);
+        foreach (SsrfTour::networkCorpus(1) as [$kind, , $body]) {
+            if ($kind === 'metrics') {
+                $planted = $body . "\ngo_goroutines 12\n# kube-state-metrics\n";
+                self::assertNotNull(self::satisfied($planted, array_merge($lists, [['go_goroutines', 'kube-state-metrics']])), 'positive control: planted in a metrics answer, the scan flags it');
+                break;
+            }
+        }
     }
 }

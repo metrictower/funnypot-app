@@ -44,7 +44,7 @@ final class SsrfDecoyHandleTest extends TestCase
     private static function createHook(MintHarness $h, string $url, array $extra = [], string $jar = 'default', string $ip = MintHarness::IP): string
     {
         $form = $h->get('/settings/webhooks/new', '', $jar, $ip);
-        $r = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body'])] + $extra + ['content_type' => 'json', 'secret' => 'whsec-1', 'events' => ['token'], 'active' => '1', 'payload_url' => $url], $jar, $ip);
+        $r = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body'])] + $extra + ['content_type' => 'json', 'secret' => 'whsec-1', 'events' => ['token.created'], 'active' => '1', 'payload_url' => $url], $jar, $ip);
         self::assertSame(303, $r['status'], 'hook created: ' . substr(strip_tags($r['body']), 0, 300));
 
         return basename((string) $r['plan']?->header('Location'));
@@ -110,7 +110,7 @@ final class SsrfDecoyHandleTest extends TestCase
         $pat = $h->mint(['read:user', 'webhooks:write']);
         $narrow = $h->mint(['read:user'], 'narrow');
         $auth = static fn (string $t): array => ['Authorization' => 'Bearer ' . $t, 'Content-Type' => 'application/json'];
-        $r = $h->request('POST', '/api/v2/user/hooks', '', '{"content_type":"json","events":["token"],"active":true,"url":"' . self::generated($h) . '/healthz"}', $auth($pat));
+        $r = $h->request('POST', '/api/v2/user/hooks', '', '{"content_type":"json","events":["token.created"],"active":true,"url":"' . self::generated($h) . '/healthz"}', $auth($pat));
         self::assertSame(200, $r['status'], $r['body']);
         $id = json_decode($r['body'], true)['id'];
         $list = $h->request('GET', '/v2/user/hooks', '', null, $auth($pat), '198.51.100.20');
@@ -173,7 +173,6 @@ final class SsrfDecoyHandleTest extends TestCase
         $h->now += 10;
         $h->request('GET', '/api/v2/user/hooks', '', null, $auth);
         self::assertStringNotContainsString('Never used', $h->get('/settings/tokens')['body'], 'the tokens page shows the use');
-        $writes = static fn (): int => (int) $h->store->db()->query('SELECT SUM(writes) FROM mint_state')->fetchColumn();
         $seen = static fn (): int => (int) $h->store->db()->query('SELECT MAX(seen) FROM mint_state')->fetchColumn();
         $before = $seen();
         $h->now += 60;
@@ -182,17 +181,18 @@ final class SsrfDecoyHandleTest extends TestCase
         $h->now += 3600;
         $h->request('GET', '/api/v2/user/hooks', '', null, $auth);
         self::assertSame($h->now, $seen(), 'an hour later the use is recorded again');
-        unset($writes);
 
-        $capped = $this->h(true, ['storeLimits' => ['source_writes_hr' => 3]]);
-        $capped->join();
-        $capped->store->db()->exec('UPDATE mint_state SET writes = 99');
         $tok = $this->h(true);
         $tok->join();
         $p = $tok->mint(['webhooks:write']);
-        $tok->store->db()->exec("UPDATE mint_gauge SET writes = 999999");
+        $row = static fn (): array => $tok->store->db()->query('SELECT state, seen FROM mint_state')->fetchAll(\PDO::FETCH_ASSOC);
+        $tok->now += 10;
+        $tok->store->db()->prepare('INSERT OR REPLACE INTO mint_gauge (hour, writes) VALUES (:h, 999999)')->execute([':h' => intdiv($tok->now, 3600)]);
+        $was = $row();
+        self::assertStringContainsString('"lu":0', $was[0]['state'], 'the token was never used');
         $r = $tok->request('GET', '/api/v2/user/hooks', '', null, ['Authorization' => 'Bearer ' . $p]);
-        self::assertSame(200, $r['status'], 'a capped token-mint store skips the touch and the answer is unchanged');
+        self::assertSame(200, $r['status'], 'a capped token-mint store still answers');
+        self::assertSame($was, $row(), 'a capped token-mint store skips the touch: last used and seen are unchanged');
     }
 
     public function test_idor_byte_identical_to_nonexistent(): void
@@ -350,6 +350,55 @@ final class SsrfDecoyHandleTest extends TestCase
         self::assertStringNotContainsString('webhooks:write', $plain->get('/settings/tokens/new')['body'], 'unwired: no scope');
     }
 
+    /**
+     * The account's own pages are served content: their rows say served, and an armed, signed-in walk
+     * of the account's own pages never pins. A rate-limited ping carrying our own form token stays served,
+     * as FP-0815's own-token exemption says.
+     */
+    public function test_own_pages_are_served_and_never_pin(): void
+    {
+        $h = $this->h(true, ['llm' => 500, 'probeGate' => true]);
+        $h->join();
+        $pat = $h->mint(['webhooks:write', 'imports:write', 'storage:write']);
+        $id = self::createHook($h, 'http://172.16.0.5/');
+        self::ping($h, $id);
+        $h->now += 3;
+        [$did] = self::deliveries($h, $id);
+        $form = $h->get('/settings/imports/new');
+        $imp = (string) $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($form['body']), 'kind' => 'orders_csv', 'source_url' => 'http://172.16.0.5/a.csv'])['plan']?->header('Location');
+        $pages = ['/settings/webhooks', '/settings/webhooks/new', '/settings/webhooks/' . $id, '/settings/webhooks/' . $id . '/deliveries/' . $did, '/settings/imports',
+            '/settings/imports/new', $imp, '/settings/storage'];
+        foreach ($pages as $p) {
+            $r = $h->get($p);
+            self::assertSame(200, $r['status'], $p);
+            self::assertTrue($r['main']['served'], "{$p} is served content");
+        }
+        foreach (['/api/v2/user/hooks', '/api/v2/user/hooks/' . $id, '/v2/user/hooks/' . $id . '/deliveries', '/api/v2/user/hooks/' . $id . '/deliveries/' . $did, '/api/v2/user/imports', '/api/v2/user/storage'] as $p) {
+            $r = $h->request('GET', $p, '', null, ['Authorization' => 'Bearer ' . $pat]);
+            self::assertSame(200, $r['status'], $p);
+            self::assertTrue($r['main']['served'], "{$p} is served content");
+        }
+        for ($i = 0; $i < 5; $i++) {
+            foreach ($pages as $p) {
+                $h->now += 2;
+                $h->get($p);
+            }
+        }
+        self::assertFalse($h->hits->isBulkFlagged(MintHarness::IP), 'a walk of 40 of the account\'s own pages never pins');
+        $show = $h->get('/settings/webhooks/' . $id);
+        $own = self::tokens($show['body'])[0];
+        $last = null;
+        for ($i = 0; $i < 31; $i++) {
+            $last = $h->post('/settings/webhooks/' . $id . '/pings', ['csrf_token' => $own]);
+        }
+        self::assertSame(429, $last['status'], 'the ten-minute rate');
+        self::assertTrue($last['main']['served'], 'a 429 to our own form token on an id path stays served');
+        $stranger = $h->post('/settings/webhooks/' . $id . '/pings', ['csrf_token' => 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA']);
+        self::assertFalse($stranger['main']['served'], 'a forged token does not');
+        $dup = $h->post('/settings/webhooks/' . $id . '/pings', ['csrf_token' => $own]);
+        self::assertTrue($dup['main']['served']);
+    }
+
     /** Off the owned set, a host with the SSRF decoy armed answers byte for byte as one without it. */
     public function test_unowned_paths_answer_identically(): void
     {
@@ -403,7 +452,7 @@ final class SsrfDecoyHandleTest extends TestCase
         $show = $h->get('/settings/webhooks/' . $id);
         [$edit] = self::tokens($show['body']);
         $edit = self::tokens($show['body'])[1];
-        $r = $h->post('/settings/webhooks/' . $id, ['csrf_token' => $edit, 'content_type' => 'json', 'events' => ['token'], 'active' => '1', 'payload_url' => 'http://172.16.0.6/second']);
+        $r = $h->post('/settings/webhooks/' . $id, ['csrf_token' => $edit, 'content_type' => 'json', 'events' => ['token.created'], 'active' => '1', 'payload_url' => 'http://172.16.0.6/second']);
         self::assertSame(303, $r['status']);
         self::ping($h, $id);
         [$newer, $older] = self::deliveries($h, $id);
@@ -428,6 +477,31 @@ final class SsrfDecoyHandleTest extends TestCase
         $text = self::text($h->get('/settings/webhooks/' . $id . '/deliveries/' . $re)['body']);
         self::assertStringContainsString('172.16.0.7/now', $text);
         self::assertStringContainsString('ping event', $text, 'with the original event');
+    }
+
+    public function test_a_signature_after_many_pairs_is_masked_and_masking_never_breaks_a_url(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $canary = 'SIGCANARY' . str_repeat('9', 6);
+        $id = self::createHook($h, 'http://172.16.0.5/?' . str_repeat('a&', 65) . 'X-Amz-Signature=' . $canary);
+        self::assertStringNotContainsString($canary, $h->get('/settings/webhooks/' . $id)['body']);
+        self::assertStringNotContainsString($canary, (string) $h->ssrfStore->db()->query('SELECT state FROM ssrf_owner')->fetchColumn());
+
+        $long = 'http://a@172.16.0.5/' . str_repeat('p', 512 - strlen('http://a@172.16.0.5/'));
+        $form = $h->get('/settings/webhooks/new');
+        $r = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body']), 'content_type' => 'json', 'events' => ['token.created'], 'active' => '1', 'payload_url' => $long]);
+        self::assertNotSame(303, $r['status'], 'a URL its masked form could not carry is refused at create');
+        self::assertStringContainsString('Enter a valid http:// or https:// URL.', self::text($r['body']));
+        self::assertSame([$id], self::hookIds($h), 'no second hook was stored');
+    }
+
+    /** @return list<string> */
+    private static function hookIds(MintHarness $h): array
+    {
+        preg_match_all("~/settings/webhooks/([a-f0-9]{12})'~", $h->get('/settings/webhooks')['body'], $m);
+
+        return array_values(array_unique($m[1]));
     }
 
     public function test_blank_url_on_edit_keeps_the_credential_reference(): void

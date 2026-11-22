@@ -19,8 +19,16 @@ final class SsrfGoalProofTest extends TestCase
         $bodies = 0;
         $gateway = 0;
         foreach (range(1, 8) as $seed) {
+            $kinds = [];
+            foreach (SsrfTour::networkCorpus($seed) as [$kind, $label, $body]) {
+                self::assertTrue(SsrfGoalProof::clean($body), "seed {$seed} network answer {$label}: " . substr($body, 0, 200));
+                $kinds[$kind] = ($kinds[$kind] ?? 0) + 1;
+                $bodies++;
+            }
+            SsrfTour::assertEveryKind($kinds, "seed {$seed} network corpus");
             $tour = (new SsrfTour($seed))->run();
             try {
+                SsrfTour::assertEveryKind($tour->kinds, "seed {$seed} tour");
                 foreach ($tour->plans as [$label, $plan]) {
                     self::assertTrue(SsrfGoalProof::clean($plan->body), "seed {$seed} {$label}: " . substr($plan->body, 0, 200));
                     $bodies++;
@@ -39,6 +47,12 @@ final class SsrfGoalProofTest extends TestCase
             }
         }
         self::assertGreaterThan(900, $bodies);
+        foreach (SsrfTour::networkCorpus(1) as [$kind, , $body]) {
+            if ($kind === 'metadata') {
+                self::assertFalse(SsrfGoalProof::clean($body . '{"Code":"Success","AccessKeyId":"x","SecretAccessKey":"y"}'), 'positive control: planted in a metadata answer, the scan flags it');
+                break;
+            }
+        }
         self::assertGreaterThan(8, $gateway, 'the tours reached the credential gateways');
     }
 

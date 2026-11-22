@@ -207,11 +207,42 @@ final class CallScan
                 $out[] = 'output: inline html @' . $raw[2];
             }
         }
+        $stack = [];
         for ($i = 0; $i < $n; $i++) {
             [$id, $text, $line] = $toks[$i];
             $prev = $toks[$i - 1][0] ?? null;
             $next = $toks[$i + 1][0] ?? null;
             $at = ' @' . $line;
+            $inArgs = $stack !== [] && $stack[count($stack) - 1] === '(';
+            if (in_array($id, ['(', '[', '{', T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true)) {
+                $stack[] = $id === '(' ? '(' : ($id === '[' ? '[' : '{');
+            } elseif (in_array($id, [')', ']', '}'], true)) {
+                array_pop($stack);
+                $inArgs = $stack !== [] && $stack[count($stack) - 1] === '(';
+            }
+            // A callee that is not a literal name: a string literal, an array element or a computed
+            // method name called directly.
+            if ($id === T_CONSTANT_ENCAPSED_STRING && $next === '(') {
+                $out[] = 'dynamic_call: string literal' . $at;
+            }
+            if ($id === ']' && $next === '(') {
+                $out[] = 'dynamic_call: array element' . $at;
+            }
+            if ($id === T_DOUBLE_COLON && $next === '{') {
+                $out[] = 'dynamic_call: computed static method' . $at;
+            }
+            // A string naming a function or a Class::method, or a [target, 'method'] pair, passed as an
+            // argument to any function or method is a callable whatever the callee does with it.
+            if ($inArgs && $id === T_CONSTANT_ENCAPSED_STRING && in_array($prev, ['(', ','], true) && in_array($next, [')', ','], true)) {
+                $value = stripcslashes(substr($text, 1, -1));
+                if (preg_match('/\A\\\\?[A-Za-z_][A-Za-z0-9_\\\\]*(?:::[A-Za-z_]\w*)?\z/', $value) === 1
+                    && (str_contains($value, '::') || function_exists(ltrim($value, '\\')))) {
+                    $out[] = 'string_callable: ' . $value . $at;
+                }
+            }
+            if ($inArgs && $id === '[' && in_array($prev, ['(', ','], true) && self::arrayCallable($toks, $i)) {
+                $out[] = 'array_callable' . $at;
+            }
             switch (true) {
                 case $id === T_EVAL:
                     $out[] = 'eval' . $at;
@@ -339,6 +370,50 @@ final class CallScan
      * Whether the callable argument at $pos is a closure, an arrow function or a first-class callable
      * of an allowlisted name (a string or array callable is not).
      */
+    /**
+     * Whether the array literal opening at $open is a [target, 'method'] pair: two elements, the second
+     * a method-shaped string, the first an object or class (a variable, a `new`, an `X::class`, or a
+     * string naming a class). A pair of plain data words, or a spread, is not one.
+     */
+    private static function arrayCallable(array $toks, int $open): bool
+    {
+        $first = [];
+        $depth = 0;
+        $j = $open + 1;
+        for (; $j < count($toks); $j++) {
+            $t = $toks[$j][0];
+            if (in_array($t, ['(', '[', '{'], true)) {
+                $depth++;
+            } elseif (in_array($t, [')', ']', '}'], true)) {
+                if ($depth === 0) {
+                    return false;
+                }
+                $depth--;
+            } elseif ($t === ',' && $depth === 0) {
+                break;
+            }
+            $first[] = $toks[$j];
+        }
+        $method = $toks[$j + 1] ?? [null, ''];
+        if ($first === [] || $first[0][0] === T_ELLIPSIS || $method[0] !== T_CONSTANT_ENCAPSED_STRING || ($toks[$j + 2][0] ?? null) !== ']'
+            || preg_match('/\A[A-Za-z_]\w*\z/', substr($method[1], 1, -1)) !== 1) {
+            return false;
+        }
+        if (count($first) === 1 && $first[0][0] === T_CONSTANT_ENCAPSED_STRING) {
+            $target = substr($first[0][1], 1, -1);
+
+            return str_contains($target, '\\') || preg_match('/\A[A-Z]/', $target) === 1
+                || ($target !== '' && (class_exists($target, false) || interface_exists($target, false)));
+        }
+        foreach ($first as $k => $t) {
+            if ($t[0] === T_VARIABLE || $t[0] === T_NEW || ($t[0] === T_DOUBLE_COLON && strtolower((string) ($first[$k + 1][1] ?? '')) === 'class')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static function callableArgSafe(array $toks, int $open, int $pos, array $functions): bool
     {
         $depth = 0;

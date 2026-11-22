@@ -74,8 +74,18 @@ final class SsrfFrontControllerTest extends TestCase
     /** @param array<string,string> $overrides @return array{status:int,wired:bool,ssrf:bool,body:string,err:string} */
     private function request(array $overrides, string $target): array
     {
+        return self::runFixture($this->dir, $overrides, $target);
+    }
+
+    /**
+     * Run the real composition root once through tests/Fixtures/ssrf/front-controller.php.
+     *
+     * @param array<string,string> $overrides
+     * @return array{status:int,wired:bool,ssrf:bool,wiki:?array,body:string,err:string}
+     */
+    public static function runFixture(string $dir, array $overrides, string $target): array
+    {
         $root = dirname(__DIR__, 3);
-        $dir = $this->dir;
         $env = $overrides + [
             'FUNNYPOT_IDENTITY_RUNTIME_DIR' => $dir . '/runtime',
             'FUNNYPOT_DB' => $dir . '/funnypot.sqlite', 'FUNNYPOT_LOG' => $dir . '/hits.log',

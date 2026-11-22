@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
 /**
- * A stream wrapper that records every open and every url_stat of a URL scheme and refuses it, so a test
- * sees even the quiet calls (file_exists on a URL) that raise nothing. install() replaces the http,
+ * A stream wrapper that records every URL operation (open, url_stat, opendir, unlink, rename, mkdir,
+ * rmdir, touch/chmod/chown) of a URL scheme and refuses it, so a test sees even the quiet calls
+ * (file_exists on a URL) that raise nothing. install() replaces the http,
  * https, ftp and ftps wrappers PHP has; restore() puts them back.
  */
 final class RecordingWrapper
@@ -60,6 +61,41 @@ final class RecordingWrapper
     public function dir_opendir(string $path, int $options): bool
     {
         self::$log[] = 'opendir ' . $path;
+
+        return false;
+    }
+
+    public function unlink(string $path): bool
+    {
+        self::$log[] = 'unlink ' . $path;
+
+        return false;
+    }
+
+    public function rename(string $from, string $to): bool
+    {
+        self::$log[] = 'rename ' . $from . ' ' . $to;
+
+        return false;
+    }
+
+    public function mkdir(string $path, int $mode, int $options): bool
+    {
+        self::$log[] = 'mkdir ' . $path;
+
+        return false;
+    }
+
+    public function rmdir(string $path, int $options): bool
+    {
+        self::$log[] = 'rmdir ' . $path;
+
+        return false;
+    }
+
+    public function stream_metadata(string $path, int $option, mixed $value): bool
+    {
+        self::$log[] = 'metadata ' . $path;
 
         return false;
     }

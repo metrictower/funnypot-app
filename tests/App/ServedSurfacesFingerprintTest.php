@@ -650,6 +650,7 @@ final class ServedSurfacesFingerprintTest extends TestCase
         for ($seed = 1; $seed <= 8; $seed++) {
             $tour = (new \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour($seed))->run();
             try {
+                \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour::assertEveryKind($tour->kinds, "seed {$seed} tour");
                 foreach ($tour->plans as [$label, $plan]) {
                     self::assertServedClean($plan->body, "ssrf seed {$seed} {$label}");
                     foreach ($plan->headers() as [$n, $v]) {
@@ -661,6 +662,25 @@ final class ServedSurfacesFingerprintTest extends TestCase
             } finally {
                 $tour->cleanup();
             }
+            $corpusKinds = [];
+            foreach (\Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour::networkCorpus($seed) as [$kind, $label, $body]) {
+                self::assertServedClean($body, "ssrf seed {$seed} network answer {$label}");
+                $corpusKinds[$kind] = ($corpusKinds[$kind] ?? 0) + 1;
+                $bytes += strlen($body);
+            }
+            \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour::assertEveryKind($corpusKinds, "seed {$seed} network corpus");
+        }
+        // Positive control: a marker planted in a network answer the scan reads is caught.
+        $corpus = \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour::networkCorpus(1);
+        foreach (['admin_ui', 'metrics', 'sts'] as $k) {
+            $body = '';
+            foreach ($corpus as [$kind, , $b]) {
+                if ($kind === $k) {
+                    $body = $b;
+                    break;
+                }
+            }
+            self::assertNotSame([], self::scanAll($body . "\nModSecurity paranoia-level OWASP_CRS"), "planted in a {$k} answer, the scan flags it");
         }
         foreach (\Funnypot\App\Tarpit\Ssrf\SsrfForms::MESSAGES as $key => $text) {
             self::assertServedClean($text, "ssrf message {$key}");

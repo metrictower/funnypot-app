@@ -40,9 +40,10 @@ final class SsrfNoOutboundTest extends TestCase
             'Funnypot\\App\\Tarpit\\Mint\\SurfaceExtension::none',
             'Funnypot\\App\\Tarpit\\Ssrf\\SsrfDecoy::build',
             'Funnypot\\App\\Tarpit\\Ssrf\\SsrfRoutes::extension',
-            // the build stamp the key index versions on: installed package references, read from composer's own map
+            // the build stamp the key index versions on: the image's build id or a hash of local sources, plus
+            // the installed core reference read from composer's own map
+            'Funnypot\\App\\Config\\BuildStamp::value',
             'Composer\\InstalledVersions::getreference',
-            'Composer\\InstalledVersions::getrootpackage',
         ],
         'extends' => [],
     ];
@@ -53,7 +54,7 @@ final class SsrfNoOutboundTest extends TestCase
         'array_merge', 'array_reverse', 'array_shift', 'array_slice', 'array_splice', 'array_unique', 'array_values', 'basename', 'ceil', 'count',
         'crc32', 'ctype_digit', 'ctype_xdigit', 'error_log', 'explode', 'filter_var', 'get_class', 'gettype', 'gmdate', 'hash', 'hash_equals',
         'hash_final', 'hash_hmac', 'hash_init', 'hash_update', 'hex2bin', 'hexdec', 'htmlspecialchars', 'implode', 'in_array', 'inet_ntop',
-        'inet_pton', 'intdiv', 'intval', 'is_array', 'is_int', 'is_string', 'json_decode', 'json_encode', 'max', 'min', 'octdec', 'ord',
+        'inet_pton', 'intdiv', 'intval', 'is_array', 'is_int', 'is_string', 'json_decode', 'json_encode', 'ltrim', 'max', 'min', 'octdec', 'ord',
         'preg_match', 'preg_match_all', 'preg_quote', 'preg_replace', 'rawurldecode', 'rawurlencode', 'rtrim', 'sprintf', 'str_contains',
         'str_ends_with', 'str_repeat', 'str_replace', 'str_split', 'str_starts_with', 'strcspn', 'stripos', 'strlen', 'strncmp', 'strpbrk',
         'strpos', 'strrpos', 'strspn', 'strtolower', 'strtr', 'substr', 'trim', 'ucfirst', 'unpack',
@@ -80,13 +81,27 @@ final class SsrfNoOutboundTest extends TestCase
     /** The one network-capable class client the namespace may reach, and only from the stores. */
     private const STORE_ONLY = ['Funnypot\\App\\Storage\\Sqlite::open' => ['SsrfStore.php', 'SsrfKeyIndex.php']];
 
-    /** Exact names and prefixes the child disables. Prefixes are expanded from the functions PHP defines. */
-    private const DISABLED = [
-        'exec', 'shell_exec', 'system', 'passthru', 'popen', 'proc_open', 'pcntl_exec', 'dl', 'fsockopen', 'pfsockopen',
-        'gethostbyname', 'gethostbynamel', 'gethostbyaddr', 'checkdnsrr', 'getmxrr', 'net_get_interfaces', 'mail', 'mb_send_mail',
-        'stream_wrapper_register', 'stream_wrapper_restore', 'stream_wrapper_unregister', 'stream_context_set_default', 'putenv',
+    /**
+     * Extensions the child keeps whole: their functions only transform their arguments or touch local
+     * files and the local SQLite store. Every function of every other loaded extension is disabled, and
+     * an extension the child loads that this list does not know is disabled with it.
+     */
+    public const PURE_EXTENSIONS = ['Core', 'standard', 'date', 'pcre', 'json', 'hash', 'ctype', 'mbstring', 'SPL', 'tokenizer', 'random', 'Reflection', 'PDO', 'pdo_sqlite', 'filter'];
+
+    /**
+     * Functions PHP keeps defined whatever disable_functions says: a namespaced function, and intl
+     * functions registered after the setting applies. All are text transforms with no I/O.
+     */
+    private const UNDISABLEABLE_TEXT_ONLY = ['Dom\\import_simplexml', 'grapheme_str_split', 'normalizer_normalize', 'normalizer_is_normalized', 'normalizer_get_raw_decomposition'];
+
+    /** The network-capable functions of the kept extensions, by exact name or prefix. */
+    private const KEPT_NETWORK = [
+        'exec', 'shell_exec', 'system', 'passthru', 'popen', 'proc_open', 'proc_close', 'proc_get_status', 'proc_nice', 'proc_terminate', 'dl',
+        'fsockopen', 'pfsockopen', 'gethostbyname', 'gethostbynamel', 'gethostbyaddr', 'checkdnsrr', 'getmxrr', 'dns_check_record', 'dns_get_mx',
+        'dns_get_record', 'net_get_interfaces', 'mail', 'mb_send_mail', 'stream_wrapper_register', 'stream_register_wrapper', 'stream_wrapper_restore',
+        'stream_wrapper_unregister', 'stream_context_set_default', 'putenv', 'header_register_callback',
     ];
-    private const DISABLED_PREFIXES = ['curl_', 'socket_', 'dns_', 'snmp', 'stream_socket_', 'ftp_', 'ldap_', 'imap_', 'mysqli_', 'pg_', 'proc_', 'pcntl_', 'posix_', 'fsockopen'];
+    private const KEPT_NETWORK_PREFIXES = ['stream_socket_'];
 
     private static function root(): string
     {
@@ -136,13 +151,42 @@ final class SsrfNoOutboundTest extends TestCase
         }
     }
 
-    /** @return list<string> every disabled name: the exact list plus each prefix expanded */
+    /** @var array<string,list<string>>|null extension => functions, as the child PHP (php -n) loads them */
+    private static ?array $childFunctions = null;
+
+    /** @return array<string,list<string>> the child environment's extensions and their functions */
+    public static function childFunctions(): array
+    {
+        if (self::$childFunctions === null) {
+            $probe = 'echo json_encode(array_map(static fn ($e) => get_extension_funcs($e) ?: [], array_combine(get_loaded_extensions(), get_loaded_extensions())));';
+            $p = proc_open([PHP_BINARY, '-n', '-r', $probe], [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+            $out = (string) stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+            proc_close($p);
+            $decoded = json_decode($out, true);
+            self::assertIsArray($decoded, 'the child environment probe ran');
+            self::$childFunctions = $decoded;
+        }
+
+        return self::$childFunctions;
+    }
+
+    /**
+     * Every function the child disables, derived per extension: all functions of every loaded extension
+     * outside PURE_EXTENSIONS, plus the network-capable functions of the kept ones.
+     *
+     * @return list<string>
+     */
     public static function disabled(): array
     {
-        $names = self::DISABLED;
-        foreach (get_defined_functions()['internal'] as $fn) {
-            foreach (self::DISABLED_PREFIXES as $p) {
-                if (str_starts_with($fn, $p)) {
+        $names = [];
+        foreach (self::childFunctions() as $ext => $funcs) {
+            if (!in_array($ext, self::PURE_EXTENSIONS, true)) {
+                $names = [...$names, ...$funcs];
+                continue;
+            }
+            foreach ($funcs as $fn) {
+                if (in_array($fn, self::KEPT_NETWORK, true) || array_filter(self::KEPT_NETWORK_PREFIXES, static fn (string $p): bool => str_starts_with($fn, $p)) !== []) {
                     $names[] = $fn;
                 }
             }
@@ -155,23 +199,22 @@ final class SsrfNoOutboundTest extends TestCase
     private static function child(string $plant = '', int $steps = self::STEPS): array
     {
         $names = self::disabled();
-        $env = ['SSRF_DISABLED' => implode(',', $names), 'SSRF_CHILD_PLANT' => $plant, 'SSRF_CHILD_STEPS' => (string) $steps, 'PATH' => (string) getenv('PATH'), 'TMPDIR' => sys_get_temp_dir()];
+        $env = ['SSRF_DISABLED' => implode(',', $names), 'SSRF_EXTENSIONS' => implode(',', array_keys(self::childFunctions())), 'SSRF_CHILD_PLANT' => $plant,
+            'SSRF_CHILD_STEPS' => (string) $steps, 'PATH' => (string) getenv('PATH'), 'TMPDIR' => sys_get_temp_dir()];
+        // No php.ini: only the extensions built into the binary load, so shared class clients (redis,
+        // openswoole and the like) are absent, and the probe above saw exactly this environment.
         $cmd = [PHP_BINARY, '-n', '-d', 'memory_limit=512M', '-d', 'max_execution_time=120', '-d', 'allow_url_fopen=0', '-d', 'allow_url_include=0',
-            '-d', 'ffi.enable=0', '-d', 'sendmail_path=/nonexistent/ssrf-bench', '-d', 'disable_functions=' . implode(',', $names)];
-        // Keep the installed extensions (pdo_sqlite and the rest): load the same php.ini when there is one.
-        if (php_ini_loaded_file() !== false) {
-            $cmd = array_values(array_filter($cmd, static fn (string $a): bool => $a !== '-n'));
-        }
-        $cmd[] = __DIR__ . '/support/no-outbound-child.php';
+            '-d', 'ffi.enable=0', '-d', 'sendmail_path=/nonexistent/ssrf-bench', '-d', 'disable_functions=' . implode(',', $names),
+            __DIR__ . '/support/no-outbound-child.php'];
         // The child's hit log goes to stderr: send it to a file so neither pipe can fill and block.
-        $errFile = tempnam(sys_get_temp_dir(), 'fp0816child');
-        $p = proc_open($cmd, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', (string) $errFile, 'w']], $pipes, self::root(), $env);
+        $errFile = (string) tempnam(sys_get_temp_dir(), 'fp0816child');
+        $p = proc_open($cmd, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $errFile, 'w']], $pipes, self::root(), $env);
         self::assertIsResource($p);
         $out = (string) stream_get_contents($pipes[1]);
         fclose($pipes[1]);
         proc_close($p);
-        $err = (string) file_get_contents((string) $errFile);
-        unlink((string) $errFile);
+        $err = (string) file_get_contents($errFile);
+        unlink($errFile);
         $lines = array_values(array_filter(explode("\n", $out), static fn (string $l): bool => str_starts_with($l, '{"steps"')));
         $res = json_decode($lines[count($lines) - 1] ?? '', true);
         self::assertIsArray($res, 'child output: ' . substr($out . $err, -800));
@@ -181,10 +224,17 @@ final class SsrfNoOutboundTest extends TestCase
 
     public function test_bench_runs_clean_in_a_child_without_network_functions(): void
     {
-        self::assertGreaterThan(count(self::DISABLED) + 20, count(self::disabled()), 'the prefixes expanded to real function names');
+        $disabled = self::disabled();
+        foreach (['curl_init', 'socket_create', 'odbc_connect', 'odbc_pconnect', 'ldap_connect', 'ftp_connect', 'mysqli_connect', 'pg_connect', 'snmpget', 'fsockopen', 'dns_get_record', 'exec', 'mb_send_mail'] as $fn) {
+            if (function_exists($fn) || in_array($fn, array_merge(...array_values(self::childFunctions())), true)) {
+                self::assertContains($fn, $disabled, "{$fn} is derived into the disable list");
+            }
+        }
         $clean = self::child();
-        self::assertGreaterThan(count(self::DISABLED), $clean['checked']);
-        self::assertSame([], $clean['still_defined'], 'every listed name is really disabled');
+        self::assertSame(count($disabled), $clean['checked']);
+        self::assertSame([], array_values(array_diff($clean['still_defined'], self::UNDISABLEABLE_TEXT_ONLY)), 'every derived name is really disabled, but for the listed text-only ones');
+        self::assertSame([], $clean['unexpected_extensions'], 'the child loaded exactly the probed extensions');
+        self::assertFalse($clean['class_clients'], 'no shared class-client extension (redis, openswoole) is loaded');
         self::assertSame(self::STEPS, $clean['steps']);
         self::assertSame(0, $clean['faults']);
         self::assertSame(0, $clean['errors'], (string) ($clean['error'] ?? ''));
@@ -207,7 +257,13 @@ final class SsrfNoOutboundTest extends TestCase
         try {
             file_exists('ftp://x.invalid/a');
             @file_get_contents('http://x.invalid/');
-            self::assertSame(['stat ftp://x.invalid/a', 'open http://x.invalid/'], RecordingWrapper::$log, 'positive controls: the trap records quiet stats and opens');
+            @unlink('ftp://x.invalid/b');
+            @rename('ftp://x.invalid/c', 'ftp://x.invalid/d');
+            @mkdir('http://x.invalid/e');
+            @rmdir('http://x.invalid/f');
+            @touch('ftp://x.invalid/g');
+            self::assertSame(['stat ftp://x.invalid/a', 'open http://x.invalid/', 'unlink ftp://x.invalid/b', 'rename ftp://x.invalid/c ftp://x.invalid/d',
+                'mkdir http://x.invalid/e', 'rmdir http://x.invalid/f', 'metadata ftp://x.invalid/g'], RecordingWrapper::$log, 'positive controls: the trap records every URL operation');
             RecordingWrapper::$log = [];
             $c = new SsrfPivotCrawler();
             try {

@@ -37,6 +37,9 @@ final class SsrfKeyIndex implements KeyIndexView
     /** @var array<string,string>|null */
     private ?array $meta = null;
 
+    /** The clock of the last advance(), against which the generator recheck is judged. */
+    private ?int $checkedAt = null;
+
     public int $slicesRun = 0;
     public int $sectionsRun = 0;
     public bool $busySkipped = false;
@@ -50,12 +53,13 @@ final class SsrfKeyIndex implements KeyIndexView
     }
 
     /**
-     * The deploy id: everything that decides what the generators serve and that is cheap to read on
-     * every request. $buildStamp is the installed code's reference, passed in by the composition root.
+     * The deploy id: every input that decides what the generators serve and is cheap to read on every
+     * request. $buildStamp changes with the deployed code (BuildStamp: the image's baked build id, or a
+     * hash of the generator sources); $filesystemKey seeds the shells' /root files.
      */
-    public static function deployId(string $key, int $personaSeed, int $capBytes, bool $pointers, string $buildStamp): string
+    public static function deployId(string $key, int $personaSeed, int $capBytes, bool $pointers, string $buildStamp, string $filesystemKey = ''): string
     {
-        return hash_hmac('sha256', 'deploy|' . $personaSeed . '|' . $capBytes . '|' . ($pointers ? 1 : 0) . '|' . $buildStamp, $key);
+        return hash_hmac('sha256', 'deploy|' . $personaSeed . '|' . $capBytes . '|' . ($pointers ? 1 : 0) . '|' . $buildStamp . '|' . hash_hmac('sha256', 'fs', $filesystemKey), $key);
     }
 
     public function hashOf(string $kind, string $value): string
@@ -87,11 +91,17 @@ final class SsrfKeyIndex implements KeyIndexView
         }
     }
 
+    /**
+     * Whether the index covers every generator and is current: built for this deploy id, and its
+     * generator fingerprint checked within the last RECHECK_S of the request's clock. Until then a fact the
+     * index does not hold may still be served, so every answer about it stays transient.
+     */
     public function complete(): bool
     {
         $meta = $this->meta();
 
-        return $meta !== null && $meta['complete'] === '1' && $meta['deploy'] === $this->deployId;
+        return $meta !== null && $meta['complete'] === '1' && $meta['deploy'] === $this->deployId
+            && $this->checkedAt !== null && $this->checkedAt - (int) $meta['fp_at'] < self::RECHECK_S;
     }
 
     /**
@@ -100,6 +110,7 @@ final class SsrfKeyIndex implements KeyIndexView
      */
     public function advance(int $now): void
     {
+        $this->checkedAt = $now;
         $db = $this->db();
         if ($db === null) {
             return;
@@ -238,6 +249,7 @@ final class SsrfKeyIndex implements KeyIndexView
             return $this->db = $db;
         } catch (Throwable $e) {
             $this->failed = true;
+            error_log('funnypot: ssrf key index would not open; every served-key answer stays transient (code=ssrf-keyidx-open-failed)');
 
             return null;
         }

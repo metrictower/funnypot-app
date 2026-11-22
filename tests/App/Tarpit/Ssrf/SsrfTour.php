@@ -18,6 +18,12 @@ final class SsrfTour
 {
     /** @var list<array{0:string,1:MintPlan}> */
     public array $plans = [];
+
+    /** @var array<string,int> the fake network's answer kinds the tour rendered, from each view's attribution */
+    public array $kinds = [];
+
+    /** Every answer kind the fake network has: node kinds, the worker's loopback, metadata and the proxy. */
+    public const ANSWER_KINDS = ['http_api', 'admin_ui', 'metrics', 'registry', 'db', 'cache', 'ssh', 'sts', 'payments', 'loopback', 'metadata', 'proxied'];
     public MintHarness $h;
     private string $pat = '';
 
@@ -38,6 +44,73 @@ final class SsrfTour
         }
 
         return $r;
+    }
+
+    /** Record which answer kind a delivery or import view rendered. */
+    private function view(array $r): void
+    {
+        $t = $r['plan']?->turn ?? [];
+        $kind = in_array($t['tclass'] ?? '', ['loopback', 'metadata', 'proxied', 'sts', 'payments'], true) ? $t['tclass'] : (string) ($t['nkind'] ?? '');
+        if ($kind !== '') {
+            $this->kinds[$kind] = ($this->kinds[$kind] ?? 0) + 1;
+        }
+    }
+
+    /**
+     * Every answer the fake network can give, enumerated directly: each node kind (three nodes of each)
+     * on each of its ports and on 22, for every method and path class; the worker's loopback ports;
+     * metadata; the proxy; and both gateways with every verdict.
+     *
+     * @return list<array{0:string,1:string,2:string}> [kind, label, body]
+     */
+    public static function networkCorpus(int $personaSeed): array
+    {
+        $w = SsrfCorpus::network($personaSeed);
+        $answers = $w['answers'];
+        $g = $w['net']->generated();
+        $out = [];
+        $seen = [];
+        for ($i = 1; $i < 6000; $i++) {
+            $node = $g->node($i);
+            if ($node === null || ($seen[$node->kind] ?? 0) >= 3) {
+                continue;
+            }
+            $seen[$node->kind] = ($seen[$node->kind] ?? 0) + 1;
+            foreach (array_unique([...$node->ports, 22]) as $port) {
+                foreach (['GET', 'POST', 'PUT', 'HEAD'] as $m) {
+                    foreach (\Funnypot\App\Tarpit\Ssrf\PathClass::cases() as $pc) {
+                        $reply = $answers->node($node, $port, $m, $pc, null, 'rid');
+                        $out[] = [$port === 22 ? 'ssh' : $node->kind, "{$node->host}:{$port} {$m} {$pc->value}", $reply->body . "\n" . (string) $reply->error];
+                    }
+                }
+            }
+        }
+        foreach (\Funnypot\App\Tarpit\Ssrf\NodeAnswers::LOOPBACK_PORTS as $port) {
+            foreach (['GET', 'POST'] as $m) {
+                $reply = $answers->loopback($port, $m, \Funnypot\App\Tarpit\Ssrf\PathClass::Root);
+                $out[] = ['loopback', "loopback:{$port} {$m}", (string) $reply?->body . "\n" . (string) $reply?->error];
+            }
+        }
+        foreach (['GET', 'POST', 'PUT', 'HEAD'] as $m) {
+            foreach ([\Funnypot\App\Tarpit\Ssrf\PathClass::Meta, \Funnypot\App\Tarpit\Ssrf\PathClass::Token, \Funnypot\App\Tarpit\Ssrf\PathClass::Verify] as $pc) {
+                $out[] = ['metadata', "metadata {$m} {$pc->value}", \Funnypot\App\Tarpit\Ssrf\NodeAnswers::metadata($m, $pc)->body];
+            }
+        }
+        $out[] = ['proxied', 'proxy', \Funnypot\App\Tarpit\Ssrf\NodeAnswers::PROXY_DENIED];
+        foreach (\Funnypot\App\Tarpit\Ssrf\CredentialEndpoints::VERDICTS as $v) {
+            $out[] = ['sts', "sts {$v}", \Funnypot\App\Tarpit\Ssrf\CredentialEndpoints::stsReply($v, 'rid')->body];
+            $out[] = ['payments', "payments {$v}", \Funnypot\App\Tarpit\Ssrf\CredentialEndpoints::paymentsReply($v)->body];
+        }
+
+        return $out;
+    }
+
+    /** Fail unless every answer kind appears. @param array<string,int> $kinds */
+    public static function assertEveryKind(array $kinds, string $what): void
+    {
+        foreach (self::ANSWER_KINDS as $k) {
+            \PHPUnit\Framework\Assert::assertGreaterThan(0, $kinds[$k] ?? 0, "{$what}: the {$k} answer kind was rendered");
+        }
     }
 
     private function get(string $p): array
@@ -86,35 +159,56 @@ final class SsrfTour
         $this->post('/settings/webhooks', ['csrf_token' => 'stale']);
         $persona = PersonaIdentity::fromSeed($this->personaSeed);
         $region = (string) $persona->field('cloud.aws.region');
+        $fleetHost = '';
+        foreach (\Funnypot\App\Render\Fake\Fleet::fromSeed($this->personaSeed)->servers() as $srv) {
+            if ($srv['status'] === 'running') {
+                $fleetHost = strtolower((string) $srv['host']);
+            }
+        }
         $targets = [
             $this->node('http_api') . '/', $this->node('admin_ui') . '/', $this->node('metrics') . '/metrics', $this->node('registry') . '/',
             $this->node('db') . '/', $this->node('cache') . '/', $this->node('ssh') . '/', 'http://127.1:22/', 'http://127.1:9090/metrics',
             'http://127.1:8080/', 'http://0xa9fea9fe/latest/meta-data/', 'http://172.16.9.9/', 'https://collab.example.net/x', 'http://nosuch.internal/',
             'http://sts.' . $region . '.internal/?X-Amz-Credential=' . $persona->field('cloud.aws.accessKeyId') . '%2Fx&X-Amz-Signature=1',
             'http://' . $persona->field('cloud.stripe.secretKey') . ':@payments-gw.' . $region . '.internal:8443/v1/charges',
+            $this->node('http_api') . '/health', 'http://127.1:6379/', 'http://' . $fleetHost . ':22/', 'http://db-primary.' . $region . '.internal:5432/',
+            'http://sts.' . $region . '.internal/',
         ];
         $hooks = [];
         foreach (array_slice($targets, 0, 5) as $i => $url) {
             $form = $h->get('/settings/webhooks/new');
-            $r = $this->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body']), 'content_type' => $i % 2 ? 'form' : 'json', 'secret' => 'sec-' . $i, 'events' => ['token'], 'active' => '1', 'payload_url' => $url]);
+            $r = $this->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body']), 'content_type' => $i % 2 ? 'form' : 'json', 'secret' => 'sec-' . $i, 'events' => ['token.created'], 'active' => '1', 'payload_url' => $url]);
             $hooks[] = basename((string) $r['plan']?->header('Location'));
         }
         $hook = $hooks[0];
-        foreach ($targets as $i => $url) {
+        // Each delivery is viewed right after its ping (UI and API), so every answer the fake network can
+        // give a webhook is rendered before a later URL version drops it; the GET answers come back
+        // through imports below.
+        foreach ($targets as $url) {
+            $h->now += 25;
             $show = $h->get('/settings/webhooks/' . $hook);
             $this->post('/settings/webhooks/' . $hook, ['csrf_token' => self::tokens($show['body'])[1], 'payload_url' => $url]);
             $show = $h->get('/settings/webhooks/' . $hook);
             $this->post('/settings/webhooks/' . $hook . '/pings', ['csrf_token' => self::tokens($show['body'])[0]]);
-            $h->now += $i % 3 === 0 ? 0 : 15;
+            $h->now += 4;
+            preg_match('~/settings/webhooks/' . $hook . "/deliveries/([a-f0-9]{12})'~", $h->get('/settings/webhooks/' . $hook)['body'], $dm);
+            $this->view($this->get('/settings/webhooks/' . $hook . '/deliveries/' . $dm[1]));
+            $this->view($this->api('GET', '/api/v2/user/hooks/' . $hook . '/deliveries/' . $dm[1]));
+        }
+        foreach ($targets as $url) {
+            $h->now += 25;
+            $form = $h->get('/settings/imports/new');
+            $loc = (string) $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($form['body']), 'kind' => 'orders_csv', 'source_url' => $url])['plan']?->header('Location');
+            if ($loc !== '') {
+                $h->now += 11;
+                $this->view($this->get($loc));
+                $this->view($this->api('GET', '/api/v2/user/imports/' . basename($loc)));
+            }
         }
         $h->now += 4000;
         $h->signIn('artex1', 'Passw0rd!x');
         $show = $this->get('/settings/webhooks/' . $hook);
         preg_match_all('~/settings/webhooks/' . $hook . "/deliveries/([a-f0-9]{12})'~", $show['body'], $m);
-        foreach ($m[1] as $did) {
-            $this->get('/settings/webhooks/' . $hook . '/deliveries/' . $did);
-            $this->api('GET', '/api/v2/user/hooks/' . $hook . '/deliveries/' . $did);
-        }
         $page = $h->get('/settings/webhooks/' . $hook . '/deliveries/' . ($m[1][0] ?? ''));
         $this->post('/settings/webhooks/' . $hook . '/redeliveries', ['csrf_token' => self::tokens($page['body'])[0] ?? '', 'delivery' => $m[1][0] ?? '']);
         $this->post('/settings/webhooks/' . $hook . '/redeliveries', ['csrf_token' => self::tokens($page['body'])[0] ?? '', 'delivery' => 'ffffffffffff']);
@@ -148,7 +242,7 @@ final class SsrfTour
             $this->api('GET', $p);
         }
         $this->api('POST', '/api/v2/user/hooks', '{"url":"ftp://x/"}');
-        $this->api('PATCH', '/api/v2/user/hooks/' . $hook, '{"active":false,"events":["order"]}');
+        $this->api('PATCH', '/api/v2/user/hooks/' . $hook, '{"active":false,"events":["order.created"]}');
         $this->api('POST', '/api/v2/user/hooks/' . $hook . '/pings', '{}');
         $this->api('POST', '/api/v2/user/imports', '{"kind":"mirror","source_url":"https://github.com/a/b"}');
         $this->api('PUT', '/api/v2/user/storage', '{"bucket":"b..b"}');

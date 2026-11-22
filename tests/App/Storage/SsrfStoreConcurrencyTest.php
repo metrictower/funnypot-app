@@ -68,6 +68,7 @@ final class SsrfStoreConcurrencyTest extends TestCase
         $res = $this->children('index', $db, 200);
         $builder = new KeyIndexBuilder(4242, 'fs', 1 << 20);
         $idx = new SsrfKeyIndex($db, 'idx-key', $builder, SsrfKeyIndex::deployId('idx-key', 4242, 1 << 20, false, 'b'));
+        $idx->advance(1000);
         self::assertTrue($idx->complete());
         self::assertSame($builder->slices(), $res[0]['ok'] + $res[1]['ok'], 'each slice ran exactly once between the two');
         $stats = $idx->stats();

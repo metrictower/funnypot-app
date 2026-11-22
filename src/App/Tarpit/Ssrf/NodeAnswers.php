@@ -118,7 +118,7 @@ final class NodeAnswers
         return match ($node->kind) {
             'sts' => CredentialEndpoints::stsReply($verdict ?? 'missing', $requestId),
             'payments' => CredentialEndpoints::paymentsReply($verdict ?? 'missing'),
-            'db' => Reply::failure('reset', 'Recv failure: connection reset by peer'),
+            'db' => Reply::failure('conn_reset', 'Recv failure: connection reset by peer'),
             'cache' => Reply::failure('empty', 'Empty reply from server'),
             'ssh' => $this->banner($node->key),
             'admin_ui' => $this->adminUi($stem, $m, $pc),

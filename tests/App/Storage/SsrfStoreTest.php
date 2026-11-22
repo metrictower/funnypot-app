@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Storage;
 use Funnypot\App\Storage\SsrfOutcome;
 use Funnypot\App\Storage\SsrfStore;
 use Funnypot\App\Storage\SsrfTx;
+use Funnypot\App\Tarpit\Ssrf\SsrfForms;
 use Funnypot\App\Tarpit\Ssrf\SsrfState;
 use PDOException;
 use PHPUnit\Framework\TestCase;
@@ -79,13 +80,13 @@ final class SsrfStoreTest extends TestCase
         $facts = ['o' => 'dns_transient', 'e' => 'private_other', 'k' => 'registry', 'n' => 'cd:' . str_repeat('h', SsrfState::MAX_HOST),
             'p' => 65535, 'pc' => 'verify', 'm' => 'DELETE', 'vd' => 'throttled'];
         for ($h = 0; $h < SsrfState::MAX_HOOKS; $h++) {
-            $pos = $s->addHook(str_repeat('a', 11) . $h, $s->nextHookSerial(), 'form', str_repeat('S', 64), ['token', 'member', 'order', 'export'], true, ['url' => $url, 'cr' => $cr], 1);
+            $pos = $s->addHook(str_repeat('a', 11) . $h, $s->nextHookSerial(), 'form', str_repeat('S', 64), array_keys(SsrfForms::EVENTS), true, ['url' => $url, 'cr' => $cr], 1);
             for ($v = 0; $v < 5; $v++) {
                 $s->addVersion($pos, ['url' => $url, 'cr' => $cr], 2);
             }
             self::assertCount(SsrfState::MAX_VERSIONS, $s->d['h'][$pos]['u']);
             for ($d = 0; $d < 14; $d++) {
-                $s->addDelivery($pos, ['id' => str_repeat('d', 12), 'c' => 1795300000, 'vi' => 99, 'ev' => 'export', 'rd' => 1, 'f' => $facts]);
+                $s->addDelivery($pos, ['id' => str_repeat('d', 12), 'c' => 1795300000, 'vi' => 99, 'ev' => 'export.completed', 'rd' => 1, 'f' => $facts]);
             }
         }
         for ($i = 0; $i < 7; $i++) {
@@ -107,6 +108,22 @@ final class SsrfStoreTest extends TestCase
         $store = $this->store();
         self::assertTrue($store->transact('o', 's', 5, new \Funnypot\Tests\App\Storage\ClosureDecision(static fn (?SsrfState $x, SsrfTx $tx): SsrfOutcome => new SsrfOutcome($s, true, 1, null)))['ok']);
         self::assertSame($s->toJson(), $store->load('o')?->toJson());
+    }
+
+    public function test_dropping_a_url_version_drops_its_deliveries(): void
+    {
+        $s = SsrfState::fresh(1);
+        $pos = $s->addHook('h1', $s->nextHookSerial(), 'json', 'S', [SsrfForms::DEFAULT_EVENT], true, ['url' => 'http://a.example/'], 1);
+        $s->addDelivery($pos, ['id' => 'd0', 'vi' => 0]);
+        for ($v = 1; $v <= SsrfState::MAX_VERSIONS - 1; $v++) {
+            $s->addVersion($pos, ['url' => 'http://a.example/' . $v], 2);
+            $s->addDelivery($pos, ['id' => 'd' . $v, 'vi' => $v]);
+        }
+        self::assertSame(['d0', 'd1', 'd2'], array_column($s->d['h'][$pos]['d'], 'id'), 'three versions keep every delivery');
+        $s->addVersion($pos, ['url' => 'http://a.example/3'], 3);
+        self::assertSame([1, 2, 3], array_column($s->d['h'][$pos]['u'], 'n'));
+        self::assertSame(['d1', 'd2'], array_column($s->d['h'][$pos]['d'], 'id'), "version 0's delivery goes with it");
+        self::assertNull($s->deliveryPos($pos, 'd0'));
     }
 
     public function test_ttl_and_lru(): void
