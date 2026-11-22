@@ -489,7 +489,19 @@ final class AdaptiveShellHandleTest extends TestCase
             return true;
         });
         try {
-            foreach (['grep -r' => $fill('grep -r a', '/'), 'grep -rv' => $fill('grep -rv Q', '/'), 'find' => $fill('find', '/'),
+            $joined = 'cat ';
+            while (strlen($joined) + 5 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+                $joined .= '$PATH';
+            }
+            foreach (['GET long $PATH path' => $joined] as $name => $line) {
+                $h->fetch('GET', '/admin/root/html', 'cmd=id', null, '203.0.113.71');
+                $t = hrtime(true);
+                $body = $h->fetch('GET', '/admin/root/html', 'cmd=' . rawurlencode($line), null, '203.0.113.71')['body'];
+                $ms = (hrtime(true) - $t) / 1e6;
+                self::assertSame($h->rewriter->landing(FootholdIdentity::www()), $body, "{$name}: the attacker path is never shown on a GET");
+                self::assertLessThan(100.0, $ms, sprintf('%s: one request took %.0f ms', $name, $ms));
+            }
+            foreach (['long $PATH path' => $joined, 'grep -r' => $fill('grep -r a', '/'), 'grep -rv' => $fill('grep -rv Q', '/'), 'find' => $fill('find', '/'),
                 'find -name' => 'find / / / -name ' . str_repeat('a', 1100), 'du' => $fill('du -sh', '/'), 'all segments' => $fill('grep -r a /', ';grep -r a /')] as $name => $line) {
                 $h->post('/admin/root/post', 'id', '203.0.113.70');
                 memory_reset_peak_usage();

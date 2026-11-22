@@ -294,6 +294,55 @@ final class AdaptiveShellTest extends TestCase
         self::assertGreaterThan(25000, $checked, 'every applet x shape x spelling');
     }
 
+    /** Lines that expansion amplifies stay inside one request's budget, for every applet, POST and GET. */
+    public function test_expansion_amplification_stays_within_the_budget(): void
+    {
+        $fill = static function (string $head, string $unit): string {
+            while (strlen($head) + strlen($unit) <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+                $head .= $unit;
+            }
+
+            return $head;
+        };
+        $forms = [
+            '$PATH joined' => static fn (string $a): string => $fill("{$a} ", '$PATH'),
+            '$PATH args' => static fn (string $a): string => $fill($a, ' $PATH'),
+            '${PATH} joined' => static fn (string $a): string => $fill("{$a} ", '${PATH}'),
+            '$HOME path' => static fn (string $a): string => $fill("{$a} ", '$HOME/'),
+            '${IFS}$PATH' => static fn (string $a): string => $fill($a, '${IFS}$PATH'),
+            'brace' => static fn (string $a): string => $fill("{$a} ", '{a,b}'),
+        ];
+        $h = $this->harness();
+        $det = self::detection('attack-webshell-panel', ['attack', 'webshell']);
+        $warnings = [];
+        set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+            $warnings[] = $msg;
+
+            return true;
+        });
+        $worst = 0.0;
+        try {
+            foreach (\Funnypot\App\Tarpit\Cmdi\FootholdFacts::commandNames() as $applet) {
+                foreach ($forms as $name => $make) {
+                    $line = $make($applet);
+                    foreach (['POST', 'GET'] as $m) {
+                        $ctx = $m === 'POST' ? self::ctx('POST', '/admin/root/post', '', 'cmd=' . rawurlencode($line)) : self::ctx('GET', '/admin/root/html', 'cmd=' . rawurlencode($line));
+                        $t = hrtime(true);
+                        $turn = $h->shell->prepare($ctx, '198.51.100.45', $det, self::policy());
+                        $ms = (hrtime(true) - $t) / 1e6;
+                        self::assertNotNull($turn, "{$name}: {$applet}");
+                        $worst = max($worst, $ms);
+                        self::assertLessThan(30.0, $ms, sprintf('%s %s %s took %.1f ms', $m, $applet, $name, $ms));
+                    }
+                }
+            }
+        } finally {
+            restore_error_handler();
+        }
+        self::assertSame([], $warnings, 'no warning reaches the log');
+        self::assertGreaterThan(0.0, $worst);
+    }
+
     public function test_a_store_fault_never_escapes(): void
     {
         $spy = new SpyCmdiStore();

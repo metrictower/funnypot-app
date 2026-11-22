@@ -54,6 +54,11 @@ final class FootholdFacts
     private const MAX_NODES = 3000;
     private const MAX_PATTERN = 128;
     private const MAX_WORK_NS = 30_000_000;
+    /** Linux's NAME_MAX and PATH_MAX: past them every applet gets ENAMETOOLONG. */
+    private const NAME_MAX = 255;
+    private const PATH_MAX = 4096;
+    /** Bytes one command line may grow to after parameter expansion (`$PATH$PATH…`). */
+    private const MAX_EXPANDED = 65536;
     private const IMAGE_MTIME = 'Nov  3 09:12';
     private const DEPLOY_MTIME = 'Nov 19 06:40';
     private const BUSYBOX = 'BusyBox v1.36.1 (2024-01-26 10:44:39 UTC) multi-call binary.';
@@ -130,6 +135,10 @@ final class FootholdFacts
     private bool $mayReflect = true;
     private int $nodes = 0;
     private ?int $deadline = null;
+    /** The applet being run, for the ENAMETOOLONG line ('' while the shell itself resolves the command). */
+    private string $applet = '';
+    /** @var list<string> directories this identity cannot enter, for a linear "is it under one?" check */
+    private array $deniedDirs = [];
     /** @var callable():int */
     private $clock;
 
@@ -251,11 +260,24 @@ final class FootholdFacts
         if ($this->spent()) {
             return '';
         }
+        $this->applet = '';
         try {
             // The operand cap counts the words as typed. Expansion (variables, field splitting, globs)
             // happens before any applet looks at its arguments, so every spelling of one command gets
             // one answer, and what expansion adds is bounded by the work budget instead.
             $out = $this->exec($this->expand(array_slice($argv, 0, self::MAX_ARGS + 1)), 0);
+        } catch (NameTooLong $e) {
+            try {
+                $out = $this->nameTooLong($e->typed);
+            } catch (SlotRefused $e2) {
+                return $mayReflect ? '' : null;
+            }
+        } catch (ArgListTooLong $e) {
+            $name = basename((string) ($argv[0] ?? 'sh'));
+            if (!$this->isCommand($name)) {
+                return $mayReflect ? '' : null;
+            }
+            $out = "sh: {$name}: Argument list too long\n";
         } catch (SlotRefused $e) {
             // From a GET the caller serves the landing instead. From a body, the text only failed the
             // charset, and the command simply prints nothing.
@@ -302,7 +324,11 @@ final class FootholdFacts
     /** True when the table holds $path (normalised, symlinks followed). */
     public function exists(string $path): bool
     {
-        return isset($this->fs[$this->resolve($this->abs($path))]);
+        try {
+            return isset($this->fs[$this->resolve($this->abs($path))]);
+        } catch (NameTooLong $e) {
+            return false;
+        }
     }
 
     // --- dispatch ---------------------------------------------------------------------------------
@@ -336,7 +362,28 @@ final class FootholdFacts
             return AshVocabulary::render('not_found', $shown) . "\n";
         }
 
+        $this->applet = $name;
+
         return $this->dispatch($name, $args, $depth);
+    }
+
+    /**
+     * busybox's ENAMETOOLONG line for the applet that tried the path. The path is attacker text, so
+     * only a capped prefix is shown, through a slot.
+     */
+    private function nameTooLong(string $typed): string
+    {
+        $shown = $this->slotPath(substr($typed, 0, self::PATH_CAP)) . '...';
+        $a = $this->applet;
+
+        return match (true) {
+            $a === '' => "sh: {$shown}: File name too long\n",
+            in_array($a, ['cat', 'less', 'more', 'sh', 'ash', 'bash', '.', 'source', 'tar'], true) => "{$a}: can't open '{$shown}': File name too long\n",
+            $a === 'cd' => AshVocabulary::render('cd_fail', $shown, 'File name too long') . "\n",
+            $a === 'stat' => "stat: can't stat '{$shown}': File name too long\n",
+            $a === 'php' => "Could not open input file: {$shown}\n",
+            default => "{$a}: {$shown}: File name too long\n",
+        };
     }
 
     /** @param list<string> $a */
@@ -2270,6 +2317,11 @@ final class FootholdFacts
         }
 
         $ino = 1048577;
+        foreach ($this->fs as $p => $e) {
+            if (($e['deny'] ?? false) && $e['t'] === 'd') {
+                $this->deniedDirs[] = $p;
+            }
+        }
         foreach ($this->fs as $p => &$e) {
             $e['mt'] ??= self::IMAGE_MTIME;
             $e['ino'] = $ino;
@@ -2290,8 +2342,14 @@ final class FootholdFacts
             return self::CWD;
         }
         $full = $p[0] === '/' ? $p : self::CWD . '/' . $p;
+        if (strlen($full) > self::PATH_MAX) {
+            throw new NameTooLong($p);
+        }
         $parts = [];
         foreach (explode('/', $full) as $seg) {
+            if (strlen($seg) > self::NAME_MAX) {
+                throw new NameTooLong($p);
+            }
             if ($seg === '' || $seg === '.') {
                 continue;
             }
@@ -2339,8 +2397,10 @@ final class FootholdFacts
     /** True when a directory above $abs cannot be entered by this identity (so even a missing path is "denied"). */
     private function underDenied(string $abs): bool
     {
-        for ($d = $this->parent($abs); $d !== '/'; $d = $this->parent($d)) {
-            if (isset($this->fs[$d]) && $this->denied($d)) {
+        // One prefix test per unreadable directory (there are a handful), so the cost is linear in
+        // the path whatever its depth.
+        foreach ($this->id->isRoot() ? [] : $this->deniedDirs as $d) {
+            if (str_starts_with($abs, $d . '/')) {
                 return true;
             }
         }
@@ -2436,16 +2496,25 @@ final class FootholdFacts
     private function expandVars(array $argv): array
     {
         $out = [];
+        $total = 0;
         foreach ($argv as $w) {
             if (!str_contains($w, "\x00")) {
                 $out[] = $w;
                 continue;
             }
+            // A line may not grow past MAX_EXPANDED through expansion: E2BIG, as exec would report.
+            // Counted as it grows, so no oversized value is ever built.
             $split = false;
-            $value = (string) preg_replace_callback('~\x00([uq])([^\x00]*)\x00~', function (array $m) use (&$split): string {
+            $total += strlen($w);
+            $value = (string) preg_replace_callback('~\x00([uq])([^\x00]*)\x00~', function (array $m) use (&$split, &$total): string {
                 $split = $split || $m[1] === 'u';
+                $v = $this->shellVar($m[2]);
+                $total += strlen($v);
+                if ($total > self::MAX_EXPANDED) {
+                    throw new ArgListTooLong();
+                }
 
-                return $this->shellVar($m[2]);
+                return $v;
             }, $w);
             if (!$split) {
                 $out[] = $value;
@@ -2482,7 +2551,11 @@ final class FootholdFacts
         if (strpbrk($dirPart, '*?[') !== false || $base === '' || strlen($base) > self::MAX_PATTERN || $this->spent()) {
             return [];
         }
-        $abs = $this->abs($dirPart === '' ? '.' : $dirPart);
+        try {
+            $abs = $this->abs($dirPart === '' ? '.' : $dirPart);
+        } catch (NameTooLong $e) {
+            return []; // no match: the word stays literal and the applet reports the long name
+        }
         if ($this->type($abs) !== 'd' || $this->denied($abs)) {
             return [];
         }

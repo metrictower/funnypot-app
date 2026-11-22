@@ -439,6 +439,57 @@ final class FootholdFactsTest extends TestCase
         self::assertSame([], $warnings, 'no warning ever reaches the log');
     }
 
+    /** Linux's NAME_MAX / PATH_MAX, after expansion: busybox's ENAMETOOLONG line, with a capped prefix. */
+    public function test_long_paths_answer_file_name_too_long(): void
+    {
+        $fill = static function (string $head, string $unit): string {
+            while (strlen($head) + strlen($unit) <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+                $head .= $unit;
+            }
+
+            return $head;
+        };
+        $f = self::facts(FootholdIdentity::www());
+        $lex = static fn (string $line): array => \Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv;
+        $long = '/' . str_repeat('a', 300);
+        self::assertSame("cat: can't open '" . substr($long, 0, FootholdFacts::PATH_CAP) . "...': File name too long\n", $f->run(['cat', $long]), 'a component over 255 bytes');
+        $path = self::sh($f, 'printenv PATH');
+        $prefix = substr(str_repeat(trim($path), 3), 0, FootholdFacts::PATH_CAP);
+        self::assertSame("cat: can't open '{$prefix}...': File name too long\n", $f->run($lex($fill('cat ', '$PATH'))), 'a 42 KB path from $PATH');
+        self::assertSame("ls: {$prefix}...: File name too long\n", $f->run($lex($fill('ls -la ', '$PATH'))));
+        self::assertSame("stat: can't stat '{$prefix}...': File name too long\n", $f->run($lex($fill('stat ', '$PATH'))));
+        self::assertStringStartsWith("sh: cd: line 0: can't cd to {$prefix}...: File name too long", (string) $f->run($lex($fill('cd ', '$PATH'))));
+        self::assertSame("sh: {$prefix}...: File name too long\n", $f->run($lex($fill('', '$PATH'))), 'the shell resolving a too-long command');
+        self::assertNull($f->run($lex($fill('cat ', '$PATH')), false), 'from a GET the attacker path is never shown');
+        self::assertNull($f->run(['cat', $long], false));
+    }
+
+    public function test_expansion_growth_is_capped(): void
+    {
+        // More markers than a 4 KB line can hold: the cap answers E2BIG instead of building the value.
+        $argv = ['cat', str_repeat("\x00uPATH\x00", 1200)];
+        $f = self::facts(FootholdIdentity::www());
+        $t = hrtime(true);
+        self::assertSame("sh: cat: Argument list too long\n", $f->run($argv));
+        self::assertLessThan(30.0, (hrtime(true) - $t) / 1e6);
+    }
+
+    public function test_the_long_path_repro_stays_within_the_budget(): void
+    {
+        $line = 'cat ';
+        while (strlen($line) + 5 <= \Funnypot\App\Tarpit\Cmdi\ShellLexer::MAX_INPUT) {
+            $line .= '$PATH';
+        }
+        $argv = \Funnypot\App\Tarpit\Cmdi\ShellLexer::lex($line)->argv;
+        foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
+            foreach ([true, false] as $reflect) {
+                $t = hrtime(true);
+                self::facts($id)->run($argv, $reflect);
+                self::assertLessThan(30.0, (hrtime(true) - $t) / 1e6, "{$id->name}, reflect=" . var_export($reflect, true));
+            }
+        }
+    }
+
     public function test_writes_and_egress_always_fail(): void
     {
         foreach ([FootholdIdentity::www(), FootholdIdentity::root()] as $id) {
