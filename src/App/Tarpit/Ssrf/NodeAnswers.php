@@ -51,6 +51,17 @@ final class NodeAnswers
         return (int) (hexdec(substr(hash('sha256', $salt . '|' . $key), 0, 7)) % max(1, $mod));
     }
 
+    /** The host a stored node key names: a generated host's name, or a leaked host as the key spells it. */
+    public function hostOf(string $key): string
+    {
+        if (preg_match('/\Ag(\d{1,5})\z/', $key, $m) === 1) {
+            return $this->net->generated()->name((int) $m[1]) ?? $this->net->generated()->ip((int) $m[1]);
+        }
+        $colon = strpos($key, ':');
+
+        return $colon === false ? $key : substr($key, $colon + 1);
+    }
+
     /** The service word a node is named after. */
     public static function stem(NetNode $node): string
     {

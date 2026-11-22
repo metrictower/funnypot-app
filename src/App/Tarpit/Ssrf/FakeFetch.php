@@ -27,23 +27,24 @@ final class FakeFetch
     }
 
     /**
-     * The compact facts a fetch stores: outcome, egress class, the node reached (kind, key, host),
-     * port, path class, method and the credential verdict.
+     * The compact facts a fetch stores: outcome, egress class, the node reached (kind and key; the key
+     * names the host), port, path class, method and the credential verdict.
      *
      * @return array<string,mixed>
      */
     public static function facts(Resolution $r, string $method, PathClass $pc, ?string $verdict = null): array
     {
         return [
-            'o' => $r->outcome, 'e' => $r->egress, 'k' => $r->node?->kind ?? '', 'n' => $r->node?->key ?? '',
-            'h' => $r->node?->host ?? '', 'p' => $r->port, 'pc' => $pc->value, 'm' => $method, 'vd' => $verdict,
+            'o' => $r->outcome, 'e' => $r->egress, 'k' => $r->node?->kind ?? '', 'n' => substr($r->node?->key ?? '', 0, 3 + SsrfState::MAX_HOST),
+            'p' => $r->port, 'pc' => $pc->value, 'm' => $method, 'vd' => $verdict,
         ];
     }
 
     /** @param array<string,mixed> $f */
     public function reply(array $f, string $requestId): ?Reply
     {
-        $node = ($f['n'] ?? '') !== '' ? new NetNode((string) $f['n'], (string) $f['k'], (string) $f['h'], [(int) $f['p']]) : null;
+        $key = (string) ($f['n'] ?? '');
+        $node = $key !== '' ? new NetNode($key, (string) $f['k'], $this->answers->hostOf($key), [(int) $f['p']]) : null;
         $r = new Resolution((string) $f['e'], (string) $f['o'], $node, (int) $f['p']);
 
         return $this->answers->reply($r, (string) $f['m'], PathClass::tryFrom((string) $f['pc']) ?? PathClass::Other, is_string($f['vd'] ?? null) ? $f['vd'] : null, $requestId);
