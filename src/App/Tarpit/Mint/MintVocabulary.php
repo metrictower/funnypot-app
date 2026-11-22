@@ -27,7 +27,7 @@ final class MintVocabulary
         'fields_invalid' => 'Some fields could not be saved.',
         'not_found' => 'Not Found',
         // sign-up
-        'username_invalid' => 'Username may only contain letters, numbers, dots, dashes and underscores, and must be 2 to 39 characters.',
+        'username_invalid' => 'Username may only contain letters, numbers, dashes and underscores, and must be 2 to 39 characters.',
         'username_taken' => 'Username is already taken.',
         'email_invalid' => 'Email is invalid.',
         'email_taken' => 'Email is already in use.',

@@ -12,7 +12,7 @@ namespace Funnypot\App\Tarpit\Mint;
  */
 final class MintForms
 {
-    public const USERNAME = '/\A[A-Za-z0-9][A-Za-z0-9_.-]{1,38}\z/';
+    public const USERNAME = '/\A[A-Za-z0-9][A-Za-z0-9_-]{1,38}\z/';
     public const EMAIL = '/\A[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,63}\.[A-Za-z]{2,24}\z/';
     public const TEXT = '/\A[A-Za-z0-9 _.:@+=,\/-]*\z/';
     public const URL = '/\A[A-Za-z0-9:\/._~?&=%+-]*\z/';
@@ -106,7 +106,8 @@ final class MintForms
         $errors = [];
         if ($username === null || preg_match(self::USERNAME, $username) !== 1) {
             $errors['username'] = 'username_invalid';
-        } elseif ($usernameTaken($username)) {
+        } elseif ($usernameTaken($username) || MintRoutes::coreKeyed($username)) {
+            // A name the profile URL could not serve is reserved, like any taken one.
             $errors['username'] = 'username_taken';
         }
         if ($email === null || strlen($email) > 153 || preg_match(self::EMAIL, $email) !== 1) {

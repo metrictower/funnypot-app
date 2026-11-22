@@ -150,6 +150,8 @@ final class MintCorpus
             '/v2/orders/export', '/settings/cluster', '/settings/general', '/settings/plugins', '/admin/root/html', '/admin/access-login',
             '/settings/tokens/abc/delete', '/settings/applications/ab', '/api/v2/users/-x', '/api/v2/orders/abcdefghijklmnopqrstuvw',
             '/settings/applications/abcdefgh', '/api/v2/orders/' . str_repeat('1', 21), '/v2/orders/ABC123',
+            '/api/v2/users/config.json', '/api/v2/users/id_rsa', '/v2/users/id_rsa.pub', '/api/v2/users/actuator', '/v2/users/Command',
+            '/api/v2/orders/system32', '/settings/applications/system32', '/api/v2/users/a.b',
         ];
     }
 }

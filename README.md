@@ -192,8 +192,12 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   counts, while a request with no such token (a blind spray) still does. The
   serve delay is paid exactly when the engine served nothing, so latency never shows which answered. An
   id in a path is any 1–20 character lowercase segment holding a digit, so no id length answers
-  differently; a letter-only word is never an id. No backup-archive or text-decoy path, no `.php` name and
-  no other `/api/v2/*` path is ever owned. The
+  differently; a letter-only word is never an id. A username in a path has no dot, so no file name is
+  ever owned, and a segment holding a word the engine keys on (`id_rsa`, `actuator`, `eval`, …;
+  `MintRoutes::CORE_KEYED`) is never owned, so the engine's own answer wins there. Sign-up reserves those
+  words, so an account's profile URL always answers. No backup-archive or text-decoy path, no `.php`
+  name and no other `/api/v2/*` path is ever owned; an ownership test probes every name in core's
+  compiled routes under the grammar. The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,

@@ -29,6 +29,10 @@ final class MintFormsTest extends TestCase
             'every failure of the stage at once'
         );
         self::assertSame(['password' => 'password_length'], MintForms::join('artex1', 'a@example.com', str_repeat('a', 73), str_repeat('a', 73), self::free(), self::free()));
+        self::assertSame(['username' => 'username_invalid'], MintForms::join('art.ex', 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()), 'no dot: a profile URL is never a file name');
+        foreach (['command', 'Eval', 'my_id_rsa', 'actuator'] as $reserved) {
+            self::assertSame(['username' => 'username_taken'], MintForms::join($reserved, 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()), "{$reserved} is reserved");
+        }
         foreach (["a\0b", 'ab<', "a\u{e9}b", 'a b', '-ab'] as $bad) {
             self::assertArrayHasKey('username', MintForms::join($bad, 'a@example.com', 'Passw0rd!x', 'Passw0rd!x', self::free(), self::free()), $bad);
         }
