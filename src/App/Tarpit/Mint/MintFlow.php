@@ -146,12 +146,8 @@ final class MintFlow
     private function joinPage(MintRequest $r): MintPlan
     {
         $now = $this->c->now();
-        $sess = $this->c->session($r, $now);
-        if ($sess !== null) {
-            [$k] = MintContext::rowKeys($sess['kref']);
-            if ($this->c->liveAccount($this->c->store->load($k), $sess, $now) !== null) {
-                return MintPlan::redirect('/', $this->c->persona);
-            }
+        if ($this->c->signedIn($r)) {
+            return MintPlan::redirect('/', $this->c->persona);
         }
         $kref = $this->c->keys->kref($r->ip);
 
@@ -161,15 +157,18 @@ final class MintFlow
     private function joinPost(MintRequest $r): MintPlan
     {
         $now = $this->c->now();
+        // A live session is already signed in: the sign-up form sends it home, posted or not.
+        if ($this->c->signedIn($r)) {
+            return MintPlan::redirect('/', $this->c->persona)->attribute(['outcome' => 'signed_in']);
+        }
         $kref = $this->c->keys->kref($r->ip);
         if ($this->c->csrf->verify($r->str(CsrfCodec::FIELD), $kref, 'join', 0, $now) === null) {
             return $this->csrfFailure('/join', false);
         }
-        $signedIn = $this->c->signedIn($r);
         [$k, $k8] = MintContext::rowKeys($kref);
-        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $kref, $now, $signedIn) {
+        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $kref, $now) {
             $units = MintContext::charge($tx, MintContext::COST_POST);
-            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false, $signedIn)) !== null) {
+            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false, false)) !== null) {
                 return MintContext::out(null, false, $units, $over);
             }
             $state = $s ?? $this->c->newState($kref, $now);
@@ -202,7 +201,7 @@ final class MintFlow
             return MintContext::out($state, true, $units, $plan);
         });
 
-        return $res['ok'] ? $res['value'] : $this->formFailure((string) $res['failure'], '/join', $signedIn);
+        return $res['ok'] ? $res['value'] : $this->formFailure((string) $res['failure'], '/join', false);
     }
 
     private function signoutPost(MintRequest $r): MintPlan

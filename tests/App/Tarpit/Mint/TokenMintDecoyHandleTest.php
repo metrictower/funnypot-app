@@ -380,6 +380,16 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertSame('in', self::nav($h->request('PUT', '/settings/tokens', '', '{}', ['Content-Type' => 'application/json'])['body']), 'a signed-in 405');
         self::assertSame('in', self::nav($h->request('POST', '/settings/profile', '', str_repeat('a', 17000))['body']), 'a signed-in 413');
 
+        // A live session posting the sign-up form, with a stale token or a taken name, is sent home: it never
+        // sees the signed-out sign-up page.
+        $joinForm = $h->get('/join', '', 'fresh');
+        foreach (['bad token' => ['csrf_token' => 'x', 'username' => 'artex2'], 'taken name' => ['csrf_token' => MintHarness::csrf($joinForm['body']), 'username' => 'artex1', 'email' => 'z@example.com', 'password' => 'Passw0rd!x', 'password_confirmation' => 'Passw0rd!x']] as $case => $fields) {
+            $j = $h->post('/join', $fields);
+            self::assertSame(303, $j['status'], "signed-in POST /join, {$case}");
+            self::assertSame('/', $j['plan']->header('Location'));
+        }
+        self::assertNotNull($h->front->home(new \Funnypot\Core\RequestContext('GET', '/', '', ['Cookie' => 'session=' . $h->jars['default']['session']]), MintHarness::IP), 'and home is the account home');
+
         // Signing out where the client keeps its cookie: every page now reads as signed out.
         $kept = $h->jars['default']['session'];
         $so = $h->get('/signout');
