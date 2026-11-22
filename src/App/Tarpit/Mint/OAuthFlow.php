@@ -341,6 +341,10 @@ final class OAuthFlow
             if ($state->idpFails($now, 900) >= MintState::MAX_IDP_FAILS) {
                 return MintContext::out($s, false, $units, $page('idp_locked'));
             }
+            // Every other sign-in here records a failure, so past the write cap it gets the capped answer up front.
+            if ($tx->capReached) {
+                return MintContext::out(null, false, $units, $page('signin_failed'));
+            }
             $state->pushIdpFail($now);
             $own = $user !== '' && $state->accountPosByLogin($user) !== null;
 

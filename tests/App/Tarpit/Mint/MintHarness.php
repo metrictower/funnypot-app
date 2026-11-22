@@ -28,6 +28,7 @@ use Funnypot\App\ThreatIntel\ThreatIntelReporter;
 use Funnypot\Core\RequestContext;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use PDO;
+use PHPUnit\Framework\Assert;
 
 require_once dirname(__DIR__, 4) . '/demo/lib/geo.php';
 
@@ -422,5 +423,26 @@ final class MintHarness
         }
 
         return $out;
+    }
+
+    /** Every answer stays in the closed status and header sets, and redirects only to the surface's own pages. */
+    public static function assertClosed(MintPlan $p, string $slug, string $what): void
+    {
+        Assert::assertContains($p->status, MintPlan::STATUSES, $what);
+        Assert::assertLessThan(500, $p->status, $what);
+        foreach ($p->headers() as [$n, $v]) {
+            Assert::assertContains($n, MintPlan::HEADER_NAMES, "{$what} header {$n}");
+            if ($n === 'Location') {
+                Assert::assertTrue(
+                    in_array($v, ['/', '/settings/reauth', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $slug . '/signin'], true)
+                    || preg_match('~\A/settings/applications/[a-f0-9]{12}\z~', $v) === 1,
+                    "{$what} Location {$v}"
+                );
+            }
+            if ($n === 'X-SSO') {
+                Assert::assertMatchesRegularExpression('~\Arequired; url=/orgs/' . preg_quote($slug, '~') . '/sso\?authorization_request=[a-f0-9]{12}\z~', $v, $what);
+            }
+        }
+        Assert::assertDoesNotMatchRegularExpression('~<meta[^>]+refresh|window\.location|location\.href~i', $p->body, "{$what} navigates");
     }
 }

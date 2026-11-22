@@ -85,7 +85,7 @@ final class MintFlow
         }
         [$k, $k8] = MintContext::rowKeys($sess['kref']);
         $cost ??= $form ? MintContext::COST_POST : MintContext::COST_GET;
-        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $sess, $now, $cost, $body) {
+        $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $sess, $now, $cost, $body, $form) {
             $units = MintContext::charge($tx, $cost);
             $pos = $this->c->liveAccount($s, $sess, $now);
             if (($over = $this->c->overUnits($tx, $cost, false, $pos !== null)) !== null) {
@@ -93,6 +93,9 @@ final class MintFlow
             }
             if ($s === null || $pos === null) {
                 return MintContext::out(null, false, $units, $this->noSession($r));
+            }
+            if ($form && ($capped = $this->c->capRefusal($tx, true)) !== null) {
+                return MintContext::out(null, false, $units, $capped);
             }
             $this->c->touchSession($s, $pos, $sess, $now);
             $out = $body($s, $pos, $sess, $now, $tx);
@@ -172,7 +175,7 @@ final class MintFlow
         [$k, $k8] = MintContext::rowKeys($kref);
         $res = $this->c->store->transact($k, $k8, $now, function (?MintState $s, TokenMintTx $tx) use ($r, $kref, $now) {
             $units = MintContext::charge($tx, MintContext::COST_POST);
-            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false, false)) !== null) {
+            if (($over = $this->c->overUnits($tx, MintContext::COST_POST, false, false) ?? $this->c->capRefusal($tx, false)) !== null) {
                 return MintContext::out(null, false, $units, $over);
             }
             $state = $s ?? $this->c->newState($kref, $now);

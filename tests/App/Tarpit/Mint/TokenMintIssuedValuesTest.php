@@ -282,6 +282,22 @@ final class TokenMintIssuedValuesTest extends TestCase
         self::assertSame($issued, $c->csrfToken($sid, 'token_create', 0, self::NOW), 'the choice is deterministic');
     }
 
+    public function test_the_catch_all_still_catches_a_value_only_a_command_word_path_flags(): void
+    {
+        // Core reads a path ending in a command-like word with a value ending in `time`: the sign-up form
+        // token above, and an access token ending the same way. Neither reads as an attack on its other
+        // paths, so only the catch-all refuses them; a catch-all that stopped pairing would fail here.
+        $check = self::check();
+        $form = 'iDZlU-0ivGARhiaDxza4zwmNRb3BNSGxTimE';
+        $pat = 'pal_pat_Lp1GAF51csSpDavjUKULfng72HBTiME';
+        self::assertTrue($this->trips(IssuedValue::probe($form, IssuedValue::CATCH_ALL)));
+        self::assertFalse($this->trips(IssuedValue::probe($form, '/settings/tokens')));
+        self::assertFalse($check->fit($form, ['/settings/tokens']), 'refused by the catch-all alone');
+        self::assertTrue($this->trips(IssuedValue::bearerProbe($pat, IssuedValue::CATCH_ALL)));
+        self::assertFalse($this->trips(IssuedValue::bearerProbe($pat, '/api/v2/user')));
+        self::assertFalse($check->fit($pat, ['/api/v2/user'], [], true), 'refused by the catch-all alone');
+    }
+
     public function test_the_check_steps_skips_and_fails_safe(): void
     {
         $check = new IssuedValue(static fn (RequestContext $r): bool => str_contains($r->query, 'bad'));

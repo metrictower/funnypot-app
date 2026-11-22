@@ -58,20 +58,23 @@ final class TokenMintLinkClosureTest extends TestCase
                 }
                 self::assertGreaterThan(300, $checked, "seed {$seed}: the crawl reached the pages (checked {$checked} targets)");
 
-                // A form token is checked on its own form's action, so every form the pages render must post
-                // to one of the actions the check knows, and every such action must be rendered somewhere.
-                $actions = [];
+                // A form token is checked on its own form's action, so each rendered form must post where the
+                // check thinks its form posts: the form its token verifies for maps to this very action.
+                $pairs = [];
                 foreach ($crawl->plans as [, $plan]) {
-                    preg_match_all("~<form method=post action='([^']+)'~", $plan->body, $m);
-                    foreach ($m[1] as $a) {
-                        $actions[(string) preg_replace(['~/[a-f0-9]{12}(?=/|$)~', '~/' . preg_quote($crawl->persona->slug, '~') . '(?=/)~'], ['/{id}', '/{org}'], $a)] = true;
+                    preg_match_all("~<form method=post action='([^']+)'>.*?name=csrf_token value='([^']*)'~s", $plan->body, $m, PREG_SET_ORDER);
+                    foreach ($m as [, $action, $token]) {
+                        $template = (string) preg_replace(['~/[a-f0-9]{12}(?=/|$)~', '~/' . preg_quote($crawl->persona->slug, '~') . '(?=/)~'], ['/{id}', '/{org}'], $action);
+                        $form = $crawl->formOf($token);
+                        if ($form !== null) {
+                            $pairs[$form][$template] = true;
+                        }
                     }
                 }
-                $known = array_values(MintContext::FORM_ACTIONS);
-                sort($known);
-                $seen = array_keys($actions);
-                sort($seen);
-                self::assertSame($known, $seen, "seed {$seed}: rendered form actions match MintContext::FORM_ACTIONS");
+                $expected = array_map(static fn (string $a): array => [$a => true], MintContext::FORM_ACTIONS);
+                ksort($pairs);
+                ksort($expected);
+                self::assertSame($expected, $pairs, "seed {$seed}: each form's tokens are rendered on its MintContext::FORM_ACTIONS action");
                 self::assertGreaterThan(120, count($crawl->plans));
                 $home = $out['home']->body;
                 self::assertStringContainsString('Signed in as artex1', $home);

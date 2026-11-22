@@ -150,13 +150,36 @@ final class TokenMintStoreTest extends TestCase
 
             return new TokenMintOutcome(null, false, 0, null);
         });
-        self::assertSame(5, $seen);
+        self::assertSame(6, $seen, 'a: 3, the capped b: 1 (a refused write is still charged), c: 2');
         $st->transact($k, 'd', self::NOW + 3600, static function (?MintState $s, TokenMintTx $tx) use (&$seen): TokenMintOutcome {
             $seen = $tx->unitsUsed;
 
             return new TokenMintOutcome(null, false, 0, null);
         });
         self::assertSame(0, $seen, 'a new hour starts a new bucket');
+    }
+
+    public function test_a_write_refused_by_the_cap_still_charges_its_units_and_undoes_its_side_writes(): void
+    {
+        $st = $this->store(['source_writes_hr' => 1]);
+        $k = str_repeat('f', 32);
+        self::assertTrue($st->transact($k, 'f', self::NOW, self::write('a', true, 3))['ok']);
+        $r = $st->transact($k, 'f', self::NOW, static function (?MintState $s, TokenMintTx $tx): TokenMintOutcome {
+            $tx->insertCode(str_repeat('c', 64), 1, 1, ['read:user'], 'r', self::NOW + 600);
+            $s = $s ?? MintState::fresh($tx->now, str_repeat('e', 16));
+            $s->d['marker'] = 'refused';
+
+            return new TokenMintOutcome($s, true, 4, null);
+        });
+        self::assertSame(TokenMintStore::FAIL_CAP, $r['failure']);
+        self::assertSame('a', $st->load($k)?->d['marker'], 'the refused state change is undone');
+        $seen = null;
+        $st->transact($k, 'f', self::NOW, static function (?MintState $s, TokenMintTx $tx) use (&$seen): TokenMintOutcome {
+            $seen = [$tx->unitsUsed, $tx->consumeCode(str_repeat('c', 64))];
+
+            return new TokenMintOutcome(null, false, 0, null);
+        });
+        self::assertSame([7, null], $seen, 'its 4 units are charged and its code never existed');
     }
 
     public function test_global_write_cap_and_row_ttl_and_lru(): void

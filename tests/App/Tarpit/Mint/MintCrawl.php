@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Tarpit\Mint;
 use Funnypot\App\Storage\TokenMintStore;
 use Funnypot\App\Tarpit\Mint\AccountFront;
 use Funnypot\App\Tarpit\Mint\IssuedValue;
+use Funnypot\App\Tarpit\Mint\MintContext;
 use Funnypot\App\Tarpit\Mint\MintPersona;
 use Funnypot\App\Tarpit\Mint\MintPlan;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
@@ -32,6 +33,8 @@ final class MintCrawl
     /** @var list<array{0:string,1:MintPlan}> label => plan */
     public array $plans = [];
     private ?IssuedValue $issued = null;
+    /** @var list<string> every session cookie the crawl was given */
+    private array $cookies = [];
 
     public function __construct(public int $seed)
     {
@@ -67,11 +70,40 @@ final class MintCrawl
         foreach ($p->headers() as [$n, $v]) {
             if ($n === 'Set-Cookie' && preg_match('/\Asession=([^;]*)/', $v, $m) === 1) {
                 $this->cookie = $m[1] === '' ? null : $m[1];
+                $this->cookies[] = $m[1];
             }
         }
         $this->plans[] = [$method . ' ' . $path, $p];
 
         return $p;
+    }
+
+    /**
+     * The form a rendered token was issued for: the one it verifies for under a session the crawl held
+     * (or the signed-out source) and any CSRF epoch the account reached; null when none matches.
+     */
+    public function formOf(string $token): ?string
+    {
+        $c = $this->decoy->context();
+        $sids = [$c->keys->kref('45.79.50.50')];
+        foreach (array_unique($this->cookies) as $cookie) {
+            $sess = $c->sessions->parse($cookie, $this->now);
+            if ($sess !== null) {
+                $sids[] = $sess['sid'];
+            }
+        }
+        $found = [];
+        foreach (array_keys(MintContext::FORM_ACTIONS) as $form) {
+            foreach ($sids as $sid) {
+                for ($epoch = 0; $epoch <= 40; $epoch++) {
+                    if ($c->csrf->verify($token, $sid, $form, $epoch, $this->now) !== null) {
+                        $found[$form] = true;
+                    }
+                }
+            }
+        }
+
+        return count($found) === 1 ? (string) array_key_first($found) : null;
     }
 
     private static function csrf(string $body, int $nth = 0): string
@@ -86,6 +118,7 @@ final class MintCrawl
         $r = $this->front->signIn(new RequestContext('POST', '/'), '45.79.50.50', 'artex1', 'Passw0rd!x');
         if (isset($r['cookie']) && preg_match('/\Asession=([^;]*)/', $r['cookie'], $m) === 1) {
             $this->cookie = $m[1];
+            $this->cookies[] = $m[1];
         }
     }
 

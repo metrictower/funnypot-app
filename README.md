@@ -221,32 +221,35 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   consent POST's answer.
 - **Issued values stay quiet.** A random value the surface issues and expects back (form tokens, access
   and refresh tokens, JWTs, OAuth client ids, secrets and codes, recovery codes, request and public ids)
-  could by chance read as an attack to core's rules, such as a form token ending in `env`, a sign-up
-  token ending in `time` (core pairs it with the path's last word) or the recovery code `qezso-xmlns`,
-  and the visitor's own credential would then be logged and reported as one. So each value is checked
-  by the real engine before it is issued (`IssuedValue`): it goes as a query parameter, a form field, a
-  JSON string and the Authorization, X-Api-Key and Cookie headers, on each path it really travels to (a
-  form token on its own form's action, an access token or JWT on each fixed member API path, a code,
-  secret or refresh token on the token endpoint, a recovery code on the reauth form) and on a catch-all
-  path ending in a command-like word (`/join`); a public id is also sent as a segment of each route it
-  sits in. Core's
+  could by chance read as an attack to core's rules, such as a form token ending in `env`, a sign-up token
+  ending in `time` (core pairs it with the path's last word) or the recovery code `qezso-xmlns`, and the
+  visitor's own credential would then be logged and reported as one. So each value is checked by the real
+  engine before it is issued (`IssuedValue`): it goes as a query parameter, a form field, a JSON string
+  and the Authorization, X-Api-Key and Cookie headers (an API credential, which never goes in a body, only
+  as `?access_token` and in the auth headers), on each path it really travels to (a form token on its own
+  form's action, an access token on each fixed member API path and a JWT on one, a code, secret or refresh
+  token on the token endpoint, a recovery code on the reauth form) and on a catch-all path ending in a
+  command-like word (`/join`); a public id is also sent as a segment of each route it sits in. Core's
   content detection (no I/O, no delay, no logging) plus the app's fall-through classifier must find
   nothing. A refused value is re-rolled by stepping a counter in its derivation, so the choice stays
-  deterministic; only a few first picks in ten thousand are refused. One engine pass costs about 0.5 to
-  1 ms, one per path: a page with a form adds about 1 to 2 ms (the token list's delete forms share one
-  token), the 2FA enrolment with ten recovery codes about 10 ms, and minting an access token or signing
-  in for a JWT about 5 to 14 ms. A value that cannot be issued within the capped tries is a fault
-  answered as today, never a flagged value. The session cookie travels only in the Cookie header, which
-  those rules never scan, so it gets only the fingerprint check. A test sends a fixed-seed sample of
-  every kind back on real endpoints and channels (every form token to its own form's action, codes and
-  secrets to the token endpoint, recovery codes to the reauth form, access tokens and JWTs on three API
-  paths and in both headers, real JSON included) and finds nothing.
+  deterministic; only a few first picks in ten thousand are refused. One engine pass costs about 0.5 to 1
+  ms, one per path. Measured on a loaded machine, a page with a form adds about 1 to 2 ms (the token
+  list's delete forms share one token), the 2FA enrolment with ten recovery codes about 7 to 10 ms,
+  minting an access token about 4 to 7 ms and a JWT sign-in about 2 to 3 ms. A value that cannot be issued
+  within the capped tries is a fault answered as today, never a flagged value. The session cookie travels
+  only in the Cookie header, which those rules never scan, so it gets only the fingerprint check. A test
+  sends a fixed-seed sample of every kind back on real endpoints and channels (every form token to its own
+  form's action, codes and secrets to the token endpoint, recovery codes to the reauth form, access tokens
+  and JWTs on three API paths and in both headers, real JSON included) and finds nothing.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
   hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
   decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a
   failed commit, a write cap) answers a coherent "couldn't save" or throttle page with nothing changed.
   No raw secret is stored: tokens re-derive from their serials and secrets are kept as HMACs. Work is
-  bounded by a per-source **request ledger** (1,500 units an hour; no wall clock), input caps (16 KB
+  bounded by a per-source **request ledger** (1,500 units an hour; no wall clock), which a write cap does
+  not bypass: a write the cap refuses is still charged, and once a cap is reached a form is refused
+  before any work (so is a form from a source with no row yet, which there is nothing to charge to),
+  input caps (16 KB
   body, 64 pairs, JSON 8 KB / depth 4) and the store's caps (about 108 MB worst case; see
   `docs/DATA-LAYER-DECISION.md`). A multipart form (`curl -F`), whose raw body PHP never hands over, is
   read from PHP's parsed fields under the same caps: a declared length over 16 KB is 413, only the

@@ -20,9 +20,10 @@ use LogicException;
  *
  * The check asks the real engine rather than a word list, so it cannot drift from core. The value is put
  * in a synthetic request as a query parameter (followed by a space in the text the rules scan), as a
- * form field followed by `&`, as a JSON string, and in the Authorization, X-Api-Key and Cookie headers.
- * That request is sent on each path the value really travels to (a form token on its own form's action,
- * an access token on the API paths, a code on the token endpoint) and on a catch-all path ending in a
+ * form field followed by `&`, as a JSON string, and in the Authorization, X-Api-Key and Cookie headers;
+ * an API credential, which never goes in a body, only as `?access_token` and in the auth headers. That
+ * request is sent on each path the value really travels to (a form token on its own form's action, an
+ * access token on the API paths, a code on the token endpoint) and on a catch-all path ending in a
  * command-like word; a public id is also sent as a segment of each route it sits in. Each request goes
  * through core's content detection (`Honeypot::detect()`, which has no I/O, no delay and no logging) and
  * the app's fall-through classifier, and any match refuses the value. One engine pass costs about 0.6
@@ -74,6 +75,15 @@ final class IssuedValue
         );
     }
 
+    /**
+     * The request an API credential travels in: the deprecated `?access_token` query (followed by a space
+     * in the scanned text) and the Authorization and X-Api-Key headers. A credential never goes in a body.
+     */
+    public static function bearerProbe(string $value, string $path = self::CATCH_ALL): RequestContext
+    {
+        return new RequestContext('GET', $path, 'access_token=' . $value, ['Authorization' => 'Bearer ' . $value, 'X-Api-Key' => $value]);
+    }
+
     /** A request carrying the value as a path segment; $route is "METHOD /path" with `{v}` for the value. */
     public static function pathProbe(string $value, string $route): RequestContext
     {
@@ -85,14 +95,15 @@ final class IssuedValue
     /**
      * @param list<string> $paths the paths the value is sent back to as a field (the catch-all is always added)
      * @param list<string> $routes the routes it travels in as a path segment
+     * @param bool $bearer an API credential, which travels only as `?access_token` and in the auth headers
      */
-    public function fit(string $value, array $paths = [], array $routes = []): bool
+    public function fit(string $value, array $paths = [], array $routes = [], bool $bearer = false): bool
     {
         if (!InertSecret::isClean('"' . $value . '"') || !InertSecret::isClean("'" . $value . "'")) {
             return false;
         }
         foreach (array_unique([...$paths, self::CATCH_ALL]) as $path) {
-            if (($this->flags)(self::probe($value, $path))) {
+            if (($this->flags)($bearer ? self::bearerProbe($value, $path) : self::probe($value, $path))) {
                 return false;
             }
         }
@@ -113,11 +124,11 @@ final class IssuedValue
      * @param list<string> $paths
      * @param list<string> $routes
      */
-    public function first(int $tries, callable $gen, array $paths = [], array $routes = []): string
+    public function first(int $tries, callable $gen, array $paths = [], array $routes = [], bool $bearer = false): string
     {
         for ($i = 0; $i < $tries; $i++) {
             $value = $gen($i);
-            if ($value !== null && $this->fit($value, $paths, $routes)) {
+            if ($value !== null && $this->fit($value, $paths, $routes, $bearer)) {
                 return $value;
             }
         }

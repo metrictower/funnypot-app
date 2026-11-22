@@ -65,13 +65,13 @@ final class MintContext
      * @param list<string> $paths where the value is sent back as a field
      * @param list<string> $routes where it sits as a path segment
      */
-    private function issue(int $tries, callable $gen, array $paths, array $routes = []): string
+    private function issue(int $tries, callable $gen, array $paths, array $routes = [], bool $bearer = false): string
     {
         if ($this->issued === null) {
             throw new \LogicException('issuing needs the engine check');
         }
 
-        return $this->issued->first($tries, $gen, $paths, $routes);
+        return $this->issued->first($tries, $gen, $paths, $routes, $bearer);
     }
 
     /** The member API paths an access token authenticates (the `/v2` twins end the same way). */
@@ -109,6 +109,15 @@ final class MintContext
         $retry = 3600 - ($tx->now % 3600);
 
         return $this->throttledPlan($retry, $json, $signedIn);
+    }
+
+    /**
+     * A form refused before any work once the source's or the store's write cap is reached: the same
+     * answer a capped save gets. Its units are still charged, so the hourly ledger keeps the last word.
+     */
+    public function capRefusal(TokenMintTx $tx, bool $signedIn): ?MintPlan
+    {
+        return $tx->capReached ? $this->throttledPlan(300, false, $signedIn)->attribute(['outcome' => 'store_cap']) : null;
     }
 
     /** The throttle answer; an HTML one shows the nav for the visitor's real session state. */
@@ -310,7 +319,7 @@ final class MintContext
             $s->d['a'][$pos]['k'][$tpos]['v'] = $v;
 
             return $this->tokenString($s, $pos, $tpos, $kref);
-        }, $this->apiPaths());
+        }, $this->apiPaths(), [], true);
 
         return [$tpos, $token];
     }
@@ -380,7 +389,10 @@ final class MintContext
         return $this->issue(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v), ['/login/oauth/access_token']);
     }
 
-    /** A sign-in JWT fit to issue; only its `jti` steps. */
+    /**
+     * A sign-in JWT fit to issue; only its `jti` steps. It is a long value and is only ever used as a
+     * credential, so it is probed on one API path and the catch-all (no API path reads differently).
+     */
     public function loginJwt(string $k8, MintState $s, int $pos, int $jn, int $now): string
     {
         $a = $s->d['a'][$pos];
@@ -393,7 +405,7 @@ final class MintContext
             'iat' => $now,
             'exp' => $now + JwtCodec::LIFETIME_S,
             'jti' => $this->keys->hexId('jwt|' . $k8 . '|' . $serial . '|' . $jn . '|' . $v, 16),
-        ], $this->keys->key('jwt')), $this->apiPaths());
+        ], $this->keys->key('jwt')), ['/api/v2/user'], [], true);
     }
 
     public function totpSecret(string $kref, MintState $s, int $acctSerial, int $enrol): string

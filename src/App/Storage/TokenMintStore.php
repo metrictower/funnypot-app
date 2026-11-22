@@ -167,6 +167,7 @@ final class TokenMintStore
             $capReached = $writes >= $this->limits['source_writes_hr'] || $gauge >= $this->limits['global_writes_hr'];
 
             $tx = new TokenMintTx($db, $k, $now, $units, $capReached, $this->limits);
+            $db->exec('SAVEPOINT decision');
             $out = $fn($state, $tx);
             if (!$out instanceof TokenMintOutcome) {
                 throw new \LogicException('transaction body must return an outcome');
@@ -174,7 +175,16 @@ final class TokenMintStore
 
             if ($out->state !== null) {
                 if ($out->stateChange && $capReached) {
-                    $this->rollback();
+                    // The refused write still costs its units, so the hourly ledger keeps bounding the source:
+                    // undo the decision's own writes, keep the charge.
+                    $db->exec('ROLLBACK TO decision');
+                    if ($row !== null && $out->units > 0) {
+                        $this->fault('write');
+                        $db->prepare('UPDATE mint_state SET hour = :h, writes = :w, units = :u WHERE k = :k')
+                            ->execute([':h' => $hour, ':w' => $writes, ':u' => $units + $out->units, ':k' => $k]);
+                    }
+                    $this->fault('commit');
+                    $db->exec('COMMIT');
 
                     return self::fail(self::FAIL_CAP);
                 }
