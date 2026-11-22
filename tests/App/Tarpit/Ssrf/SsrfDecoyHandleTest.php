@@ -350,6 +350,28 @@ final class SsrfDecoyHandleTest extends TestCase
         self::assertStringNotContainsString('webhooks:write', $plain->get('/settings/tokens/new')['body'], 'unwired: no scope');
     }
 
+    /** Off the owned set, a host with the SSRF decoy armed answers byte for byte as one without it. */
+    public function test_unowned_paths_answer_identically(): void
+    {
+        $armed = $this->h();
+        $plain = new MintHarness(true);
+        $this->harnesses[] = $plain;
+        $paths = [...\Funnypot\Tests\App\Tarpit\Mint\MintCorpus::notOwned(), '/settings/webhook', '/api/v2/user/hook', '/settings/webhooks/x.php', '/settings/webhooks/a1b2.zip',
+            '/settings', '/api/v2/users/hooks', '/settings/webhooks/1windows', '/settings/storage/x', '/v3/user/hooks', '/settings/tokens', '/api/v2/user', '/.env'];
+        foreach ($paths as $p) {
+            foreach (['GET', 'POST'] as $m) {
+                $a = $armed->request($m, $p, 'x=1', $m === 'POST' ? 'a=1' : null);
+                $b = $plain->request($m, $p, 'x=1', $m === 'POST' ? 'a=1' : null);
+                self::assertSame($b['body'], $a['body'], "{$m} {$p}");
+                self::assertSame($b['status'], $a['status'], "{$m} {$p}");
+                foreach (['matched', 'severity', 'templates', 'served'] as $f) {
+                    self::assertSame($b['main'][$f] ?? null, $a['main'][$f] ?? null, "{$m} {$p}: {$f}");
+                }
+            }
+        }
+        self::assertSame($plain->reports(), $armed->reports());
+    }
+
     public function test_harness_fails_on_any_warning_or_fault_fallback(): void
     {
         $h = $this->h(true, [], ['faults' => new class () {
