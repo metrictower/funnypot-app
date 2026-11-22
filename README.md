@@ -164,7 +164,7 @@ then turn the session into a durable credential" exactly that loop, and nothing 
 a generic "<Company> account" (the persona's company): sign-up at `/join`, a Developer settings area
 with **personal access tokens** (`/settings/tokens`) and **OAuth applications**
 (`/settings/applications`), two-factor enrolment with a real RFC 6238 TOTP and recovery codes,
-confirm-access, an OAuth authorization-code flow with rotating refresh tokens, and a **member API** under
+confirm-access (`/settings/reauth`), an OAuth authorization-code flow with rotating refresh tokens, and a **member API** under
 both `/api/v2/` and `/v2/` (the two spellings core's `/api/v2` index and OpenAPI docs publish). Every
 credential works: a token authenticates, `GET …/user` returns the account. What it can reach is a
 member's view: organisation data (`users`, `orders`, `orders/{id}`, `orders/exports`) answers the
@@ -201,7 +201,10 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   are deliberately not reserved, since a substring rule would also catch names such as `denver`: there
   the surface answers and detection keeps core's class. Sign-up reserves the listed words, so an
   account's profile URL always answers. No backup-archive or text-decoy path, no `.php` name, no
-  compiled core route and no other `/api/v2/*` path is ever owned. The
+  compiled core route and no other `/api/v2/*` path is ever owned. No owned route reads as an attack
+  for an ordinary request either: a test sends every one, for several personas, a GET and a benign form
+  and JSON POST (the documented `auth/login` exemption aside), which is why confirm-access is not
+  `/settings/confirm` (core reads any JSON body there as XSS). The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,
