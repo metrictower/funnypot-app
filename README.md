@@ -193,11 +193,15 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   serve delay is paid exactly when the engine served nothing, so latency never shows which answered. An
   id in a path is any 1–20 character lowercase segment holding a digit, so no id length answers
   differently; a letter-only word is never an id. A username in a path has no dot, so no file name is
-  ever owned, and a segment holding a word the engine keys on (`id_rsa`, `actuator`, `eval`, …;
-  `MintRoutes::CORE_KEYED`) is never owned, so the engine's own answer wins there. Sign-up reserves those
-  words, so an account's profile URL always answers. No backup-archive or text-decoy path, no `.php`
-  name and no other `/api/v2/*` path is ever owned; an ownership test probes every name in core's
-  compiled routes under the grammar. The
+  ever owned, and a segment holding a word the engine answers a bare GET on by path alone (`id_rsa`,
+  `actuator`, `eval`, `timeout`, …; `MintRoutes::CORE_KEYED`) is never owned, so the engine's own answer
+  wins there. An ownership test tries every word core's compiled artifacts hold or its compiled patterns
+  can spell under the grammar, and fails when core answers a bare GET on an owned one. Words core keys
+  only with a method or a body (`env` in a POSTed form, `alert` in a JSON PATCH, any POST to `…/login`)
+  are deliberately not reserved, since a substring rule would also catch names such as `denver`: there
+  the surface answers and detection keeps core's class. Sign-up reserves the listed words, so an
+  account's profile URL always answers. No backup-archive or text-decoy path, no `.php` name, no
+  compiled core route and no other `/api/v2/*` path is ever owned. The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,

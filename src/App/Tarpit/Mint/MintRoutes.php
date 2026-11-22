@@ -14,7 +14,7 @@ use Funnypot\App\Http\HoneypotController;
  * `{org}` is only the persona's organisation slug, `{login}` a username-shaped segment, `{id}` a
  * lowercase alphanumeric segment of 1–20 characters with at least one digit (so a letter-only word such
  * as `export` is never an id). A `{login}` has no dot, so no file name is one. A segment holding a word
- * the engine answers by path (CORE_KEYED) or ending in `.php` (any case) never matches a pattern, and no
+ * the engine answers by path alone (CORE_KEYED) or ending in `.php` (any case) never matches a pattern, and no
  * path a backup-archive or text decoy would serve is ever owned, so those keep their answers.
  */
 final class MintRoutes
@@ -22,12 +22,28 @@ final class MintRoutes
     public const LOGIN = '[A-Za-z0-9][A-Za-z0-9_-]{0,38}';
 
     /**
-     * Words the core engine answers on by path alone (a fake key file, a fake actuator, a CRS reading of
-     * a shell word). A pattern segment containing one, in any case, is never ours, so core's answer
-     * stays core's. TokenMintOwnershipTest derives the collisions from the installed engine and fails
-     * on any new one.
+     * Words the core engine answers a bare GET on by path alone (a fake key file, a fake actuator, a
+     * CRS reading of a shell, SQL or markup word). A pattern segment containing one, in any case, is
+     * never ours, so core's answer stays core's. TokenMintOwnershipTest tries every word core's compiled
+     * artifacts hold or its compiled patterns can spell, and fails on one core answers inside the
+     * grammar that is missing here. Words core keys only with a method or a body (`env` in a POSTed
+     * form, `alert` in a JSON PATCH, any POST to `…/login`) are left out on purpose: a substring rule
+     * would also reserve ordinary names such as `denver`. On those requests the surface's answer
+     * replaces core's like any other owned answer, while detection and reports keep core's class.
      */
-    public const CORE_KEYED = ['system32', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'actuator', 'command', 'eval', 'printenv', 'retrieval', 'xhtml'];
+    public const CORE_KEYED = [
+        // files and endpoints
+        'system32', 'windows', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'actuator',
+        // shell and code words
+        'command', 'eval', 'printenv', 'setenv', 'busybox', 'nohup', 'timeout', 'python-env', 'cargo-watch', 'ltrace', 'strace',
+        'thinkappinvokefunction', 'invokefunctioncall_user_func_array',
+        // SQL words and system tables
+        'unionselect', 'selecthaving', 'selectpg_sleep', 'information_schema', 'schema_name', 'northwind', 'tempdb', 'msdb', 'sysaux',
+        'pg_catalog', 'pg_toast', 'sqlite_master', 'sqlite_temp_master', 'msysaces', 'msysmodules', 'msysobjects', 'msysqueries',
+        'msysrelationships', 'msysaccessobjects', 'msysaccessstorage', 'msysaccessxml',
+        // markup words
+        'xhtml', 'xmlns', 'formaction',
+    ];
     /** Any 1–20 character lowercase id holding a digit: every length answers alike, words never match. */
     public const ID = '(?=[a-z0-9]{0,19}[0-9])[a-z0-9]{1,20}';
 

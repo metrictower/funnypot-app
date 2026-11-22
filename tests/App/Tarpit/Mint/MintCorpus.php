@@ -152,6 +152,7 @@ final class MintCorpus
             '/settings/applications/abcdefgh', '/api/v2/orders/' . str_repeat('1', 21), '/v2/orders/ABC123',
             '/api/v2/users/config.json', '/api/v2/users/id_rsa', '/v2/users/id_rsa.pub', '/api/v2/users/actuator', '/v2/users/Command',
             '/api/v2/orders/system32', '/settings/applications/system32', '/api/v2/users/a.b',
+            '/api/v2/users/timeout', '/v2/users/Busybox', '/api/v2/users/xmlns', '/settings/tokens/5cwindows/delete', '/api/v2/users/pg_catalog',
         ];
     }
 }

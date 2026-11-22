@@ -7,10 +7,13 @@ namespace Funnypot\Tests\App\Http;
 use Funnypot\App\Http\HoneypotController;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\App\Tarpit\Mint\MintForms;
+use Funnypot\App\Tarpit\Mint\MintPersona;
 use Funnypot\App\Tarpit\Mint\MintRoutes;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\Core\RequestContext;
+use Funnypot\Core\Support\Fake\FakePeople;
 use Funnypot\Core\Support\PersonaIdentity;
+use Funnypot\Tests\App\Tarpit\Mint\CoreWords;
 use Funnypot\Tests\App\Tarpit\Mint\MintCorpus;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
@@ -106,74 +109,101 @@ final class TokenMintOwnershipTest extends TestCase
     }
 
     /**
-     * Core first: wherever the engine answers a plain request by path alone, the path is not ours. The
-     * candidate names are every path segment of core's compiled routes, the path-like names in its
-     * compiled route and attack artifacts, and common probe names, each in a few spellings, under
-     * every owned pattern. A core bump that adds such an answer inside the grammar fails here.
+     * Core first: wherever the engine answers a bare GET on a single word by path alone, the path is
+     * not ours. The candidates are every word core's compiled artifacts hold or its compiled patterns
+     * can spell (CoreWords), lowercased, since core's word rules ignore case (exact compiled routes are
+     * checked as written by the test above). Each word is tried as a final `{login}` segment and, when
+     * it is id-shaped, as an inner `{id}` segment. An owned instance core answers fails, so a core bump
+     * that keys a bare GET on a new word inside the grammar fails here until the word joins
+     * MintRoutes::CORE_KEYED, and every listed word must still be keyed on some unowned candidate
+     * holding no other listed word.
+     * Words core keys only with a method or a body are owned on purpose and pinned below.
      */
     public function test_core_keeps_every_path_it_answers_inside_the_owned_grammar(): void
     {
-        $root = dirname(__DIR__, 3) . '/vendor/metrictower/funnypot-core/resources/compiled/';
-        $names = [];
-        foreach (array_keys((require $root . 'nuclei-index.full.php')['routes']) as $key) {
-            $path = (string) substr((string) $key, (int) strpos((string) $key, ' ') + 1);
-            foreach (explode('/', substr($path, 0, (int) strcspn($path, '?'))) as $seg) {
-                if ($seg !== '') {
-                    $names[$seg] = true;
-                }
-            }
-        }
-        foreach (['funnypot-routes.php', 'funnypot-attack.php'] as $f) {
-            preg_match_all('~[/\\\\]([A-Za-z0-9_.-]{2,40})~', (string) file_get_contents($root . $f), $m);
-            foreach ($m[1] as $n) {
-                $names[$n] = true;
-            }
-        }
-        foreach (['id_rsa', 'id_rsa.pub', 'authorized_keys', 'web.config', 'config.json', 'actuator', 'heapdump', 'jolokia', 'phpinfo', 'server-status', 'printenv', 'System32', 'eval', 'command', 'xhtml', 'graphql', 'swagger'] as $n) {
-            $names[$n] = true;
-        }
-        foreach (array_keys($names) as $n) {
-            $names[strtoupper((string) $n)] = true;
-            $names['x' . $n . '1'] = true;
+        $words = CoreWords::all();
+        self::assertGreaterThan(40000, count($words), 'sanity: the artifacts were read');
+        foreach (['setenv', 'busybox', 'unionselect', 'schema_name', '5cwindows'] as $spelt) {
+            self::assertContains($spelt, $words, "{$spelt} is spelt only by a compiled pattern or an encoded path");
         }
         $hp = MintCorpus::engine();
         $r = self::routes();
-        $slug = MintCorpus::slug();
-        $bases = ['/api/v2/users/%s', '/v2/users/%s', '/api/v2/orders/%s', '/v2/orders/%s', '/settings/applications/%s', '/settings/tokens/%s/delete',
-            '/settings/applications/%s/secrets', '/settings/applications/%s/delete', '/api/v2/orgs/%s/members'];
         $owned = 0;
         $collisions = [];
-        foreach (array_keys($names) as $n) {
-            foreach ($bases as $b) {
-                $p = sprintf($b, (string) $n);
-                if (!$r->owns($p)) {
-                    continue;
-                }
-                $owned++;
-                $resp = $hp->respond(new RequestContext('GET', $p, '', [], null));
-                if ($resp !== null) {
-                    $collisions[] = $p . ' -> ' . implode(',', array_slice($resp->satisfies->templateIds(), 0, 2));
+        $witness = [];
+        foreach ($words as $w) {
+            $paths = ['/api/v2/users/' . $w];
+            if (preg_match('~\A' . MintRoutes::ID . '\z~', $w) === 1) {
+                $paths[] = '/settings/tokens/' . $w . '/delete';
+            }
+            foreach ($paths as $p) {
+                if ($r->owns($p)) {
+                    $owned++;
+                    $resp = $hp->respond(new RequestContext('GET', $p, '', [], null));
+                    if ($resp !== null) {
+                        $collisions[] = $p . ' -> ' . implode(',', array_slice($resp->satisfies->templateIds(), 0, 2));
+                    }
+                } else {
+                    // A witness holds exactly one excluded word, so only that word explains core's answer.
+                    // One per word is enough: core pauses before each answer it serves.
+                    $held = array_values(array_filter(MintRoutes::CORE_KEYED, static fn (string $k): bool => str_contains($w, $k)));
+                    if (count($held) === 1 && !isset($witness[$held[0]]) && $hp->respond(new RequestContext('GET', $p, '', [], null)) !== null) {
+                        $witness[$held[0]] = true;
+                    }
                 }
             }
         }
-        self::assertGreaterThan(10000, $owned, 'sanity: the probe reached the owned grammar');
-        self::assertSame([], $collisions, 'core answers these by path, so they must not be owned');
-
-        // Every excluded word is one the engine really keys on, so the list stays honest.
-        foreach (MintRoutes::CORE_KEYED as $word) {
-            self::assertNotNull($hp->respond(new RequestContext('GET', '/api/v2/users/' . $word, '', [], null)), "{$word} is keyed by core");
-            self::assertFalse($r->owns('/api/v2/users/' . $word));
-            self::assertFalse($r->owns('/api/v2/orders/' . $word . '1'));
+        self::assertGreaterThan(40000, $owned, 'sanity: the probe reached the owned grammar');
+        self::assertSame([], $collisions, 'core answers these by path alone, so they must not be owned');
+        self::assertSame([], array_values(array_diff(MintRoutes::CORE_KEYED, array_keys($witness))), 'every excluded word is still keyed by core');
+        foreach (MintRoutes::CORE_KEYED as $a) {
+            foreach (MintRoutes::CORE_KEYED as $b) {
+                self::assertFalse($a !== $b && str_contains($a, $b), "{$a} already holds {$b}");
+            }
         }
-        self::assertTrue($r->owns('/api/v2/users/' . $slug));
+        foreach (MintRoutes::CORE_KEYED as $word) {
+            self::assertFalse($r->owns('/api/v2/users/x' . strtoupper($word) . '1'));
+            self::assertFalse($r->owns('/settings/tokens/1' . $word . '/delete'));
+        }
 
-        // No persona company or member name can hold such a word, so the persona's own org and member paths stay owned.
-        foreach ((new \ReflectionClass(PersonaIdentity::class))->getReflectionConstants() as $c) {
-            $v = $c->getValue();
-            if (is_array($v)) {
-                array_walk_recursive($v, static function ($x) use ($c): void {
-                    self::assertFalse(is_string($x) && MintRoutes::coreKeyed($x), $c->getName() . ': ' . (is_string($x) ? $x : ''));
-                });
+        // Keyed only with a method or a body: owned on purpose, since a substring rule would also reserve
+        // ordinary names such as `denver`. There the surface answers and detection keeps core's class.
+        foreach ([['POST', 'env', 'a=1', MintCorpus::F], ['PATCH', 'alert', '{}', MintCorpus::J], ['POST', 'login', null, []]] as [$method, $w, $body, $headers]) {
+            $p = '/api/v2/users/' . $w;
+            self::assertTrue($r->owns($p), "{$p} stays owned");
+            self::assertNull($hp->respond(new RequestContext('GET', $p, '', [], null)), "a bare GET on {$p} is not keyed");
+            self::assertNotNull($hp->respond(new RequestContext($method, $p, '', $headers, $body)), "{$method} {$p} is keyed");
+        }
+        self::assertTrue($r->owns('/api/v2/users/denver'));
+
+        // Persona names never hold an excluded word, so the persona's own org and member paths stay owned:
+        // every pool core draws from, every first-last author slug, and the members MintPersona builds.
+        foreach ([PersonaIdentity::class, FakePeople::class] as $class) {
+            foreach ((new \ReflectionClass($class))->getReflectionConstants() as $c) {
+                $v = $c->getValue();
+                if (is_array($v)) {
+                    array_walk_recursive($v, static function ($x) use ($c): void {
+                        self::assertFalse(is_string($x) && MintRoutes::coreKeyed($x), $c->getName() . ': ' . (is_string($x) ? $x : ''));
+                    });
+                }
+            }
+        }
+        $people = new \ReflectionClass(FakePeople::class);
+        $slug = new ReflectionMethod(PersonaIdentity::class, 'slug');
+        foreach ((array) $people->getConstant('FIRST_NAMES') as $first) {
+            foreach ((array) $people->getConstant('LAST_NAMES') as $last) {
+                $login = (string) $slug->invoke(null, $first . '-' . $last);
+                self::assertFalse(MintRoutes::coreKeyed($login), $login);
+            }
+        }
+        for ($seed = 1; $seed <= 5000; $seed++) {
+            $persona = MintPersona::fromSeed($seed);
+            $pr = new MintRoutes($persona->slug);
+            foreach (['/api/v2/orgs/' . $persona->slug . '/members', '/orgs/' . $persona->slug . '/sso', '/idp/' . $persona->slug . '/signin'] as $p) {
+                self::assertTrue($pr->owns($p), "seed {$seed}: {$p}");
+            }
+            foreach (array_keys($persona->members) as $login) {
+                self::assertTrue($pr->owns('/api/v2/users/' . $login), "seed {$seed}: member {$login}");
             }
         }
     }
