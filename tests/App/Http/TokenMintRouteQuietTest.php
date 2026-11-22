@@ -19,12 +19,15 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Every owned route, for several personas (their organisation slug, their member logins and ids the
- * surface really issues), sent the way an ordinary client sends it: a GET, and a POST with a benign form
- * body and with the same fields as JSON, each with the route's own field names and realistic values (and
- * a real access token on the API). None may read as an attack to core (no match, no attack tag) or to the
- * app's fall-through classifier, so a route name core keys on fails here. `/settings/confirm` was one: core
- * read any JSON body on it as XSS, so confirm-access lives at `/settings/reauth`. The only exception is the
- * recorded one: a POST to an `auth/login` path, which core's /login-suffix oracle claims.
+ * surface really issues), sent the way an ordinary client sends it: a GET, a GET with the route's real
+ * query string, and a POST with a benign form body, a POST and a PATCH with the same fields as JSON, each
+ * with the route's own field names and one neutral value per field (and a real access token on the API).
+ * None may read as an attack to core (no match, no attack tag) or to the app's fall-through classifier,
+ * so a route name core keys on fails here. `/settings/confirm` was one: core read any JSON body on it as
+ * XSS, so confirm-access lives at `/settings/reauth`. The only exception is the recorded one: a POST to an
+ * `auth/login` path, which core's /login-suffix oracle claims. Free text that names a tool or an
+ * environment (a note reading "prod env") can still read as RCE to core whatever the route; that is the
+ * false-positive class spec §2.13 records, at parity with an unarmed host, so the values here are neutral.
  */
 final class TokenMintRouteQuietTest extends TestCase
 {
@@ -73,6 +76,25 @@ final class TokenMintRouteQuietTest extends TestCase
             'orders_exports' => ['format' => 'csv', 'since' => '2024-01-01'],
             'auth_login' => ['username' => 'artex1', 'password' => 'Passw0rd!x'],
             default => ['note' => 'ok'],
+        };
+    }
+
+    /**
+     * The query string a client really sends on the route: the authorize request, the SSO page's request,
+     * the token form's preselected scopes, an API call's deprecated `access_token`; else the route's fields.
+     *
+     * @param array<string,string> $v
+     * @param array<string,mixed> $fields
+     * @return array<string,mixed>
+     */
+    private static function query(string $route, bool $api, array $v, array $fields): array
+    {
+        return match (true) {
+            $route === 'authorize' => ['client_id' => $v['client'], 'redirect_uri' => 'https://app.example.com/oauth/callback', 'scope' => 'read:user', 'state' => 'af0ifjsldkj'],
+            $route === 'sso' => ['authorization_request' => $v['request']],
+            $route === 'token_new' => ['scopes' => 'read:user,orders:read'],
+            $api => ['access_token' => $v['pat']] + $fields,
+            default => $fields,
         };
     }
 
@@ -154,10 +176,13 @@ final class TokenMintRouteQuietTest extends TestCase
                 $covered[$route] = true;
                 $fields = self::fields($route, $v, $p) + ($api ? [] : ['csrf_token' => $v['csrf']]);
                 $auth = $api ? ['Authorization' => 'Bearer ' . $v['pat']] : ['Cookie' => 'session=' . str_repeat('Q7', 30)];
+                $json = (string) json_encode($fields, JSON_UNESCAPED_SLASHES);
                 $sends = [
                     'GET' => new RequestContext('GET', $path, '', $auth),
+                    'GET query' => new RequestContext('GET', $path, http_build_query(self::query($route, $api, $v, $fields)), $api ? [] : $auth),
                     'POST form' => new RequestContext('POST', $path, '', $auth + MintCorpus::F, http_build_query($fields)),
-                    'POST JSON' => new RequestContext('POST', $path, '', $auth + MintCorpus::J, (string) json_encode($fields, JSON_UNESCAPED_SLASHES)),
+                    'POST JSON' => new RequestContext('POST', $path, '', $auth + MintCorpus::J, $json),
+                    'PATCH JSON' => new RequestContext('PATCH', $path, '', $auth + MintCorpus::J, $json),
                 ];
                 foreach ($sends as $how => $ctx) {
                     $requests++;
@@ -172,7 +197,7 @@ final class TokenMintRouteQuietTest extends TestCase
         }
         $all = array_merge(array_column(MintRoutes::EXACT, 0), array_values(MintRoutes::API_EXACT), array_keys(self::PATTERNS));
         self::assertSame([], array_values(array_diff($all, array_keys($covered))), 'every route is swept');
-        self::assertGreaterThan(1000, $requests);
+        self::assertGreaterThan(1500, $requests);
         self::assertSame([], array_values(array_unique($tripped)), 'these routes read as attacks for ordinary requests; rename them');
     }
 

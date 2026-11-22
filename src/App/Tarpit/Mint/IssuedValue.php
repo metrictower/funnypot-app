@@ -19,11 +19,14 @@ use LogicException;
  * reported as an attack on the visitor's own credential.
  *
  * The check asks the real engine rather than a word list, so it cannot drift from core. The value is put
- * in one synthetic request: as a query parameter (followed by a space in the text the rules scan), as a
- * form field followed by `&`, as a JSON string, and in the Authorization, X-Api-Key and Cookie headers; a
- * public id also goes as a path segment, in a second request. Each request goes through core's content
- * detection (`Honeypot::detect()`, which has no I/O, no delay and no logging) and the app's fall-through
- * classifier, and any match refuses the value. One engine pass costs about 0.6 to 1 ms.
+ * in a synthetic request as a query parameter (followed by a space in the text the rules scan), as a
+ * form field followed by `&`, as a JSON string, and in the Authorization, X-Api-Key and Cookie headers.
+ * That request is sent on each path the value really travels to (a form token on its own form's action,
+ * an access token on the API paths, a code on the token endpoint) and on a catch-all path ending in a
+ * command-like word; a public id is also sent as a segment of each route it sits in. Each request goes
+ * through core's content detection (`Honeypot::detect()`, which has no I/O, no delay and no logging) and
+ * the app's fall-through classifier, and any match refuses the value. One engine pass costs about 0.6
+ * to 1 ms, and a value takes one pass per path.
  *
  * A refused value is re-rolled by stepping a counter in its derivation, so the choice stays deterministic
  * per source and per core version. Only a few first picks in ten thousand are refused, too few for the
@@ -47,12 +50,19 @@ final class IssuedValue
         });
     }
 
-    /** The synthetic request that carries a value in every place a value of the surface travels. */
-    public static function probe(string $value): RequestContext
+    /**
+     * Some of core's rules read the end of the path together with the end of a value (a path ending in a
+     * command-like word, a value ending in `time`), so every value is also probed on a path that ends in
+     * one, which covers a route the value may be replayed to.
+     */
+    public const CATCH_ALL = '/join';
+
+    /** The synthetic request that carries a value in every field place a value travels in, on one path. */
+    public static function probe(string $value, string $path = self::CATCH_ALL): RequestContext
     {
         return new RequestContext(
             'POST',
-            '/settings/tokens',
+            $path,
             'q=' . $value,
             [
                 'Content-Type' => 'application/x-www-form-urlencoded',
@@ -64,18 +74,35 @@ final class IssuedValue
         );
     }
 
-    /** The same for a value that travels as a path segment. */
-    public static function pathProbe(string $value): RequestContext
+    /** A request carrying the value as a path segment; $route is "METHOD /path" with `{v}` for the value. */
+    public static function pathProbe(string $value, string $route): RequestContext
     {
-        return new RequestContext('GET', '/settings/tokens/' . $value . '/delete', '', []);
+        [$method, $path] = explode(' ', $route, 2);
+
+        return new RequestContext($method, str_replace('{v}', $value, $path), '', ['Content-Type' => 'application/x-www-form-urlencoded'], $method === 'GET' ? null : 'csrf_token=x');
     }
 
-    public function fit(string $value, bool $inPath = false): bool
+    /**
+     * @param list<string> $paths the paths the value is sent back to as a field (the catch-all is always added)
+     * @param list<string> $routes the routes it travels in as a path segment
+     */
+    public function fit(string $value, array $paths = [], array $routes = []): bool
     {
-        return InertSecret::isClean('"' . $value . '"')
-            && InertSecret::isClean("'" . $value . "'")
-            && !($this->flags)(self::probe($value))
-            && !($inPath && ($this->flags)(self::pathProbe($value)));
+        if (!InertSecret::isClean('"' . $value . '"') || !InertSecret::isClean("'" . $value . "'")) {
+            return false;
+        }
+        foreach (array_unique([...$paths, self::CATCH_ALL]) as $path) {
+            if (($this->flags)(self::probe($value, $path))) {
+                return false;
+            }
+        }
+        foreach ($routes as $route) {
+            if (($this->flags)(self::pathProbe($value, $route))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -83,12 +110,14 @@ final class IssuedValue
      * surface's fault boundary answers, never a flagged or unchecked value.
      *
      * @param callable(int):?string $gen
+     * @param list<string> $paths
+     * @param list<string> $routes
      */
-    public function first(int $tries, callable $gen, bool $inPath = false): string
+    public function first(int $tries, callable $gen, array $paths = [], array $routes = []): string
     {
         for ($i = 0; $i < $tries; $i++) {
             $value = $gen($i);
-            if ($value !== null && $this->fit($value, $inPath)) {
+            if ($value !== null && $this->fit($value, $paths, $routes)) {
                 return $value;
             }
         }

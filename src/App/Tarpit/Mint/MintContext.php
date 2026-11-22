@@ -60,14 +60,26 @@ final class MintContext
         $this->issued = $check;
     }
 
-    /** @param callable(int):?string $gen */
-    private function issue(int $tries, callable $gen, bool $inPath = false): string
+    /**
+     * @param callable(int):?string $gen
+     * @param list<string> $paths where the value is sent back as a field
+     * @param list<string> $routes where it sits as a path segment
+     */
+    private function issue(int $tries, callable $gen, array $paths, array $routes = []): string
     {
         if ($this->issued === null) {
             throw new \LogicException('issuing needs the engine check');
         }
 
-        return $this->issued->first($tries, $gen, $inPath);
+        return $this->issued->first($tries, $gen, $paths, $routes);
+    }
+
+    /** The member API paths an access token authenticates (the `/v2` twins end the same way). */
+    private function apiPaths(): array
+    {
+        $org = $this->persona->slug;
+
+        return array_map(static fn (string $p): string => '/api/v2/' . $p, ['user', 'user/orgs', 'user/orders', 'users', 'orders', 'orders/exports', 'orgs/' . $org, 'orgs/' . $org . '/members']);
     }
 
     public function now(): int
@@ -219,10 +231,35 @@ final class MintContext
 
     // --- CSRF ------------------------------------------------------------------------------------
 
-    /** A fresh form token, nudged back a second at a time until it is fit to issue. */
-    public function csrfToken(string $sid, string $formId, int $epoch, int $now): string
+    /** Where each form posts: `{id}` is the object the form acts on, `{org}` the persona's organisation. */
+    public const FORM_ACTIONS = [
+        'join' => '/join',
+        'signout' => '/signout',
+        'profile' => '/settings/profile',
+        'security' => '/settings/security',
+        'confirm' => '/settings/reauth',
+        'token_create' => '/settings/tokens',
+        'token_delete' => '/settings/tokens/{id}/delete',
+        'app_create' => '/settings/applications',
+        'app_secret' => '/settings/applications/{id}/secrets',
+        'app_delete' => '/settings/applications/{id}/delete',
+        'authorize' => '/login/oauth/authorize',
+        'sso' => '/orgs/{org}/sso',
+        'idp' => '/idp/{org}/signin',
+    ];
+
+    /**
+     * A fresh form token, nudged back a second at a time until it is fit to issue on its own form's
+     * action ($id fills the action's `{id}`).
+     */
+    public function csrfToken(string $sid, string $formId, int $epoch, int $now, string $id = ''): string
     {
-        return $this->issue(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i));
+        if (!isset(self::FORM_ACTIONS[$formId])) {
+            throw new \LogicException('unknown form ' . $formId);
+        }
+        $action = strtr(self::FORM_ACTIONS[$formId], ['{id}' => $id, '{org}' => $this->persona->slug]);
+
+        return $this->issue(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i), [$action]);
     }
 
     /** The sid a form is bound to: the session's, or the source reference for signed-out forms. */
@@ -264,7 +301,7 @@ final class MintContext
         $n = $s->nextTokenSerial($pos);
         $entry = [
             'n' => $n, 'v' => 0, 'k' => $kind,
-            'id' => $this->publicId('tok|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $s->d['a'][$pos]['i'] . '|' . $n),
+            'id' => $this->publicId('tok|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $s->d['a'][$pos]['i'] . '|' . $n, ['POST /settings/tokens/{v}/delete']),
             'nt' => $note, 'sc' => $scopes, 'c' => $now, 'x' => $expires, 'lu' => 0, 'ap' => $app, 'rl' => [0, 0],
         ];
         $s->d['a'][$pos]['k'][] = $entry;
@@ -273,19 +310,24 @@ final class MintContext
             $s->d['a'][$pos]['k'][$tpos]['v'] = $v;
 
             return $this->tokenString($s, $pos, $tpos, $kref);
-        });
+        }, $this->apiPaths());
 
         return [$tpos, $token];
     }
 
-    /** A 12-hex public id that always holds a digit, so it is always an `{id}` the routes own. */
-    public function publicId(string $label): string
+    /**
+     * A 12-hex public id that always holds a digit, so it is always an `{id}` the routes own; $routes are
+     * the routes it sits in ("METHOD /path" with `{v}` for the id).
+     *
+     * @param list<string> $routes
+     */
+    public function publicId(string $label, array $routes): string
     {
         return $this->issue(64, function (int $v) use ($label): ?string {
             $id = $this->keys->hexId($label . self::step($v), 12);
 
             return preg_match('/[0-9]/', $id) === 1 ? $id : null;
-        }, true);
+        }, [], $routes);
     }
 
     /** The derivation suffix for re-roll step $v; step 0 adds nothing, so a first pick keeps its value. */
@@ -294,34 +336,40 @@ final class MintContext
         return $v === 0 ? '' : '|v' . $v;
     }
 
-    /** A hex value fit to issue, re-rolled over the label's steps. */
-    private function hexValue(string $label, int $chars): string
+    /**
+     * A hex value fit to issue on $paths, re-rolled over the label's steps.
+     *
+     * @param list<string> $paths
+     */
+    private function hexValue(string $label, int $chars, array $paths): string
     {
-        return $this->issue(64, fn (int $v): string => $this->keys->hexId($label . self::step($v), $chars));
+        return $this->issue(64, fn (int $v): string => $this->keys->hexId($label . self::step($v), $chars), $paths);
     }
 
     public function clientId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
     {
-        return $this->hexValue('client|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 20);
+        return $this->hexValue('client|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 20, ['/login/oauth/authorize', '/login/oauth/access_token']);
     }
 
     public function appPublicId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
     {
-        return $this->publicId('app|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial);
+        return $this->publicId('app|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, [
+            'GET /settings/applications/{v}', 'POST /settings/applications/{v}/secrets', 'POST /settings/applications/{v}/delete',
+        ]);
     }
 
     public function clientSecret(string $kref, MintState $s, int $acctSerial, int $appSerial, int $secretN): string
     {
         $label = 'clientsecret|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial . '|' . $secretN;
 
-        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 40));
+        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 40), ['/login/oauth/access_token']);
     }
 
     public function oauthCode(string $kref, MintState $s, int $acctSerial, int $n): string
     {
         $label = 'code|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $n;
 
-        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 20));
+        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 20), ['/login/oauth/access_token']);
     }
 
     /** A refresh token fit to issue, re-rolled by stepping the variant in its binding. */
@@ -329,7 +377,7 @@ final class MintContext
     {
         $a = $s->d['a'][$pos];
 
-        return $this->issue(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v));
+        return $this->issue(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v), ['/login/oauth/access_token']);
     }
 
     /** A sign-in JWT fit to issue; only its `jti` steps. */
@@ -345,7 +393,7 @@ final class MintContext
             'iat' => $now,
             'exp' => $now + JwtCodec::LIFETIME_S,
             'jti' => $this->keys->hexId('jwt|' . $k8 . '|' . $serial . '|' . $jn . '|' . $v, 16),
-        ], $this->keys->key('jwt')));
+        ], $this->keys->key('jwt')), $this->apiPaths());
     }
 
     public function totpSecret(string $kref, MintState $s, int $acctSerial, int $enrol): string
@@ -363,7 +411,7 @@ final class MintContext
                 $b32 = strtolower(Totp::base32(substr($raw, 0, 7)));
 
                 return substr($b32, 0, 5) . '-' . substr($b32, 5, 5);
-            });
+            }, ['/settings/reauth']);
         }
 
         return $out;
@@ -371,7 +419,7 @@ final class MintContext
 
     public function requestId(string $kref, MintState $s, int $n): string
     {
-        return $this->hexValue('req|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $n, 12);
+        return $this->hexValue('req|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $n, 12, ['/login/oauth/authorize', '/orgs/' . $this->persona->slug . '/sso']);
     }
 
     /** Numeric account id, in a range that never reads as a rule number. */

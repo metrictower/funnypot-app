@@ -202,9 +202,12 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   the surface answers and detection keeps core's class. Sign-up reserves the listed words, so an
   account's profile URL always answers. No backup-archive or text-decoy path, no `.php` name, no
   compiled core route and no other `/api/v2/*` path is ever owned. No owned route reads as an attack
-  for an ordinary request either: a test sends every one, for several personas, a GET and a benign form
-  and JSON POST (the documented `auth/login` exemption aside), which is why confirm-access is not
-  `/settings/confirm` (core reads any JSON body there as XSS). The
+  for an ordinary request with neutral field values either: a test sends every one, for several personas,
+  a GET, a GET with its real query, a form POST and a JSON POST and PATCH (the documented `auth/login`
+  exemption aside), which is why confirm-access is not `/settings/confirm` (core reads any JSON body
+  there as XSS). Free text that names a tool or an environment, such as a token note reading "prod env"
+  or "ansible", can still read as RCE to core on any host: that is the false-positive class the FP-0815
+  spec records in §2.13, at parity with an unarmed host. The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,
@@ -218,20 +221,26 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   consent POST's answer.
 - **Issued values stay quiet.** A random value the surface issues and expects back (form tokens, access
   and refresh tokens, JWTs, OAuth client ids, secrets and codes, recovery codes, request and public ids)
-  could by chance read as an attack to core's rules, such as a form token ending in `env` or the recovery
-  code `qezso-xmlns`, and the visitor's own credential would then be logged and reported as one. So each
-  value is checked by the real engine before it is issued (`IssuedValue`): it is put in one synthetic
-  request as a query parameter, a form field, a JSON string and the Authorization, X-Api-Key and Cookie
-  headers (a public id also as a path segment), and core's content detection (no I/O, no delay, no
-  logging) plus the app's fall-through classifier must find nothing. A refused value is re-rolled by
-  stepping a counter in its derivation, so the choice stays deterministic; only a few first picks in ten
-  thousand are refused. The check costs about 0.6 to 1 ms per value (two engine passes for a public id),
-  so the heaviest answers (the token list with six delete forms, the 2FA enrolment with ten recovery
-  codes) add about 4 to 7 ms. A value that
-  cannot be issued within the capped tries is a fault answered as today, never a flagged value. The
-  session cookie travels only in the Cookie header, which those rules never scan, so it gets only the
-  fingerprint check. A test pushes a fixed-seed sample of every kind through the engine on its real
-  endpoints and channels, real JSON included, and finds nothing.
+  could by chance read as an attack to core's rules, such as a form token ending in `env`, a sign-up
+  token ending in `time` (core pairs it with the path's last word) or the recovery code `qezso-xmlns`,
+  and the visitor's own credential would then be logged and reported as one. So each value is checked
+  by the real engine before it is issued (`IssuedValue`): it goes as a query parameter, a form field, a
+  JSON string and the Authorization, X-Api-Key and Cookie headers, on each path it really travels to (a
+  form token on its own form's action, an access token or JWT on each fixed member API path, a code,
+  secret or refresh token on the token endpoint, a recovery code on the reauth form) and on a catch-all
+  path ending in a command-like word (`/join`); a public id is also sent as a segment of each route it
+  sits in. Core's
+  content detection (no I/O, no delay, no logging) plus the app's fall-through classifier must find
+  nothing. A refused value is re-rolled by stepping a counter in its derivation, so the choice stays
+  deterministic; only a few first picks in ten thousand are refused. One engine pass costs about 0.5 to
+  1 ms, one per path: a page with a form adds about 1 to 2 ms (the token list's delete forms share one
+  token), the 2FA enrolment with ten recovery codes about 10 ms, and minting an access token or signing
+  in for a JWT about 5 to 14 ms. A value that cannot be issued within the capped tries is a fault
+  answered as today, never a flagged value. The session cookie travels only in the Cookie header, which
+  those rules never scan, so it gets only the fingerprint check. A test sends a fixed-seed sample of
+  every kind back on real endpoints and channels (every form token to its own form's action, codes and
+  secrets to the token endpoint, recovery codes to the reauth form, access tokens and JWTs on three API
+  paths and in both headers, real JSON included) and finds nothing.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
   hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
   decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a

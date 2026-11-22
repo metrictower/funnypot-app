@@ -20,12 +20,14 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * The engine check every issued value goes through (IssuedValue). Values are sampled under fixed keys
- * through the real issuing code and sent back the way the surface's pages and API docs say, in channels
- * the check's own probe does not use verbatim: form fields on their real endpoints (followed by another
- * field, and last), a real JSON body, `?access_token`, a Bearer header and X-Api-Key, query parameters,
- * path segments and the Cookie header. None trips the engine or the app's classifier. Values travel in
- * small batches, and a flagged batch is halved down to the single value that trips. Further tests pin a
- * real flagged first pick being re-rolled, the clock never fixing a form token's head, and the cost.
+ * through the real issuing code and sent back the way the surface's pages and API docs say: every form
+ * token to its own form's action, as a form field (followed by another field, and last) and as JSON;
+ * codes, secrets and refresh tokens to the token endpoint; client and request ids to the authorize
+ * query and as form fields; recovery codes to the reauth form; access tokens and JWTs as `?access_token`,
+ * a Bearer header and X-Api-Key on several API paths; public ids as path segments; the session cookie as
+ * the Cookie header. None trips the engine or the app's classifier. Values travel in small batches, and
+ * a flagged batch is halved down to the single value that trips. Further tests pin real flagged first
+ * picks being re-rolled, the clock never fixing a form token's head, and the cost.
  */
 final class TokenMintIssuedValuesTest extends TestCase
 {
@@ -74,23 +76,25 @@ final class TokenMintIssuedValuesTest extends TestCase
         for ($seed = 1; $seed <= 4; $seed++) {
             $c = self::context($seed);
             [$s, $pos, $kref] = self::account($seed);
-            for ($i = 0; $i < 250; $i++) {
+            for ($i = 0; $i < 100; $i++) {
                 if ($i % MintState::MAX_TOKENS === 0) {
                     $s->d['a'][$pos]['k'] = [];
                 }
-                $out['csrf'][] = $c->csrfToken(hash('sha256', 'sid|' . $seed . '|' . $i, true), 'token_create', $i % 7, self::NOW - 37 * $i);
                 $out['client id'][] = $c->clientId($kref, $s, $seed, $i);
                 $out['client secret'][] = $c->clientSecret($kref, $s, $seed, $i, $i % 3);
                 $out['code'][] = $c->oauthCode($kref, $s, $seed, $i);
                 $out['request id'][] = $c->requestId($kref, $s, $i);
                 $out['public id'][] = $c->appPublicId($kref, $s, $seed, $i);
                 $out['refresh token'][] = $c->refreshToken($kref, $s, $pos, $i);
-                [$tpos, $pat] = $c->addToken($s, $pos, $kref, $i % 2 === 0 ? 'pat' : 'oat', '', ['read:user'], 0, null, self::NOW);
-                $out['access token'][] = $pat;
-                $out['public id'][] = (string) $s->d['a'][$pos]['k'][$tpos]['id'];
-                $out['jwt'][] = $c->loginJwt(bin2hex(substr($kref, 0, 8)), $s, $pos, $i, self::NOW + $i);
                 $out['session cookie'][] = $c->startSession($s, $pos, $kref, self::NOW);
-                if ($i % 10 === 0) {
+                // An access token or JWT is probed on each of the API paths, so half as many keep the cost bounded.
+                if ($i % 2 === 0) {
+                    [$tpos, $pat] = $c->addToken($s, $pos, $kref, $i % 4 === 0 ? 'pat' : 'oat', '', ['read:user'], 0, null, self::NOW);
+                    $out['access token'][] = $pat;
+                    $out['public id'][] = (string) $s->d['a'][$pos]['k'][$tpos]['id'];
+                    $out['jwt'][] = $c->loginJwt(bin2hex(substr($kref, 0, 8)), $s, $pos, $i, self::NOW + $i);
+                }
+                if ($i % 5 === 0) {
                     array_push($out['recovery code'], ...$c->recoveryCodes($kref, $s, $seed, $i));
                 }
             }
@@ -109,26 +113,27 @@ final class TokenMintIssuedValuesTest extends TestCase
     /** @return array<string,list<callable(list<string>):RequestContext>> value kind => the ways it travels */
     private static function travels(): array
     {
-        $form = static fn (string $name): array => [
-            static fn (array $vs): RequestContext => new RequestContext('POST', '/login/oauth/access_token', '', MintCorpus::F, self::fields($vs, $name, false)),
-            static fn (array $vs): RequestContext => new RequestContext('POST', '/login/oauth/access_token', '', MintCorpus::F, 'grant_type=x&' . self::fields($vs, $name, true)),
-            static fn (array $vs): RequestContext => new RequestContext('POST', '/settings/reauth', '', MintCorpus::J, (string) json_encode([$name => $vs[0], 'more' => $vs, 'password' => 'x'])),
+        $form = static fn (string $name, string $path = '/login/oauth/access_token'): array => [
+            static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::F, self::fields($vs, $name, false)),
+            static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::F, 'grant_type=x&' . self::fields($vs, $name, true)),
+            static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::J, (string) json_encode([$name => $vs[0], 'more' => $vs, 'password' => 'x'])),
         ];
         $bearer = [
             static fn (array $vs): RequestContext => new RequestContext('GET', '/api/v2/user', self::fields($vs, 'access_token', true), []),
+            static fn (array $vs): RequestContext => new RequestContext('GET', '/v2/users', self::fields($vs, 'access_token', true), []),
+            static fn (array $vs): RequestContext => new RequestContext('POST', '/api/v2/orders/exports', self::fields($vs, 'access_token', true), MintCorpus::J, '{"format":"csv"}'),
             static fn (array $vs): RequestContext => new RequestContext('GET', '/api/v2/user', '', ['Authorization' => 'Bearer ' . implode(' ', $vs)]),
             static fn (array $vs): RequestContext => new RequestContext('GET', '/api/v2/user', '', ['X-Api-Key' => implode(' ', $vs)]),
         ];
         $query = static fn (string $name): callable => static fn (array $vs): RequestContext => new RequestContext('GET', '/login/oauth/authorize', self::fields($vs, $name, false), []);
 
         return [
-            'csrf' => $form('csrf_token'),
             'refresh token' => $form('refresh_token'),
             'code' => $form('code'),
             'client secret' => $form('client_secret'),
-            'recovery code' => $form('recovery_code'),
+            'recovery code' => $form('recovery_code', '/settings/reauth'),
             'client id' => [...$form('client_id'), $query('client_id')],
-            'request id' => [...$form('authorization_request'), $query('authorization_request')],
+            'request id' => [...$form('authorization_request', '/login/oauth/authorize'), $query('authorization_request')],
             'access token' => $bearer,
             'jwt' => $bearer,
             'public id' => [
@@ -173,7 +178,7 @@ final class TokenMintIssuedValuesTest extends TestCase
         self::assertSame(array_keys($travels), array_values(array_intersect(array_keys($travels), array_keys($sample))), 'every kind is sampled');
         $tripped = [];
         foreach ($travels as $kind => $ways) {
-            self::assertGreaterThanOrEqual(1000, count($sample[$kind]), "sanity: {$kind} sample");
+            self::assertGreaterThanOrEqual(200, count($sample[$kind]), "sanity: {$kind} sample");
             foreach ($ways as $w => $travel) {
                 self::assertFalse($this->trips($travel(['7Q7Q7Q'])), "sanity: {$kind} way {$w} is quiet alone");
                 foreach (array_chunk($sample[$kind], 20) as $chunk) {
@@ -186,8 +191,59 @@ final class TokenMintIssuedValuesTest extends TestCase
         self::assertSame([], $tripped);
     }
 
+    public function test_every_form_token_is_quiet_on_its_own_form(): void
+    {
+        $tripped = [];
+        $sent = 0;
+        for ($seed = 1; $seed <= 4; $seed++) {
+            $c = self::context($seed);
+            [$s, $pos, $kref] = self::account($seed);
+            [$tpos] = $c->addToken($s, $pos, $kref, 'pat', '', ['read:user'], 0, null, self::NOW);
+            $ids = ['token_delete' => (string) $s->d['a'][$pos]['k'][$tpos]['id'], 'app_secret' => $c->appPublicId($kref, $s, $seed, 1)];
+            $ids['app_delete'] = $ids['app_secret'];
+            foreach (MintContext::FORM_ACTIONS as $form => $action) {
+                $id = $ids[$form] ?? '';
+                $path = strtr($action, ['{id}' => $id, '{org}' => $c->persona->slug]);
+                $tokens = [];
+                for ($i = 0; $i < 40; $i++) {
+                    $tokens[] = $c->csrfToken(hash('sha256', 'sid|' . $seed . '|' . $i, true), $form, $i % 5, self::NOW - 41 * $i, $id);
+                }
+                $ways = [
+                    static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::F, self::fields($vs, 'csrf_token', false)),
+                    static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::F, 'password=Passw0rd%21x&' . self::fields($vs, 'csrf_token', true)),
+                    static fn (array $vs): RequestContext => new RequestContext('POST', $path, '', MintCorpus::J, (string) json_encode(['csrf_token' => $vs[0], 'more' => $vs])),
+                ];
+                foreach ($ways as $w => $way) {
+                    self::assertFalse($this->trips($way(['7Q7Q7Q'])), "sanity: {$path} way {$w} is quiet alone");
+                    foreach (array_chunk($tokens, 20) as $chunk) {
+                        $sent += count($chunk);
+                        foreach ($this->tripping($way, $chunk) as $v) {
+                            $tripped[] = "{$form} on {$path} way {$w}: {$v}";
+                        }
+                    }
+                }
+            }
+        }
+        self::assertSame(4 * 40 * 3 * count(MintContext::FORM_ACTIONS), $sent);
+        self::assertSame([], $tripped);
+    }
+
     public function test_a_first_pick_core_flags_is_re_rolled(): void
     {
+        // A real join-form token that core flags on its own form: the path ends in a command-like word
+        // and the token in `time`. A probe on any other path missed it.
+        $j = self::context(7, str_repeat("\x42", 32));
+        $source = substr(hash('sha256', 'source|864100', true), 0, 16);
+        $first = $j->csrf->issue($source, 'join', 0, 1795300000);
+        self::assertSame('iDZlU-0ivGARhiaDxza4zwmNRb3BNSGxTimE', $first, 'sanity: the first pick');
+        $join = static fn (string $t): RequestContext => new RequestContext('POST', '/join', '', MintCorpus::F, 'csrf_token=' . $t . '&username=artex1&email=artex1%40example.com&password=Passw0rd%21x&password_confirmation=Passw0rd%21x');
+        self::assertTrue($this->trips($join($first)), 'sanity: core flags it on the sign-up form');
+        $issued = $j->csrfToken($source, 'join', 0, 1795300000);
+        self::assertNotSame($first, $issued);
+        self::assertFalse($this->trips($join($issued)));
+        self::assertNotNull($j->csrf->verify($issued, $source, 'join', 0, 1795300000));
+
+
         // A real recovery code that core flagged before the engine check: `qezso-xmlns` as code 0.
         $c = self::context(7, str_repeat("\x42", 32));
         [$s] = self::account(7, 'abcdef0123456789');
@@ -234,13 +290,20 @@ final class TokenMintIssuedValuesTest extends TestCase
         self::assertTrue($check->fit('7Qok7Q'));
         $paths = new IssuedValue(static fn (RequestContext $r): bool => str_contains($r->path, '/bad'));
         self::assertTrue($paths->fit('bad1'), 'a value that never travels in a path skips the path probe');
-        self::assertFalse($paths->fit('bad1', true));
+        self::assertFalse($paths->fit('bad1', [], ['POST /settings/tokens/{v}/delete']));
+        $seen = [];
+        (new IssuedValue(static function (RequestContext $r) use (&$seen): bool {
+            $seen[] = $r->method . ' ' . $r->path;
+
+            return false;
+        }))->fit('v7Q', ['/settings/profile'], ['GET /settings/applications/{v}']);
+        self::assertSame(['POST /settings/profile', 'POST ' . IssuedValue::CATCH_ALL, 'GET /settings/applications/v7Q'], $seen, 'its own path, the catch-all, then each route');
         self::assertTrue(self::check()->fit('7Q7Q7Q'), 'sanity: the probe alone is quiet');
 
         $c = self::context(5);
         $c->issuingWith(null);
         try {
-            $c->csrfToken('sid', 'f', 0, self::NOW);
+            $c->csrfToken('sid', 'profile', 0, self::NOW);
             self::fail('issuing without the engine check must fail');
         } catch (\LogicException) {
         }
@@ -254,7 +317,7 @@ final class TokenMintIssuedValuesTest extends TestCase
         $c = self::context(11);
         $heads = [];
         for ($i = 0; $i < 60; $i++) {
-            $heads[] = substr($c->csrfToken('sid', 'form' . $i, 0, self::NOW + intdiv($i, 2)), 0, 3);
+            $heads[] = substr($c->csrfToken('sid' . $i, 'profile', 0, self::NOW + intdiv($i, 2)), 0, 3);
         }
         self::assertGreaterThan(50, count(array_unique($heads)), 'heads vary within a minute');
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Tarpit\Mint;
 
+use Funnypot\App\Tarpit\Mint\MintContext;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -56,6 +57,21 @@ final class TokenMintLinkClosureTest extends TestCase
                     }
                 }
                 self::assertGreaterThan(300, $checked, "seed {$seed}: the crawl reached the pages (checked {$checked} targets)");
+
+                // A form token is checked on its own form's action, so every form the pages render must post
+                // to one of the actions the check knows, and every such action must be rendered somewhere.
+                $actions = [];
+                foreach ($crawl->plans as [, $plan]) {
+                    preg_match_all("~<form method=post action='([^']+)'~", $plan->body, $m);
+                    foreach ($m[1] as $a) {
+                        $actions[(string) preg_replace(['~/[a-f0-9]{12}(?=/|$)~', '~/' . preg_quote($crawl->persona->slug, '~') . '(?=/)~'], ['/{id}', '/{org}'], $a)] = true;
+                    }
+                }
+                $known = array_values(MintContext::FORM_ACTIONS);
+                sort($known);
+                $seen = array_keys($actions);
+                sort($seen);
+                self::assertSame($known, $seen, "seed {$seed}: rendered form actions match MintContext::FORM_ACTIONS");
                 self::assertGreaterThan(120, count($crawl->plans));
                 $home = $out['home']->body;
                 self::assertStringContainsString('Signed in as artex1', $home);

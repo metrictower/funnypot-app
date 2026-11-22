@@ -53,10 +53,14 @@ final class MintFlow
 
     // --- shared ----------------------------------------------------------------------------------
 
-    /** @param array{kref:string,acct:int,sid:string,issuedAt:int} $sess */
-    public function csrf(array $sess, string $formId, MintState $s, int $pos, int $now): string
+    /**
+     * A form token for this session; $id fills the form action's `{id}`.
+     *
+     * @param array{kref:string,acct:int,sid:string,issuedAt:int} $sess
+     */
+    public function csrf(array $sess, string $formId, MintState $s, int $pos, int $now, string $id = ''): string
     {
-        return $this->c->csrfToken($sess['sid'], $formId, (int) $s->d['a'][$pos]['ce'], $now);
+        return $this->c->csrfToken($sess['sid'], $formId, (int) $s->d['a'][$pos]['ce'], $now, $id);
     }
 
     /** The answer to an account page without a live session: back to sign-in. */
@@ -351,9 +355,13 @@ final class MintFlow
                 $notice = MintVocabulary::text((string) $fl['ntc']);
                 $s->d['a'][$pos]['fl'] = null;
             }
+            // Every delete form takes the same token, so it is issued once; each form's action ends in `/delete`.
             $del = [];
-            foreach ($a['k'] as $t) {
-                $del[(string) $t['id']] = $this->c->csrfToken($sess['sid'], 'token_delete', (int) $a['ce'], $now);
+            if ($a['k'] !== []) {
+                $token = $this->c->csrfToken($sess['sid'], 'token_delete', (int) $a['ce'], $now, (string) $a['k'][0]['id']);
+                foreach ($a['k'] as $t) {
+                    $del[(string) $t['id']] = $token;
+                }
             }
 
             return MintPlan::html(200, $this->c->pages->tokens($a['k'], $del, $new, $notice))->with('Cache-Control', 'no-store');
@@ -633,8 +641,8 @@ final class MintFlow
 
             return MintPlan::html(200, $this->c->pages->appShow(
                 $app,
-                $this->csrf($sess, 'app_secret', $s, $pos, $now),
-                $this->csrf($sess, 'app_delete', $s, $pos, $now),
+                $this->csrf($sess, 'app_secret', $s, $pos, $now, (string) $app['id']),
+                $this->csrf($sess, 'app_delete', $s, $pos, $now, (string) $app['id']),
                 $secret,
                 $notice,
             ))->with('Cache-Control', 'no-store');
