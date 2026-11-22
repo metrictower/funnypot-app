@@ -8,6 +8,7 @@ declare(strict_types=1);
 // same source row and the same code or refresh token.
 
 use Funnypot\App\Storage\TokenMintStore;
+use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\Core\RequestContext;
 
@@ -16,6 +17,8 @@ require dirname(__DIR__, 4) . '/vendor/autoload.php';
 [, $dbPath, $action, $barrier, $arg] = $argv + [null, '', '', '', ''];
 $args = json_decode((string) $arg, true) ?: [];
 $now = (int) ($args['now'] ?? 1763800000);
+// The store race is under test, not the issued values, so a stand-in check that refuses nothing.
+$issued = new IssuedValue(static fn (RequestContext $r): bool => false);
 $decoy = TokenMintDecoy::build(str_repeat("\x42", 32), (int) $args['seed'], new TokenMintStore($dbPath, (array) ($args['limits'] ?? [])), false, null, static fn (): int => $now, static function (): void {
 });
 $deadline = microtime(true) + 10;
@@ -42,7 +45,7 @@ for ($i = 0; $i < $rounds; $i++) {
             $fields = $action === 'exchange-list'
                 ? ['grant_type' => 'authorization_code', 'code' => $args['code'], 'client_id' => $args['client'], 'client_secret' => $args['secret']]
                 : ['grant_type' => 'refresh_token', 'refresh_token' => $args['refresh'], 'client_id' => $args['client'], 'client_secret' => $args['secret']];
-            $p = $decoy->prepare(new RequestContext('POST', '/login/oauth/access_token', '', $headers, http_build_query($fields)), (string) $args['ip']);
+            $p = $decoy->prepare(new RequestContext('POST', '/login/oauth/access_token', '', $headers, http_build_query($fields)), (string) $args['ip'], $issued);
             $body = json_decode((string) $p?->body, true);
             if (isset($body['access_token'])) {
                 $facts['ok']++;
@@ -55,7 +58,7 @@ for ($i = 0; $i < $rounds; $i++) {
             break;
         case 'mint':
             $fields = ['csrf_token' => $args['csrf'], 'note' => 'w' . getmypid() . '-' . $i, 'expiration' => '30', 'scopes' => ['read:user']];
-            $p = $decoy->prepare(new RequestContext('POST', '/settings/tokens', '', $headers, http_build_query($fields)), (string) $args['ip']);
+            $p = $decoy->prepare(new RequestContext('POST', '/settings/tokens', '', $headers, http_build_query($fields)), (string) $args['ip'], $issued);
             if ($p !== null && $p->status === 303 && $p->header('Location') === '/settings/tokens') {
                 $facts['ok']++;
             } elseif ($p !== null && $p->status === 422 && preg_match('/at most \\d+ active tokens/', $p->body) === 1) {
@@ -67,7 +70,7 @@ for ($i = 0; $i < $rounds; $i++) {
         case 'join':
             $u = 'j' . substr(md5(getmypid() . '-' . $i), 0, 10);
             $fields = ['csrf_token' => $args['csrf'], 'username' => $u, 'email' => $u . '@example.com', 'password' => 'Passw0rd!x', 'password_confirmation' => 'Passw0rd!x'];
-            $p = $decoy->prepare(new RequestContext('POST', '/join', '', $headers, http_build_query($fields)), (string) $args['ip']);
+            $p = $decoy->prepare(new RequestContext('POST', '/join', '', $headers, http_build_query($fields)), (string) $args['ip'], $issued);
             if ($p !== null && $p->status === 303) {
                 $facts['ok']++;
             } else {

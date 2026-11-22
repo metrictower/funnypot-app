@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Storage;
 
 use Funnypot\App\Storage\TokenMintStore;
+use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Mint\MintPlan;
 use Funnypot\App\Tarpit\Mint\MintState;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
@@ -53,7 +54,7 @@ final class TokenMintStoreConcurrencyTest extends TestCase
         if ($this->cookie !== null) {
             $h['Cookie'] = 'session=' . $this->cookie;
         }
-        $p = $this->decoy->prepare(new RequestContext($method, $path, $query, $h, $fields === null ? null : http_build_query($fields)), self::IP);
+        $p = $this->decoy->prepare(new RequestContext($method, $path, $query, $h, $fields === null ? null : http_build_query($fields)), self::IP, new IssuedValue(static fn (RequestContext $r): bool => false));
         self::assertNotNull($p, "{$method} {$path}");
         foreach ($p->headers() as [$n, $v]) {
             if ($n === 'Set-Cookie' && preg_match('/\Asession=([A-Za-z0-9_-]+)/', $v, $m) === 1) {

@@ -215,14 +215,20 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   consent POST's answer.
 - **Issued values stay quiet.** A random value the surface issues and expects back (form tokens, access
   and refresh tokens, JWTs, OAuth client ids, secrets and codes, recovery codes, request and public ids)
-  could by chance hold a word core's attack rules read, such as a form token ending in `env`, and the
-  visitor's own credential would then be logged and reported as an attack. Each is re-rolled, by stepping
-  a counter in its derivation, until it holds no such word at the place it is read (`IssuedValue`: a
-  value's start, after a `.`, its end, or anywhere). About one form token in twenty thousand is refused,
-  and a value that cannot be issued within the capped tries is a fault answered as today, never a
-  flagged value. The session cookie travels only in the Cookie header, which those rules never scan.
-  Tests check the word lists against the installed core and push a fixed-seed sample of every kind
-  through the engine wherever it travels.
+  could by chance read as an attack to core's rules, such as a form token ending in `env` or the recovery
+  code `qezso-xmlns`, and the visitor's own credential would then be logged and reported as one. So each
+  value is checked by the real engine before it is issued (`IssuedValue`): it is put in one synthetic
+  request as a query parameter, a form field, a JSON string and the Authorization, X-Api-Key and Cookie
+  headers (a public id also as a path segment), and core's content detection (no I/O, no delay, no
+  logging) plus the app's fall-through classifier must find nothing. A refused value is re-rolled by
+  stepping a counter in its derivation, so the choice stays deterministic; only a few first picks in ten
+  thousand are refused. The check costs about 0.6 to 1 ms per value (two engine passes for a public id),
+  so the heaviest answers (the token list with six delete forms, the 2FA enrolment with ten recovery
+  codes) add about 4 to 7 ms. A value that
+  cannot be issued within the capped tries is a fault answered as today, never a flagged value. The
+  session cookie travels only in the Cookie header, which those rules never scan, so it gets only the
+  fingerprint check. A test pushes a fixed-seed sample of every kind through the engine on its real
+  endpoints and channels, real JSON included, and finds nothing.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
   hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
   decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a

@@ -65,13 +65,18 @@ final class TokenMintDecoy
         return $this->routes->owns($path);
     }
 
-    /** The answer for an owned path, or null (not owned, or an internal fault: serve today's answer). */
-    public function prepare(RequestContext $ctx, string $ip): ?MintPlan
+    /**
+     * The answer for an owned path, or null (not owned, or an internal fault: serve today's answer).
+     * $issued is the engine check for this request; without one, any answer that would issue a value
+     * is a fault.
+     */
+    public function prepare(RequestContext $ctx, string $ip, ?IssuedValue $issued = null): ?MintPlan
     {
         $match = $this->routes->match($ctx->path);
         if ($match === null) {
             return null;
         }
+        $this->c->issuingWith($issued);
         try {
             $r = MintRequest::parse($ctx, $match, $ip);
             $plan = $this->dispatch($r);
@@ -91,6 +96,8 @@ final class TokenMintDecoy
             self::logFault('prepare', $e);
 
             return null;
+        } finally {
+            $this->c->issuingWith(null);
         }
     }
 

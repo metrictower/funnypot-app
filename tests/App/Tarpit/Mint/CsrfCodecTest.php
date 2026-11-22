@@ -62,7 +62,7 @@ final class CsrfCodecTest extends TestCase
         self::assertFalse($c->issuedByUs($forged), 'a wrong origin MAC');
     }
 
-    public function test_tokens_issued_in_the_same_second_share_no_tail(): void
+    public function test_tokens_issued_in_the_same_second_share_no_head_and_no_tail(): void
     {
         $c = new CsrfCodec(str_repeat('c', 32));
         $tokens = [
@@ -76,10 +76,16 @@ final class CsrfCodecTest extends TestCase
             foreach ($tokens as $j => $b) {
                 if ($i < $j) {
                     self::assertNotSame(substr($a, -9), substr($b, -9), "tokens {$i} and {$j} share their tail");
-                    self::assertSame(substr($a, 0, 5), substr($b, 0, 5), 'sanity: the same issue second');
+                    self::assertNotSame(substr($a, 0, 6), substr($b, 0, 6), "tokens {$i} and {$j} share their head: the clock spells it");
+                    self::assertNotSame(substr($a, 21, 6), substr($b, 21, 6), "tokens {$i} and {$j} share the masked time");
                 }
             }
         }
+        self::assertSame(self::NOW, $c->verify($tokens[0], 'sid-0001', 'app_secret', 0, self::NOW), 'sanity: the same issue second');
+        // One second earlier changes the whole token, head included, so a re-roll is never stuck on the clock.
+        $earlier = $c->issue('sid-0001', 'app_secret', 0, self::NOW - 1);
+        self::assertNotSame(substr($tokens[0], 0, 6), substr($earlier, 0, 6));
+        self::assertSame(self::NOW - 1, $c->verify($earlier, 'sid-0001', 'app_secret', 0, self::NOW));
         // Changing the middle of a token of ours no longer leaves it recognisably ours.
         $raw = (string) base64_decode(strtr($tokens[0], '-_', '+/') . '=');
         $raw[10] = chr(ord($raw[10]) ^ 1);

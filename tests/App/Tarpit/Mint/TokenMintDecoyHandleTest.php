@@ -534,11 +534,12 @@ final class TokenMintDecoyHandleTest extends TestCase
             }
             throw new \ErrorException($msg, 0, $no);
         });
+        $issued = \Funnypot\App\Tarpit\Mint\IssuedValue::forEngine(MintCorpus::engine(), new \Funnypot\App\ThreatIntel\AttackClassifier());
         try {
             foreach ($paths as $path) {
                 foreach ($heavy as [$m, $b, $q]) {
                     foreach (['application/json', 'application/x-www-form-urlencoded'] as $ct) {
-                        $p = $h->decoy->prepare(new \Funnypot\Core\RequestContext($m, $path, $q, ['Content-Type' => $ct, 'Cookie' => 'session=' . $session], $b), '45.79.4.9');
+                        $p = $h->decoy->prepare(new \Funnypot\Core\RequestContext($m, $path, $q, ['Content-Type' => $ct, 'Cookie' => 'session=' . $session], $b), '45.79.4.9', $issued);
                         self::assertNotNull($p, "{$m} {$path} heavy input");
                         self::assertClosed($p, $slug, "heavy {$m} {$path}");
                     }
@@ -933,7 +934,7 @@ final class TokenMintDecoyHandleTest extends TestCase
         $sess = $ctx->sessions->parse((string) $h->jars[$jar]['session'], $h->now);
         $s = $h->store->load(bin2hex($sess['kref']));
 
-        return $ctx->csrfToken($sess['sid'], 'token_delete', (int) $s->d['a'][$s->accountPos($sess['acct'])]['ce'], $h->now);
+        return $ctx->csrf->issue($sess['sid'], 'token_delete', (int) $s->d['a'][$s->accountPos($sess['acct'])]['ce'], $h->now);
     }
 
     /** @return array{id:string,client:string,code:string,request:string} */

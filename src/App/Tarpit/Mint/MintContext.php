@@ -33,6 +33,7 @@ final class MintContext
     public readonly CsrfCodec $csrf;
     public readonly FrictionPicker $friction;
     public readonly AccountPages $pages;
+    private ?IssuedValue $issued = null;
 
     /** @param Closure():int $clock */
     public function __construct(
@@ -47,6 +48,26 @@ final class MintContext
         $this->csrf = new CsrfCodec($keys->key('csrf'));
         $this->friction = new FrictionPicker($keys->key('pick'), $friction);
         $this->pages = new AccountPages($persona);
+    }
+
+    /**
+     * The engine check for the request being answered (null between requests). Every random value the
+     * surface issues and expects back goes through it; issuing without one is a fault, never an
+     * unchecked value.
+     */
+    public function issuingWith(?IssuedValue $check): void
+    {
+        $this->issued = $check;
+    }
+
+    /** @param callable(int):?string $gen */
+    private function issue(int $tries, callable $gen, bool $inPath = false): string
+    {
+        if ($this->issued === null) {
+            throw new \LogicException('issuing needs the engine check');
+        }
+
+        return $this->issued->first($tries, $gen, $inPath);
     }
 
     public function now(): int
@@ -201,7 +222,7 @@ final class MintContext
     /** A fresh form token, nudged back a second at a time until it is fit to issue. */
     public function csrfToken(string $sid, string $formId, int $epoch, int $now): string
     {
-        return IssuedValue::first(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i));
+        return $this->issue(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i));
     }
 
     /** The sid a form is bound to: the session's, or the source reference for signed-out forms. */
@@ -248,7 +269,7 @@ final class MintContext
         ];
         $s->d['a'][$pos]['k'][] = $entry;
         $tpos = count($s->d['a'][$pos]['k']) - 1;
-        $token = IssuedValue::first(64, function (int $v) use ($s, $pos, $tpos, $kref): string {
+        $token = $this->issue(64, function (int $v) use ($s, $pos, $tpos, $kref): string {
             $s->d['a'][$pos]['k'][$tpos]['v'] = $v;
 
             return $this->tokenString($s, $pos, $tpos, $kref);
@@ -260,11 +281,11 @@ final class MintContext
     /** A 12-hex public id that always holds a digit, so it is always an `{id}` the routes own. */
     public function publicId(string $label): string
     {
-        return IssuedValue::first(64, function (int $v) use ($label): ?string {
+        return $this->issue(64, function (int $v) use ($label): ?string {
             $id = $this->keys->hexId($label . self::step($v), 12);
 
             return preg_match('/[0-9]/', $id) === 1 ? $id : null;
-        });
+        }, true);
     }
 
     /** The derivation suffix for re-roll step $v; step 0 adds nothing, so a first pick keeps its value. */
@@ -276,7 +297,7 @@ final class MintContext
     /** A hex value fit to issue, re-rolled over the label's steps. */
     private function hexValue(string $label, int $chars): string
     {
-        return IssuedValue::first(64, fn (int $v): string => $this->keys->hexId($label . self::step($v), $chars));
+        return $this->issue(64, fn (int $v): string => $this->keys->hexId($label . self::step($v), $chars));
     }
 
     public function clientId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
@@ -293,14 +314,14 @@ final class MintContext
     {
         $label = 'clientsecret|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial . '|' . $secretN;
 
-        return IssuedValue::first(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 40));
+        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 40));
     }
 
     public function oauthCode(string $kref, MintState $s, int $acctSerial, int $n): string
     {
         $label = 'code|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $n;
 
-        return IssuedValue::first(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 20));
+        return $this->issue(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 20));
     }
 
     /** A refresh token fit to issue, re-rolled by stepping the variant in its binding. */
@@ -308,7 +329,7 @@ final class MintContext
     {
         $a = $s->d['a'][$pos];
 
-        return IssuedValue::first(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v));
+        return $this->issue(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v));
     }
 
     /** A sign-in JWT fit to issue; only its `jti` steps. */
@@ -317,7 +338,7 @@ final class MintContext
         $a = $s->d['a'][$pos];
         $serial = (int) $a['i'];
 
-        return IssuedValue::first(16, fn (int $v): string => JwtCodec::encode([
+        return $this->issue(16, fn (int $v): string => JwtCodec::encode([
             'sub' => (string) $a['u'],
             'sid' => DecoyPrincipalResolver::sessionClaim($k8, $s->epoch(), $serial),
             'scope' => 'read:user',
@@ -337,7 +358,7 @@ final class MintContext
     {
         $out = [];
         for ($i = 0; $i < MintState::RECOVERY_CODES; $i++) {
-            $out[] = IssuedValue::first(16, function (int $v) use ($kref, $s, $acctSerial, $enrol, $i): string {
+            $out[] = $this->issue(16, function (int $v) use ($kref, $s, $acctSerial, $enrol, $i): string {
                 $raw = hash_hmac('sha256', 'recovery|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $enrol . '|' . $i . '|' . $v, $this->keys->key('totp'), true);
                 $b32 = strtolower(Totp::base32(substr($raw, 0, 7)));
 

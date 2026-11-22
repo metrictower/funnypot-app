@@ -22,18 +22,12 @@ final class CoreWords
     private string $re = '';
     private int $i = 0;
 
-    /**
-     * @param list<string>|null $only artifact file names to read; null reads every file
-     * @return list<string> lowercased
-     */
-    public static function all(?array $only = null): array
+    /** @return list<string> lowercased */
+    public static function all(): array
     {
         $root = dirname(__DIR__, 4) . '/vendor/metrictower/funnypot-core/resources/compiled/';
         $w = new self();
         foreach (glob($root . '*') ?: [] as $file) {
-            if ($only !== null && !in_array(basename($file), $only, true)) {
-                continue;
-            }
             preg_match_all(self::WORD, (string) file_get_contents($file), $m);
             foreach ($m[0] as $word) {
                 $w->words[strtolower($word)] = true;

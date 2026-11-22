@@ -112,12 +112,13 @@ final class TokenMintOwnershipTest extends TestCase
      * Core first: wherever the engine answers a bare GET on a single word by path alone, the path is
      * not ours. The candidates are every word core's compiled artifacts hold or its compiled patterns
      * can spell (CoreWords), lowercased, since core's word rules ignore case (exact compiled routes are
-     * checked as written by the test above). Each word is tried as a final `{login}` segment and, when
-     * it is id-shaped, as an inner `{id}` segment. An owned instance core answers fails, so a core bump
-     * that keys a bare GET on a new word inside the grammar fails here until the word joins
-     * MintRoutes::CORE_KEYED, and every listed word must still be keyed on some unowned candidate
-     * holding no other listed word.
-     * Words core keys only with a method or a body are owned on purpose and pinned below.
+     * checked as written by the test above). Each word is tried as a final `{login}` segment and as an
+     * inner `{id}` segment: as written when it is id-shaped, else wrapped (`x…1`) when it is letters
+     * only, so a word core keys only inside a path still counts. An owned instance core answers fails,
+     * so a core bump that keys a bare GET on a new word inside the grammar fails here until the word
+     * joins MintRoutes::CORE_KEYED, and every listed word must still be keyed on some unowned candidate
+     * holding no other listed word. Words core keys only with a method or a body are owned on purpose
+     * and pinned below.
      */
     public function test_core_keeps_every_path_it_answers_inside_the_owned_grammar(): void
     {
@@ -135,6 +136,8 @@ final class TokenMintOwnershipTest extends TestCase
             $paths = ['/api/v2/users/' . $w];
             if (preg_match('~\A' . MintRoutes::ID . '\z~', $w) === 1) {
                 $paths[] = '/settings/tokens/' . $w . '/delete';
+            } elseif (preg_match('~\A[a-z]{1,18}\z~', $w) === 1) {
+                $paths[] = '/settings/tokens/x' . $w . '1/delete';
             }
             foreach ($paths as $p) {
                 if ($r->owns($p)) {

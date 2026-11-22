@@ -6,10 +6,12 @@ namespace Funnypot\Tests\App\Tarpit\Mint;
 
 use Funnypot\App\Storage\TokenMintStore;
 use Funnypot\App\Tarpit\Mint\AccountFront;
+use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Mint\MintPersona;
 use Funnypot\App\Tarpit\Mint\MintPlan;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\App\Tarpit\Mint\Totp;
+use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\Core\RequestContext;
 
 /**
@@ -29,6 +31,7 @@ final class MintCrawl
 
     /** @var list<array{0:string,1:MintPlan}> label => plan */
     public array $plans = [];
+    private ?IssuedValue $issued = null;
 
     public function __construct(public int $seed)
     {
@@ -55,7 +58,8 @@ final class MintCrawl
         if ($body !== null && !isset($headers['Content-Type'])) {
             $headers['Content-Type'] = 'application/x-www-form-urlencoded';
         }
-        $p = $this->decoy->prepare(new RequestContext($method, $path, $query, $headers, $body), $ip);
+        $this->issued ??= IssuedValue::forEngine(MintCorpus::engine(), new AttackClassifier());
+        $p = $this->decoy->prepare(new RequestContext($method, $path, $query, $headers, $body), $ip, $this->issued);
         if ($p === null) {
             $e = $this->decoy->lastFault();
             throw new \RuntimeException("no answer for {$method} {$path}" . ($e ? ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() : ''));

@@ -7,6 +7,7 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
@@ -324,7 +325,7 @@ final class HoneypotController
         // A path in the token-mint surface's closed set gets that surface's answer in place of the
         // serve branch below. Detection, the engine's answer and what it satisfied are already fixed
         // above, and the row and the report below are built from them exactly as for any request.
-        $mint = $this->tokenMint?->prepare($context, $clientIp);
+        $mint = $this->tokenMint?->prepare($context, $clientIp, IssuedValue::forEngine($funnypot, $this->attackClassifier));
         if ($mint !== null) {
             // The branch replaced pays serveDelay() exactly when the engine served nothing; the
             // engine already slept for any fake it served, so latency never shows which answered.
