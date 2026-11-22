@@ -134,7 +134,8 @@ final class OAuthFlow
 
     private static function oauthError(string $error, int $status = 400): MintPlan
     {
-        return MintPlan::json($status, ['error' => $error, 'error_description' => MintVocabulary::text('oauth_' . $error)])
+        // Like every 401 on the surface, a failed client authentication counts as a miss.
+        return MintPlan::json($status, ['error' => $error, 'error_description' => MintVocabulary::text('oauth_' . $error)], $status !== 401)
             ->attribute(['outcome' => $error]);
     }
 

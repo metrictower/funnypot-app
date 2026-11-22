@@ -52,13 +52,14 @@ final class DecoyPrincipalResolver
     {
         if (JwtCodec::looksLikeJwt($value)) {
             $claims = JwtCodec::decode($value, $this->c->keys->key('jwt'), $now);
-            if ($claims === null || !is_string($claims['k8'] ?? null) || !is_string($claims['e'] ?? null) || !is_int($claims['a'] ?? null)
-                || preg_match('/\A[a-f0-9]{16}\z/', $claims['k8']) !== 1) {
+            $sid = is_string($claims['sid'] ?? null) ? self::parseSessionClaim($claims['sid']) : null;
+            if ($sid === null) {
                 return null;
             }
-            foreach ($this->c->store->rowsByK8($claims['k8']) as $k => $s) {
-                if (hash_equals($s->epoch(), $claims['e']) && $s->accountPosBySerial($claims['a']) !== null) {
-                    return ['kind' => 'jwt', 'k' => $k, 'k8' => $claims['k8'], 'kref' => (string) hex2bin($k), 'acct' => $claims['a'], 'scopes' => ['read:user']];
+            [$k8, $epoch, $serial] = $sid;
+            foreach ($this->c->store->rowsByK8($k8) as $k => $s) {
+                if (hash_equals($s->epoch(), $epoch) && $s->accountPosBySerial($serial) !== null) {
+                    return ['kind' => 'jwt', 'k' => $k, 'k8' => $k8, 'kref' => (string) hex2bin($k), 'acct' => $serial, 'scopes' => ['read:user']];
                 }
             }
 
@@ -83,6 +84,29 @@ final class DecoyPrincipalResolver
         }
 
         return null;
+    }
+
+    /**
+     * The login JWT's one routing claim: the row prefix, the row epoch and the account serial, packed
+     * into an opaque value (the token's signature already makes it tamper-proof).
+     */
+    public static function sessionClaim(string $k8hex, string $epochHex, int $serial): string
+    {
+        return rtrim(strtr(base64_encode((string) hex2bin($k8hex) . (string) hex2bin($epochHex) . pack('N', $serial)), '+/', '-_'), '=');
+    }
+
+    /** @return array{0:string,1:string,2:int}|null [k8 hex, epoch hex, account serial] */
+    public static function parseSessionClaim(string $claim): ?array
+    {
+        if (preg_match('/\A[A-Za-z0-9_-]{27}\z/', $claim) !== 1) {
+            return null;
+        }
+        $raw = base64_decode(strtr($claim, '-_', '+/'), true);
+        if ($raw === false || strlen($raw) !== 20) {
+            return null;
+        }
+
+        return [bin2hex(substr($raw, 0, 8)), bin2hex(substr($raw, 8, 8)), (int) unpack('N', substr($raw, 16, 4))[1]];
     }
 
     /**

@@ -332,8 +332,9 @@ final class HoneypotController
                 $this->serveDelay();
             }
             // An answer that discloses nothing counts toward the bulk-scan window like the miss it
-            // replaces, so feed the pin at the point the miss path would.
-            if (!$mint->served) {
+            // replaces, so feed the pin at the point the miss path would; an engine match never
+            // reaches that path, so it never pins.
+            if (!$mint->served && $response === null) {
                 $this->tokenMint->notServed($clientIp);
             }
             $this->tokenMint->emit($mint);

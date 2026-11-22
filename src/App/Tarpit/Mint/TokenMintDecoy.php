@@ -86,6 +86,7 @@ final class TokenMintDecoy
         } catch (Throwable $e) {
             $this->faults++;
             $this->lastFault = $e;
+            self::logFault('prepare', $e);
 
             return null;
         }
@@ -156,6 +157,15 @@ final class TokenMintDecoy
     {
         [, $k8] = MintContext::rowKeys($this->c->keys->kref($ip));
         $this->c->store->attribute($k8, $this->c->now(), $plan->turn);
+    }
+
+    /**
+     * An operator signal for a fault the surface stepped aside from: a fixed code, the exception class
+     * and where it was thrown. Never the message, which could carry request bytes.
+     */
+    public static function logFault(string $where, Throwable $e): void
+    {
+        error_log(sprintf('funnypot: token-mint %s fault %s at %s:%d (code=token-mint-fault)', $where, get_class($e), basename($e->getFile()), $e->getLine()));
     }
 
     public function faults(): int

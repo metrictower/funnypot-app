@@ -63,6 +63,8 @@ final class AccountFront
 
             return $s !== null && $pos !== null ? $render($s, $pos) : null;
         } catch (Throwable $e) {
+            TokenMintDecoy::logFault('home', $e);
+
             return null;
         }
     }
@@ -77,6 +79,7 @@ final class AccountFront
                 $notice = '<p class=err>' . AccountPages::e(MintVocabulary::text('session_expired')) . '</p>';
             }
         } catch (Throwable $e) {
+            TokenMintDecoy::logFault('signed-out', $e);
             $notice = '';
         }
 
@@ -122,6 +125,8 @@ final class AccountFront
 
             return $res['ok'] ? $res['value'] : ['error' => 'signin_failed'];
         } catch (Throwable $e) {
+            TokenMintDecoy::logFault('sign-in', $e);
+
             return null;
         }
     }

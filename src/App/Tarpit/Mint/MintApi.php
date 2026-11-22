@@ -300,9 +300,7 @@ final class MintApi
             for ($v = 0; $v < 16; $v++) {
                 $jwt = JwtCodec::encode([
                     'sub' => (string) $s->d['a'][$pos]['u'],
-                    'a' => $serial,
-                    'k8' => $k8,
-                    'e' => $s->epoch(),
+                    'sid' => DecoyPrincipalResolver::sessionClaim($k8, $s->epoch(), $serial),
                     'scope' => 'read:user',
                     'iat' => $now,
                     'exp' => $now + JwtCodec::LIFETIME_S,

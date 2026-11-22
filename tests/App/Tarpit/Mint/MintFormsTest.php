@@ -105,6 +105,20 @@ final class MintFormsTest extends TestCase
             self::assertTrue($big->tooLarge);
             $list = MintRequest::parse(new RequestContext('POST', '/settings/tokens', '', [], http_build_query(['scopes' => array_fill(0, 40, 'read:user')])), $match, '1.2.3.4');
             self::assertNull($list->strList('scopes'), 'more than 32 scopes is not a list we read');
+
+            // FastCGI passes Content-Type outside the HTTP_* headers; a bare JSON body may lead with whitespace.
+            $saved = $_SERVER['CONTENT_TYPE'] ?? null;
+            $_SERVER['CONTENT_TYPE'] = 'application/json';
+            $cgi = MintRequest::parse(new RequestContext('PATCH', '/api/v2/user', '', [], '{"name":"x"}'), $match, '1.2.3.4');
+            unset($_SERVER['CONTENT_TYPE']);
+            $ws = MintRequest::parse(new RequestContext('PATCH', '/api/v2/user', '', [], "  \n{\"name\":\"y\"}"), $match, '1.2.3.4');
+            if ($saved !== null) {
+                $_SERVER['CONTENT_TYPE'] = $saved;
+            }
+            self::assertTrue($cgi->json);
+            self::assertSame('x', $cgi->str('name'));
+            self::assertTrue($ws->json);
+            self::assertSame('y', $ws->str('name'));
         } finally {
             restore_error_handler();
         }

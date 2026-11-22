@@ -57,8 +57,10 @@ final class MintRequest
         $badJson = false;
         $body = [];
         if (!$tooLarge && $raw !== '' && !in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
-            $ctype = strtolower($headers['content-type'] ?? '');
-            if (str_contains($ctype, 'json') || ($ctype === '' && ($raw[0] === '{' || $raw[0] === '['))) {
+            // FastCGI hands Content-Type over as CONTENT_TYPE, outside the HTTP_* headers.
+            $ctype = strtolower($headers['content-type'] ?? (is_string($_SERVER['CONTENT_TYPE'] ?? null) ? $_SERVER['CONTENT_TYPE'] : ''));
+            $first = ltrim($raw)[0] ?? '';
+            if (str_contains($ctype, 'json') || ($ctype === '' && ($first === '{' || $first === '['))) {
                 $json = true;
                 $decoded = strlen($raw) <= self::MAX_JSON ? json_decode($raw, true, 4) : null;
                 if (is_array($decoded) && ($decoded === [] || !array_is_list($decoded))) {

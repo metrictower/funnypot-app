@@ -216,6 +216,7 @@ final class TokenMintDecoyHandleTest extends TestCase
         $badClient = $this->tokenPost($h, ['grant_type' => 'refresh_token', 'refresh_token' => $tok2['refresh_token'], 'client_id' => $app['client'], 'client_secret' => str_repeat('0', 40)]);
         self::assertSame(401, $badClient['status']);
         self::assertSame('invalid_client', self::json($badClient)['error']);
+        self::assertFalse($badClient['main']['served'], 'a failed client authentication is a 401 like any other');
 
         // An OAuth token with an organisation-data scope ends at owner approval, pending forever.
         $h->enable2fa();
@@ -254,6 +255,12 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertSame(200, $login['status']);
         $jwt = self::json($login)['access_token'];
         self::assertSame(2, substr_count($jwt, '.'));
+        $payload = json_decode((string) base64_decode(strtr(explode('.', $jwt)[1], '-_', '+/')), true);
+        self::assertSame(['exp', 'iat', 'jti', 'scope', 'sid', 'sub'], (static function (array $k): array {
+            sort($k);
+
+            return $k;
+        })(array_keys($payload)), 'only ordinary claims; the routing facts sit in one opaque sid');
         self::assertSame(200, $h->get('/api/v2/user', '', 'default', MintHarness::IP, ['Authorization' => 'Bearer ' . $jwt])['status']);
 
         // Re-signed with the persona's published JWT secret: rejected like any forgery.
@@ -532,9 +539,11 @@ final class TokenMintDecoyHandleTest extends TestCase
         $stage = null;
         $h = $this->h(true, ['storeFaults' => function (string $s) use (&$stage): void {
             if ($s === $stage) {
-                throw new \RuntimeException('renderer bug');
+                throw new \RuntimeException('renderer bug FPFAULTCANARY');
             }
         }]);
+        $log = $h->dir . '/php-error.log';
+        $prevLog = ini_set('error_log', $log);
         $h->join();
         $before = $h->store->db()->query('SELECT state FROM mint_state')->fetchAll(\PDO::FETCH_COLUMN);
         $form = $h->get('/settings/tokens/new');
@@ -542,6 +551,12 @@ final class TokenMintDecoyHandleTest extends TestCase
         $h->allowFaults = true;
         $r = $h->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => 'x', 'expiration' => '30', 'scopes' => ['read:user']]);
         $stage = null;
+        ini_set('error_log', (string) $prevLog);
+        $logged = (string) @file_get_contents($log);
+        self::assertStringContainsString('code=token-mint-fault', $logged, 'the operator gets a signal');
+        self::assertStringContainsString('RuntimeException', $logged);
+        self::assertStringNotContainsString('FPFAULTCANARY', $logged, 'never the message');
+        self::assertStringNotContainsString('note=x', $logged, 'never request bytes');
         self::assertNull($r['plan'], 'the surface stepped aside');
         self::assertStringContainsString('<center><h1>404 Not Found</h1></center>', $r['body'], "today's believable 404");
         self::assertSame(1, $h->decoy->faults());
@@ -1113,6 +1128,18 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertFalse($few->hits->isBulkFlagged('45.86.0.3'), 'fewer misses set no pin');
         self::assertNull($pinAt(true, '45.86.0.4', $llm + ['allowIps' => ['45.86.0.4']]), 'an allowlisted IP is never pinned');
         self::assertNull($pinAt(true, '45.86.0.5', []), 'LLM off: nothing pins armed');
+
+        // An engine match never reaches the miss path, so armed or not it never pins.
+        foreach ([true, false] as $armedRun) {
+            $m = $this->h($armedRun, $llm);
+            $ip = $armedRun ? '45.86.1.1' : '45.86.1.2';
+            foreach (array_slice($paths, 0, 5) as $p) {
+                $m->get($p, '', 'nojar', $ip);
+            }
+            self::assertFalse($m->hits->isBulkFlagged($ip), 'five misses are not yet a scan');
+            $m->get('/api/v2/users/zed', 'id=1%20union%20select%201,2--', 'nojar', $ip);
+            self::assertFalse($m->hits->isBulkFlagged($ip), ($armedRun ? 'armed' : 'unarmed') . ': a matched request does not pin');
+        }
         self::assertNull($pinAt(false, '45.86.0.6', []), 'LLM off: nothing pins unarmed');
 
         $h = $this->h(true, $llm);

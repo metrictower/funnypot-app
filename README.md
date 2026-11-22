@@ -196,9 +196,9 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,
   never the cookie alone, so a lapsed or signed-out session reads as signed out everywhere.
-- **Inert and closed.** Nothing fetches or executes; a callback URL is stored text, shown as text. No
-  answer is a 5xx or a 302, every header comes from a closed list, every redirect is one of the
-  surface's own pages, and OAuth never redirects at all: consent, the issued code, a denial and every
+- **Inert and closed.** Nothing fetches or executes; a callback URL is stored text, shown as text. None
+  of the surface's own answers is a 5xx or a 302 (the `/` sign-in keeps that page's existing 302), every
+  header comes from a closed list, every redirect is one of the surface's own pages, and OAuth never redirects at all: consent, the issued code, a denial and every
   error render on the surface's own pages, and the client's `state` appears only in the consent POST's
   answer, escaped. Nothing from a GET query or a path is ever echoed.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
@@ -211,7 +211,9 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   `docs/DATA-LAYER-DECISION.md`).
 - **Gates.** Wired only with `FUNNYPOT_TARPIT=1` and `FUNNYPOT_TARPIT_TOKEN_MINT=1`, in public mode, when
   the identity bundle carries the `token-mint/v1` key (else `code=token-mint-key-missing`) and the store
-  migrates (else `code=token-mint-migration-failed`); otherwise every owned path answers as today.
+  migrates (else `code=token-mint-migration-failed`); otherwise every owned path answers as today. If the
+  surface's own code ever fails on a request, that request gets today's answer and the error log gets
+  `code=token-mint-fault` with the exception class and line (never the message or any request bytes).
 - **Bench.** `php scripts/bench/token-mint-loop.php [profile|all] [steps] [seeds]` drives a scripted
   mint-and-use agent through the real `Router` (fast, slow, cookie-dropping and zero-think profiles) and
   reports the friction histogram, mints, API calls and goal-proof bytes (always 0);
