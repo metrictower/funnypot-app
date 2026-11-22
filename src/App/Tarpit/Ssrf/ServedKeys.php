@@ -41,7 +41,15 @@ final class ServedKeys
         'src/App/Llm/LlmOutputSanitizer.php' => 'not_served: scan patterns, not values',
         'src/App/Tarpit/Ssrf/ServedKeys.php' => 'not_served: recognition patterns',
         'src/App/Tarpit/Ssrf/KeyIndexBuilder.php' => 'not_served: recognition patterns',
+        'demo/index.php' => 'persona: the LLM sanitizer exemption list is the persona key',
     ];
+
+    /**
+     * Core key sources the app leaves dormant. Core's mock-auth decoy tables serve AWS and test-mode
+     * Stripe rows only once a decoy session key is set, which the app's core config never does; enabling
+     * mock-auth must add them as a family first.
+     */
+    public const CORE_DORMANT = ['Funnypot\\Core\\Support\\Fake\\FakeRecords::apiKeys' => 'not_served: mock-auth tables, dormant while decoySessionKey is unset'];
 
     private DirectiveRenderer $renderer;
 

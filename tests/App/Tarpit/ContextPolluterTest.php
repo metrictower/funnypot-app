@@ -7,6 +7,7 @@ namespace Funnypot\Tests\App\Tarpit;
 use Funnypot\App\AiApi\StreamEmitter;
 use Funnypot\App\Tarpit\ConfigDump;
 use Funnypot\App\Tarpit\HostileFormat;
+use Funnypot\App\Tarpit\InertSecret;
 use Funnypot\App\Tarpit\LogRabbitHole;
 use Funnypot\App\Tarpit\SeededStream;
 use Funnypot\App\Tarpit\ShadowBait;
@@ -408,6 +409,40 @@ final class ContextPolluterTest extends TestCase
                 hash_update($h, $c);
             }
             self::assertSame($want, hash_final($h), "settings.py bytes for {$key}");
+        }
+    }
+
+    public function test_pointers_add_only_the_three_preamble_lines(): void
+    {
+        foreach ([4242, 7] as $seed) {
+            $plain = '';
+            foreach ((new ConfigDump($seed))->chunks(64 << 10) as $c) {
+                $plain .= $c;
+            }
+            $with = '';
+            foreach ((new ConfigDump($seed, true))->chunks((64 << 10) + 4096) as $c) {
+                $with .= $c;
+            }
+            $a = explode("\n", $plain);
+            $b = explode("\n", $with);
+            $at = (int) array_search(true, array_map(static fn (string $l): bool => str_starts_with($l, '# Outbound: '), $b), true);
+            self::assertGreaterThan(0, $at);
+            $added = array_slice($b, $at, 4);
+            self::assertMatchesRegularExpression("~\\AAWS_STS_ENDPOINT = 'http://sts\\.[a-z0-9-]+\\.internal'\\z~", $added[1]);
+            self::assertMatchesRegularExpression("~\\APAYMENTS_API_BASE = 'http://payments-gw\\.[a-z0-9-]+\\.internal:8443/v1'\\z~", $added[2]);
+            self::assertSame('', $added[3], 'three lines and a blank one');
+            array_splice($b, $at, 4);
+            $full = count($a) - 1;
+            self::assertSame(array_slice($a, 0, $full), array_slice($b, 0, $full), 'nothing else changes');
+        }
+    }
+
+    public function test_pointer_lines_are_clean_on_8_seeds(): void
+    {
+        foreach ([1, 2, 3, 4, 5, 6, 7, 4242] as $seed) {
+            $head = (string) (new ConfigDump($seed, true))->chunks(8192)->current();
+            self::assertStringContainsString('AWS_STS_ENDPOINT', $head);
+            self::assertTrue(InertSecret::isClean($head), "seed {$seed}");
         }
     }
 }

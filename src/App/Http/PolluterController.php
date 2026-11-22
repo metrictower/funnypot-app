@@ -71,6 +71,7 @@ final class PolluterController
      * @param Closure(string,int):string|null $bufferedBuilder builds a buffered body ('hostile'|'shadow',
      *        cap) BEFORE begin() — a test seam to exercise the "builder throws ⇒ bounded 404" fault path
      * @param EngagementRecorder|null $engagement typed episode metrics observer; null = not recording
+     * @param bool $gatewayPointers settings.py names the SSRF decoy's internal credential gateways
      */
     public function __construct(
         private HitStore $hits,
@@ -81,10 +82,11 @@ final class PolluterController
         private ?Blocklist $blocklist = null,
         ?Closure $emitterFactory = null,
         ?Closure $bufferedBuilder = null,
-        private ?EngagementRecorder $engagement = null
+        private ?EngagementRecorder $engagement = null,
+        bool $gatewayPointers = false
     ) {
         $this->emitterFactory = $emitterFactory ?? static fn (): StreamEmitter => new StreamEmitter(null, 0);
-        $this->config = new ConfigDump($personaSeed);
+        $this->config = new ConfigDump($personaSeed, $gatewayPointers);
         $this->log = new LogRabbitHole($personaSeed);
         $this->hostile = new HostileFormat($personaSeed);
         $this->shadow = new ShadowBait($personaSeed);
