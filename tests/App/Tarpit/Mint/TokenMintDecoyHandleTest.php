@@ -478,6 +478,10 @@ final class TokenMintDecoyHandleTest extends TestCase
         $tok = $h->mint(['read:user']);
         $slug = $h->persona->slug;
         $session = $h->jars['default']['session'];
+        // A real form token with its origin tag replaced: right length and head, wrong tag.
+        $real = MintHarness::csrf($h->get('/settings/tokens/new')['body']);
+        self::assertSame(36, strlen($real));
+        $forged = substr($real, 0, 28) . (substr($real, 28) === str_repeat('A', 8) ? str_repeat('B', 8) : str_repeat('A', 8));
         mt_srand(815);
         $paths = \Funnypot\Tests\App\Tarpit\Mint\MintCorpus::ownedPaths($slug);
         $methods = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -488,7 +492,8 @@ final class TokenMintDecoyHandleTest extends TestCase
         // (huge pair counts, brace floods) are run through the surface's own prepare() below.
         $bodies = [
             null,
-            'csrf_token=AAAAAAAAAAAAAAAAAAAAAAAAAAA&note=x&scopes%5B%5D=read%3Auser&expiration=30',
+            'csrf_token=' . str_repeat('A', 36) . '&note=x&scopes%5B%5D=read%3Auser&expiration=30',
+            'csrf_token=' . $forged . '&note=x&scopes%5B%5D=read%3Auser&expiration=30',
             str_repeat('a=1&', 120),
             'note%5B%5D=x&scopes=read%3Auser&scopes%5Ba%5D%5Bb%5D=c&csrf_token%5B%5D=y&expiration%5B%5D=30',
             '[1,2,3]',
@@ -498,7 +503,8 @@ final class TokenMintDecoyHandleTest extends TestCase
             'grant_type%5B%5D=authorization_code&code%5B%5D=x&client_id=' . str_repeat('9', 2000),
             'username=' . str_repeat('a', 1500) . '&password=x',
             "\x00\xff\xfe" . str_repeat("\x80", 500),
-            'authorization_request=ab12cd34ef56&authorize=1&deny=1&csrf_token=' . str_repeat('A', 27),
+            'authorization_request=ab12cd34ef56&authorize=1&deny=1&csrf_token=' . str_repeat('A', 36),
+            'authorization_request=ab12cd34ef56&authorize=1&csrf_token=' . $forged,
         ];
         $queries = ['', 'scopes=a,b,read:user', 'client_id=' . str_repeat('a', 20) . '&state=%3Cscript%3E', str_repeat('x=1&', 90), 'access_token=' . $tok, 'authorization_request=../../etc/passwd'];
         for ($i = 0; $i < 2000; $i++) {
