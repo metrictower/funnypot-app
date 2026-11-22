@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
+use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Ssrf\SsrfIds;
+use Funnypot\App\Tarpit\Ssrf\SsrfKeys;
 use Funnypot\Core\RequestContext;
 use Funnypot\Tests\App\Tarpit\Mint\CoreWords;
 use PHPUnit\Framework\TestCase;
@@ -39,6 +41,31 @@ final class SsrfPairRuleDerivationTest extends TestCase
         foreach ($paired as $w) {
             $covered = array_filter(SsrfIds::PAIR_WORDS, static fn (string $p): bool => str_ends_with($w, $p));
             self::assertNotEmpty($covered, "{$w} pairs with the id ending but no PAIR_WORDS family covers it");
+        }
+    }
+
+    /**
+     * issue() runs the plain checks (field probes on every path, and the id as a path segment of every
+     * route) as well as the pair probes, so a candidate either flags is re-rolled.
+     */
+    public function test_issue_rerolls_a_candidate_its_plain_probes_flag(): void
+    {
+        $ids = new SsrfIds(new SsrfKeys(str_repeat('k', 32)));
+        [$routes, $pairs] = SsrfIds::hookRoutes();
+        $label = 'hook|owner|1';
+        for ($v = 0; ($first = $ids->candidate($label, $v)) === null; $v++) {
+        }
+        $quiet = new IssuedValue(static fn (RequestContext $r): bool => false);
+        self::assertSame($first, $ids->issue($quiet, $label, $routes, $pairs), 'control: nothing flags, the first candidate is issued');
+        $stubs = [
+            'a field probe on the catch-all' => static fn (RequestContext $r): bool => $r->path === IssuedValue::CATCH_ALL && str_contains((string) $r->rawBody, $first),
+            'a field probe on a listed path' => static fn (RequestContext $r): bool => $r->path === '/settings/webhooks/x/redeliveries' && str_contains((string) $r->rawBody, $first),
+            'the id as a path segment' => static fn (RequestContext $r): bool => $r->path === '/settings/webhooks/' . $first . '/delete' && $r->rawBody === 'csrf_token=x',
+        ];
+        foreach ($stubs as $what => $flags) {
+            $id = $ids->issue(new IssuedValue($flags), $label, $routes, $pairs, ['/settings/webhooks/x/redeliveries']);
+            self::assertNotSame($first, $id, "{$what} re-rolls the candidate");
+            self::assertFalse(($flags)(IssuedValue::pathProbe($id, 'POST /settings/webhooks/{v}/delete')));
         }
     }
 

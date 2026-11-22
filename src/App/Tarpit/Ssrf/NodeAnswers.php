@@ -89,7 +89,7 @@ final class NodeAnswers
 
     /**
      * The answer for an outcome that reached something. $verdict is the credential verdict for the
-     * gateways; $requestId seeds their request ids.
+     * gateways; $requestId is the request id a gateway that returns one puts in its answer.
      */
     public function reply(Resolution $r, string $method, PathClass $pc, ?string $verdict = null, string $requestId = ''): ?Reply
     {

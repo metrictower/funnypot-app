@@ -22,7 +22,8 @@ final class FakeFetch
 
     private const IMMEDIATE = ['proxy_denied', 'nxdomain', 'dns_transient', 'unroutable', 'no_route', 'validation', 'code_host'];
 
-    public function __construct(private NodeAnswers $answers)
+    /** @param string $ridKey keys the request ids the fake services mint, so none can be traced to a platform id */
+    public function __construct(private NodeAnswers $answers, private string $ridKey)
     {
     }
 
@@ -40,22 +41,34 @@ final class FakeFetch
         ];
     }
 
-    /** @param array<string,mixed> $f */
-    public function reply(array $f, string $requestId): ?Reply
+    /**
+     * The answer one attempt got. $attempt names the attempt (its fetch and retry); it only seeds the
+     * answering service's own request id and never appears in an answer.
+     *
+     * @param array<string,mixed> $f
+     */
+    public function reply(array $f, string $attempt): ?Reply
     {
         $key = (string) ($f['n'] ?? '');
         $node = $key !== '' ? new NetNode($key, (string) $f['k'], $this->answers->hostOf($key), [(int) $f['p']]) : null;
         $r = new Resolution((string) $f['e'], (string) $f['o'], $node, (int) $f['p']);
 
-        return $this->answers->reply($r, (string) $f['m'], PathClass::tryFrom((string) $f['pc']) ?? PathClass::Other, is_string($f['vd'] ?? null) ? $f['vd'] : null, $requestId);
+        return $this->answers->reply($r, (string) $f['m'], PathClass::tryFrom((string) $f['pc']) ?? PathClass::Other, is_string($f['vd'] ?? null) ? $f['vd'] : null, $this->requestId($f, $attempt));
     }
 
-    /** A request id in the gateways' style, derived from the fetch's own id. */
-    public static function requestId(string $id): string
+    /**
+     * The request id the answering service mints for one attempt: a version-4 UUID, as STS returns,
+     * keyed over the target and the attempt so it is stable on every re-view, differs per attempt, and
+     * reveals no platform id.
+     *
+     * @param array<string,mixed> $f
+     */
+    public function requestId(array $f, string $attempt): string
     {
-        $h = hash('sha256', 'rid|' . $id);
+        $h = hash_hmac('sha256', (string) json_encode([$f['e'] ?? '', $f['n'] ?? '', $f['p'] ?? 0, $f['m'] ?? '', $f['pc'] ?? '', $attempt]), $this->ridKey);
+        $variant = '89ab'[hexdec($h[16]) % 4];
 
-        return substr($h, 0, 8) . '-' . substr($h, 8, 4) . '-' . substr($h, 12, 4) . '-' . substr($h, 16, 4) . '-' . substr($h, 20, 12);
+        return substr($h, 0, 8) . '-' . substr($h, 8, 4) . '-4' . substr($h, 13, 3) . '-' . $variant . substr($h, 17, 3) . '-' . substr($h, 20, 12);
     }
 
     /** How long a fetch with this outcome took, in milliseconds, seeded by its id. */

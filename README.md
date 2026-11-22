@@ -276,26 +276,26 @@ byte-identical) needs a token with `webhooks:write`, `imports:write` or `storage
 form offers only while this is wired. The account nav gains Webhooks, Imports and Export.
 
 - **Nothing is fetched.** There is no fetch, DNS or socket code: a fake network decides where a request
-  would have gone and what it would have got, and the result is shown as escaped text. Four checks keep
-  it that way (`SsrfNoOutboundTest`): a static allowlist over the namespace (pure built-ins, listed
-  classes and static calls, no parent class outside it, no anonymous class, and no dynamic call of any
-  shape: nothing is called through a variable, an expression, a string literal, an array element or a
-  computed method or static name, `new` takes only a written class name, a callback argument is only a
-  closure or an allowlisted `f(...)`, and no argument to any function or method is a string naming a
-  function or `Class::method`, or a `[object or class, 'method']` pair); the bench in a child PHP started
-  with `-n` that disables every function of every loaded extension outside a short pure list, plus
-  core's stream, socket, DNS, mail and exec functions (the child checks each is gone and that no other
-  extension loaded), with URL wrappers off; recording stream wrappers around the same journey for every
-  URL operation; and a pin on every file this feature edits outside its namespace.
+  would have gone and what it would have got, and the result is shown as escaped text. Four checks keep it
+  that way (`SsrfNoOutboundTest`): a static allowlist over the namespace and the build stamp (pure
+  built-ins, plus the stamp's reads of its own fixed local files, listed classes and static calls, no parent
+  class outside it, no anonymous class, and no dynamic call of any shape: nothing is called through a
+  variable, an expression, a string literal, an array element or a computed method or static name, `new`
+  takes only a written class name, a callback argument is only a closure or an allowlisted `f(...)`, and no
+  argument to any function or method is a string naming a function or `Class::method`, or a `[object or
+  class, 'method']` pair); the bench in a child PHP started with `-n` that disables every function of every
+  loaded extension outside a short pure list, plus core's stream, socket, DNS, mail and exec functions (the
+  child checks each is gone and that no other extension loaded), with URL wrappers off; recording stream
+  wrappers around the same journey for every URL operation; and a pin on every file this feature edits or
+  adds outside its namespace.
 - **Egress model.** The platform's workers reach internal zones (`*.internal`, the persona's domain,
   single-label names) and private address space directly; every other name goes to an egress proxy that
-  denies it before resolving ("Request denied by egress policy"), the company's public site (the apex
-  and `www`) included, and the import worker may reach `github.com:443` only. So the agent's own
-  listener, its DNS server, rebinding names and any public address fail before a byte could leave,
-  whatever their DNS says; its own private /24 (or IPv6 ULA /64) times out. Every IPv4 spelling is
-  canonicalised (`2130706433`, `0x7f000001`, `127.1`, `0`, any run of leading zeros); a naive
-  create-time denylist (`FUNNYPOT_SSRF_DENYLIST`, on) refuses only the literal spellings a quick filter
-  would catch.
+  denies it before resolving ("Request denied by egress policy"), the company's public site (the apex and
+  `www`) included, and the import worker may reach `github.com:443` only. So the agent's own listener, its
+  DNS server, rebinding names and any public address fail before a byte could leave, whatever their DNS
+  says; its own private /24 (or IPv6 ULA /64) times out. Every IPv4 spelling is canonicalised (`2130706433`,
+  `0x7f000001`, `127.1`, `0`, leading zeros in a label of up to 63 characters); a naive create-time denylist
+  (`FUNNYPOT_SSRF_DENYLIST`, on) refuses only the literal spellings a quick filter would catch.
 - **The fake network.** A per-deploy /16 of generated hosts (API services, admin consoles, metrics,
   registries, databases, caches, SSH) whose names only this deploy can produce, whose listings name 6–12
   more hosts so a crawl never ends, plus the hosts other surfaces already leaked: settings.py's hosts, the
@@ -305,14 +305,14 @@ form offers only while this is wired. The account nav gains Webhooks, Imports an
   other PUT 403), and nothing here can send that header. No answer carries a record, a credential or a
   clone.
 - **Credential gateways.** settings.py names `sts.<region>.internal` and
-  `payments-gw.<region>.internal:8443` (`FUNNYPOT_SSRF_CRED_POINTERS`, on; off keeps settings.py's bytes).
-  A key this honeypot served (persona and per-source core keys re-rendered through core's own renderer,
-  and every key the app's generators serve, through a keyed-hash index) is known but never signs
-  (`SignatureDoesNotMatch`) or is restricted (`key_restricted`); any other key is invalid once the index
-  is complete for this deploy and checked within the hour, and rate limited until then. The deploy id
-  moves with the image's baked `build-id` (a hash over src/, resources/ and the installed-package map;
-  without it, a hash of the generator sources), so an app-only deploy rebuilds the index. Nothing is ever
-  a 2xx.
+  `payments-gw.<region>.internal:8443` (`FUNNYPOT_SSRF_CRED_POINTERS`, on; off keeps settings.py's bytes). A
+  key this honeypot served (persona and per-source core keys re-rendered through core's own renderer, and
+  every key the app's generators serve, through a keyed-hash index) is known but never signs
+  (`SignatureDoesNotMatch`) or is restricted (`key_restricted`), STS answering with its own version-4
+  request id for each attempt (never a platform id); any other key is invalid once the index is complete for
+  this deploy and checked within the hour, and rate limited until then. The deploy id moves with the image's
+  baked `build-id` (a hash over src/, resources/ and the installed-package map; without it, a hash of the
+  generator sources), so an app-only deploy rebuilds the index. Nothing is ever a 2xx.
 - **State and bounds.** Its own `ssrf-decoy.sqlite` (`FUNNYPOT_SSRF_DB`) and `ssrf-decoy-keyidx.sqlite`
   beside it. One JSON row per account, keyed by the token-mint row, its epoch and the account serial;
   URLs stored masked, credentials only as keyed references, no raw IP. Work is bounded by a per-source

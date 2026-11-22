@@ -79,7 +79,7 @@ final class SsrfDecoy implements SsrfDecision
         $this->routes = new SsrfRoutes();
         $this->principals = new DecoyPrincipalResolver($this->c);
         $this->pages = new SsrfPages($this->c->pages, $this->c->persona->company);
-        $this->fetch = new FakeFetch(new NodeAnswers($net, $this->c->persona->company));
+        $this->fetch = new FakeFetch(new NodeAnswers($net, $this->c->persona->company), $this->sk->key('rid'));
         $this->ids = new SsrfIds($sk);
         $this->headerSlug = ucfirst((string) preg_replace('/[^A-Za-z0-9-]/', '', $this->c->persona->slug));
     }
@@ -779,8 +779,15 @@ final class SsrfDecoy implements SsrfDecision
             return [$this->notFound($json), null, false];
         }
         $im = $s->d['i'][$pos];
-        if ((int) $im['r'] >= SsrfState::MAX_RETRIES || $this->importResult($im, $now)->state !== 'failed') {
-            return $this->invalid($json, ['import' => 'retries_used'], MintPlan::html(422, $this->pages->error('Retry not available', SsrfForms::message('retries_used'), '/settings/imports/' . $id)));
+        // A retry the page could not have offered says why, in the page's own terms.
+        $why = match (true) {
+            (int) $im['r'] >= SsrfState::MAX_RETRIES => 'retries_used',
+            $this->importResult($im, $now)->state === 'failed' => null,
+            (int) $im['r'] > 0 => 'retry_queued',
+            default => 'import_running',
+        };
+        if ($why !== null) {
+            return $this->invalid($json, ['import' => $why], MintPlan::html(422, $this->pages->error('Retry not available', SsrfForms::message($why), '/settings/imports/' . $id)));
         }
         if (!$s->rateAllows($now)) {
             return [$this->rateLimited($json), null, false];

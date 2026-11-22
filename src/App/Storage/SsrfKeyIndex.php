@@ -11,7 +11,7 @@ use PDOException;
 use Throwable;
 
 /**
- * The served-key index, in its own SQLite file (ssrf-keyidx.sqlite) so building it never holds the
+ * The served-key index, in its own SQLite file (ssrf-decoy-keyidx.sqlite) so building it never holds the
  * decoy state store's write lock.
  *
  * Each row is a 12-byte keyed hash of one fact (a key or a settings.py host) under a version tag; no

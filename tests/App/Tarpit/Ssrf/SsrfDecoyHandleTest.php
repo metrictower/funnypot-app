@@ -6,6 +6,8 @@ namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
+use Funnypot\Core\Support\PersonaIdentity;
+use Funnypot\Tests\App\Identity\IdentityTestSupport;
 use Funnypot\Tests\App\Tarpit\Mint\MintHarness;
 use PHPUnit\Framework\TestCase;
 
@@ -479,6 +481,55 @@ final class SsrfDecoyHandleTest extends TestCase
         self::assertStringContainsString('ping event', $text, 'with the original event');
     }
 
+    public function test_the_sts_gateway_answers_with_its_own_request_ids(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $pat = $h->mint(['read:user', 'webhooks:write', 'imports:write']);
+        $api = static function (string $m, string $path, ?array $b = null) use ($h, $pat): array {
+            $r = $h->request($m, $path, '', $b === null ? null : (string) json_encode($b, JSON_UNESCAPED_SLASHES), ['Authorization' => 'Bearer ' . $pat, 'Content-Type' => 'application/json']);
+
+            return (array) json_decode($r['body'], true);
+        };
+        $p = PersonaIdentity::fromSeed(IdentityTestSupport::httpIdentity()->personaSeed());
+        $region = (string) $p->field('cloud.aws.region');
+        $sts = 'http://sts.' . $region . '.internal/?Action=GetCallerIdentity&X-Amz-Credential=' . $p->field('cloud.aws.accessKeyId')
+            . '%2F20251122%2F' . $region . '%2Fsts%2Faws4_request&X-Amz-Signature=' . str_repeat('ab', 32);
+        $rid = static function (string $body): string {
+            self::assertSame(1, preg_match('~<RequestId>([^<]*)</RequestId>~', $body, $m), substr($body, 0, 200));
+
+            return $m[1];
+        };
+
+        $imp = $api('POST', '/api/v2/user/imports', ['kind' => 'orders_json', 'source_url' => $sts])['id'];
+        $h->now += 6;
+        $excerpt = (string) $api('GET', '/api/v2/user/imports/' . $imp)['excerpt'];
+        $first = $rid($excerpt);
+        $hook = $api('POST', '/api/v2/user/hooks', ['content_type' => 'json', 'events' => ['token.created'], 'active' => true, 'url' => $sts])['id'];
+        $d1 = $api('POST', '/api/v2/user/hooks/' . $hook . '/pings', [])['id'];
+        $h->now += 4;
+        $body1 = (string) $api('GET', '/api/v2/user/hooks/' . $hook . '/deliveries/' . $d1)['response']['body'];
+        $d2 = $api('POST', '/api/v2/user/hooks/' . $hook . '/pings', [])['id'];
+        $h->now += 4;
+        $body2 = (string) $api('GET', '/api/v2/user/hooks/' . $hook . '/deliveries/' . $d2)['response']['body'];
+        self::assertSame($rid($body1), $rid((string) $api('GET', '/api/v2/user/hooks/' . $hook . '/deliveries/' . $d1)['response']['body']), 'a re-view shows the same id');
+        $page = $h->get('/settings/imports/' . $imp);
+        self::assertSame(303, $h->post('/settings/imports/' . $imp . '/retry', ['csrf_token' => MintHarness::csrf($page['body'])])['status']);
+        $h->now += 6;
+        $retried = (string) $api('GET', '/api/v2/user/imports/' . $imp)['excerpt'];
+
+        $ids = [$first, $rid($body1), $rid($body2), $rid($retried)];
+        self::assertCount(4, array_unique($ids), 'each attempt gets its own id');
+        foreach ($ids as $id) {
+            self::assertMatchesRegularExpression(FakeFetchTest::UUID4, $id, 'STS request ids are version-4 UUIDs');
+        }
+        foreach ([$excerpt, $body1, $body2, $retried] as $answer) {
+            foreach ([$imp, $hook, $d1, $d2] as $platformId) {
+                self::assertStringNotContainsString($platformId, $answer, 'no fake-network answer carries a platform id');
+            }
+        }
+    }
+
     public function test_a_signature_after_many_pairs_is_masked_and_masking_never_breaks_a_url(): void
     {
         $h = $this->h();
@@ -532,16 +583,95 @@ final class SsrfDecoyHandleTest extends TestCase
     {
         $h = $this->h();
         $h->join();
-        $id = self::createHook($h, 'http://172.16.0.5/', ['secret' => 'S3cret.value']);
+        foreach (['json', 'form'] as $ct) {
+            $id = self::createHook($h, 'http://172.16.0.5/', ['secret' => 'S3cret.value', 'content_type' => $ct]);
+            self::ping($h, $id);
+            [$did] = self::deliveries($h, $id);
+            $page = $h->get('/settings/webhooks/' . $id . '/deliveries/' . $did)['body'];
+            preg_match('~<h2>Request</h2><pre class=mono>(.*?)</pre>~s', $page, $m);
+            $req = html_entity_decode($m[1], ENT_QUOTES);
+            [$head, $body] = explode("\n\n", $req, 2);
+            preg_match('/-Signature-256: sha256=([a-f0-9]{64})/', $head, $sig);
+            self::assertSame(hash_hmac('sha256', $body, 'S3cret.value'), $sig[1], "{$ct}: the signature is over the body as sent");
+            if ($ct === 'json') {
+                self::assertSame($did, json_decode($body, true)['delivery']);
+            } else {
+                self::assertStringStartsWith('payload=', $body, 'a form hook sends the payload as a form field');
+                parse_str($body, $form);
+                self::assertSame($did, json_decode((string) $form['payload'], true)['delivery']);
+            }
+        }
+    }
+
+    public function test_pages_escape_what_the_network_returned_and_link_only_to_themselves(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $id = self::createHook($h, 'http://127.1:8080/login?next=%2Fadmin');
         self::ping($h, $id);
+        $h->now += 4;
         [$did] = self::deliveries($h, $id);
-        $page = $h->get('/settings/webhooks/' . $id . '/deliveries/' . $did)['body'];
-        preg_match('~<h2>Request</h2><pre class=mono>(.*?)</pre>~s', $page, $m);
-        $req = html_entity_decode($m[1], ENT_QUOTES);
-        [$head, $body] = explode("\n\n", $req, 2);
-        preg_match('/-Signature-256: sha256=([a-f0-9]{64})/', $head, $sig);
-        self::assertSame(hash_hmac('sha256', $body, 'S3cret.value'), $sig[1]);
-        self::assertSame($did, json_decode($body, true)['delivery']);
+        $dl = $h->get('/settings/webhooks/' . $id . '/deliveries/' . $did);
+        self::assertSame('no-store', $dl['plan']?->header('Cache-Control'), 'a delivery page is never cached');
+        self::assertStringContainsString('&lt;h1&gt;Forbidden&lt;/h1&gt;', $dl['body'], 'the response body is shown as escaped text');
+        self::assertStringNotContainsString('<body><h1>Forbidden</h1>', $dl['body']);
+        $imp = (string) self::import($h, 'orders_csv', 'http://127.1:8080/orders.csv')['plan']?->header('Location');
+        $h->now += 6;
+        $pages = ['/settings/webhooks', '/settings/webhooks/' . $id, '/settings/webhooks/' . $id . '/deliveries/' . $did, '/settings/imports', $imp, '/settings/storage'];
+        self::assertStringContainsString('http://127.1:8080/login?next=%2Fadmin', self::text($h->get('/settings/webhooks')['body']), 'the list shows the stored URL');
+        foreach ($pages as $path) {
+            preg_match_all("~<[a-z][^<>]*\\s(?:href|action|src)=(['\"]?)([^'\" >]*)\\1~i", $h->get($path)['body'], $m);
+            self::assertNotEmpty($m[2], $path);
+            foreach ($m[2] as $target) {
+                self::assertStringStartsWith('/', $target, "{$path} links only within the site");
+                self::assertStringNotContainsString('//', $target, $path);
+            }
+        }
+    }
+
+    public function test_an_import_excerpt_is_at_most_512_bytes(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $g = $h->ssrf->network()->generated();
+        $lengths = [];
+        for ($i = 1, $n = 0; $n < 4 && $i < 6000; $i++) {
+            if ($g->node($i)?->kind !== 'http_api') {
+                continue;
+            }
+            $n++;
+            $loc = (string) self::import($h, 'orders_json', 'http://' . $g->name($i) . ':' . $g->node($i)->ports[0] . '/')['plan']?->header('Location');
+            $h->now += 6;
+            self::assertSame(1, preg_match('~<h2>Response excerpt</h2><pre class=mono>(.*?)</pre>~s', $h->get($loc)['body'], $m), $loc);
+            $lengths[] = strlen(html_entity_decode($m[1], ENT_QUOTES));
+        }
+        self::assertSame(512, max($lengths), 'a service listing longer than the excerpt is cut at 512 bytes');
+        self::assertLessThan(512, min($lengths), 'and a shorter one is shown whole');
+    }
+
+    public function test_ui_routes_need_a_session_and_exact_routes_stay_served(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $pat = $h->mint(['read:user', 'webhooks:write', 'imports:write', 'storage:write']);
+        foreach (['/settings/webhooks', '/settings/imports', '/settings/storage', '/settings/webhooks/new'] as $path) {
+            $r = $h->request('GET', $path, '', null, ['Authorization' => 'Bearer ' . $pat], MintHarness::IP, 'bearer-only');
+            self::assertSame(303, $r['status'], "{$path} with a bearer and no session");
+            self::assertSame('/', $r['plan']?->header('Location'), $path);
+        }
+        $narrow = $h->mint(['read:user'], 'narrow');
+        $cases = [
+            ['DELETE', '/settings/webhooks', [], 405], ['PUT', '/api/v2/user/imports', [], 405], ['PATCH', '/settings/storage', [], 405],
+            ['GET', '/api/v2/user/hooks', ['Authorization' => 'Bearer ' . $narrow], 403],
+        ];
+        foreach ($cases as [$method, $path, $headers, $status]) {
+            $r = $h->request($method, $path, '', null, $headers, MintHarness::IP, 'anon');
+            self::assertSame($status, $r['status'], "{$method} {$path}");
+            self::assertTrue($r['main']['served'], "{$method} {$path}: an exact route's {$status} stays served");
+        }
+        $anon = $h->request('GET', '/api/v2/user/hooks', '', null, [], MintHarness::IP, 'anon');
+        self::assertSame(401, $anon['status']);
+        self::assertFalse($anon['main']['served'], 'an anonymous API call is unserved, as on the token-mint API');
     }
 
     // --- imports -----------------------------------------------------------------------------------
@@ -627,7 +757,34 @@ final class SsrfDecoyHandleTest extends TestCase
         $page = $h->get($loc);
         self::assertStringNotContainsString('Retry import', $page['body'], 'no retry form past the cap');
         self::assertStringContainsString('retries 5 of 5', self::text($page['body']));
-        self::assertSame(422, $h->post($loc . '/retry', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body'])])['status']);
+        $other = (string) self::import($h, 'orders_csv', 'http://nosuch.internal/b.csv')['plan']?->header('Location');
+        $capped = $h->post($loc . '/retry', ['csrf_token' => MintHarness::csrf($h->get($other)['body'])]);
+        self::assertSame(422, $capped['status']);
+        self::assertStringContainsString('This import has been retried the most times allowed.', self::text($capped['body']));
+    }
+
+    public function test_a_retry_the_page_does_not_offer_says_why_in_the_page_s_terms(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $counter = static fn (string $loc): string => preg_match('~retries \d+ of \d+~', self::text($h->get($loc)['body']), $m) === 1 ? $m[0] : '?';
+        $slow = (string) self::import($h, 'orders_csv', 'http://172.16.9.9/b.csv')['plan']?->header('Location');
+        $h->now += 11;
+        $token = MintHarness::csrf($h->get($slow)['body']);
+        self::assertSame(303, $h->post($slow . '/retry', ['csrf_token' => $token])['status']);
+        $again = $h->post($slow . '/retry', ['csrf_token' => $token]);
+        self::assertSame(422, $again['status'], 'a double submit changes nothing');
+        self::assertStringContainsString('A retry of this import is already queued.', self::text($again['body']));
+        self::assertSame('retries 1 of 5', $counter($slow));
+
+        $failed = (string) self::import($h, 'orders_csv', 'http://nosuch.internal/a.csv')['plan']?->header('Location');
+        $other = MintHarness::csrf($h->get($failed)['body']);
+        $mirror = (string) self::import($h, 'mirror', 'https://github.com/torvalds/linux')['plan']?->header('Location');
+        $waiting = $h->post($mirror . '/retry', ['csrf_token' => $other]);
+        self::assertSame(422, $waiting['status']);
+        self::assertStringContainsString('This import is still running. Retry it once it has failed.', self::text($waiting['body']));
+        self::assertSame('retries 0 of 5', $counter($mirror));
+        self::assertStringNotContainsString('retried the most times allowed', self::text($waiting['body'] . $again['body']));
     }
 
     // --- export destination ------------------------------------------------------------------------

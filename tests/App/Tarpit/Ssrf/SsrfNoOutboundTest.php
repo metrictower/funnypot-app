@@ -15,16 +15,17 @@ require_once dirname(__DIR__, 4) . '/demo/lib/geo.php';
  * The SSRF decoy never makes an outbound request or a DNS lookup. There is no fetch code, and four
  * checks with stated reach keep it that way:
  *
- * (1) a static allowlist over the SSRF namespaces: only listed pure built-ins, own or listed classes,
- *     listed static calls, no parent class outside the namespace, no anonymous class, no indirect call,
- *     no include, eval, output, superglobal, clock or randomness; one positive-control fixture per rule;
- * (2) the bench in a child PHP with every network-capable function disabled by exact name (PHP's
- *     disable_functions takes no wildcards, so prefixes are expanded here and the child checks each name
- *     is gone), URL wrappers off and a dead sendmail; it cannot see quiet stat calls on URLs, and the
- *     planted control documents that blind spot;
- * (3) recording stream wrappers around the same journey in this process, which do see quiet stats;
- * (4) the edited-file pin: every file outside the namespaces that this work edits may gain no call,
- *     class, static call or parent beyond its base set and the listed DELTA.
+ * (1) a static allowlist over the SSRF namespaces and the build stamp: only listed pure built-ins (and
+ *     the build stamp's own local-file reads), own or listed classes, listed static calls, no parent
+ *     class outside the namespace, no anonymous class, no dynamic call of any shape, no include, eval,
+ *     output, superglobal, clock or randomness; one positive-control fixture per rule;
+ * (2) the bench in a child PHP started with -n that disables every function of every loaded extension
+ *     outside PURE_EXTENSIONS plus the network-capable functions of those (the child checks each name is
+ *     gone and that no other extension loaded), URL wrappers off and a dead sendmail; it cannot see quiet
+ *     stat calls on URLs, and the planted control documents that blind spot;
+ * (3) recording stream wrappers around the same journey in this process, which see every URL operation;
+ * (4) the edited-file pin: every file outside the namespaces that this work edits or adds may gain no
+ *     call, class, static call or parent beyond its base set and the listed DELTA.
  */
 final class SsrfNoOutboundTest extends TestCase
 {
@@ -81,6 +82,9 @@ final class SsrfNoOutboundTest extends TestCase
     /** The one network-capable class client the namespace may reach, and only from the stores. */
     private const STORE_ONLY = ['Funnypot\\App\\Storage\\Sqlite::open' => ['SsrfStore.php', 'SsrfKeyIndex.php']];
 
+    /** The build stamp reads fixed files under the app root; no other scanned file may read a file. */
+    private const FILE_ONLY = ['BuildStamp.php' => ['is_file', 'file_get_contents', 'hash_file']];
+
     /**
      * Extensions the child keeps whole: their functions only transform their arguments or touch local
      * files and the local SQLite store. Every function of every other loaded extension is disabled, and
@@ -108,17 +112,18 @@ final class SsrfNoOutboundTest extends TestCase
         return dirname(__DIR__, 4);
     }
 
-    /** @return array{functions:list<string>,classes:list<string>,static:list<string>,parents:list<string>,own:list<string>,store_only:array<string,list<string>>} */
+    /** @return array{functions:list<string>,classes:list<string>,static:list<string>,parents:list<string>,own:list<string>,store_only:array<string,list<string>>,file_only:array<string,list<string>>} */
     private static function allow(): array
     {
         return ['functions' => self::FUNCTIONS, 'classes' => self::CLASSES, 'static' => self::STATIC, 'parents' => [],
-            'own' => ['Funnypot\\App\\Tarpit\\Ssrf\\', 'Funnypot\\App\\Storage\\Ssrf'], 'store_only' => self::STORE_ONLY];
+            'own' => ['Funnypot\\App\\Tarpit\\Ssrf\\', 'Funnypot\\App\\Storage\\Ssrf'], 'store_only' => self::STORE_ONLY, 'file_only' => self::FILE_ONLY];
     }
 
     /** @return list<string> */
     private static function scanned(): array
     {
-        return [...glob(self::root() . '/src/App/Tarpit/Ssrf/*.php'), ...glob(self::root() . '/src/App/Storage/Ssrf*.php'), self::root() . '/src/App/Tarpit/Mint/SurfaceExtension.php'];
+        return [...glob(self::root() . '/src/App/Tarpit/Ssrf/*.php'), ...glob(self::root() . '/src/App/Storage/Ssrf*.php'), self::root() . '/src/App/Tarpit/Mint/SurfaceExtension.php',
+            self::root() . '/src/App/Config/BuildStamp.php'];
     }
 
     public function test_namespace_calls_only_allowlisted_names(): void
@@ -136,6 +141,8 @@ final class SsrfNoOutboundTest extends TestCase
         self::assertGreaterThanOrEqual(35, count($files), 'every file of the namespaces was scanned');
         self::assertGreaterThan(20000, $tokens);
         self::assertSame([], $all);
+        $stamp = (string) file_get_contents(self::root() . '/src/App/Config/BuildStamp.php');
+        self::assertContains('function: file_get_contents @31', CallScan::violations($stamp, 'Elsewhere.php', self::allow()), 'positive control: the file reads are allowed in the build stamp only');
     }
 
     public function test_each_forbidden_class_is_flagged(): void

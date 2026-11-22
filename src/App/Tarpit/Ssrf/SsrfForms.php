@@ -44,6 +44,8 @@ final class SsrfForms
         'hooks_full' => 'You can have up to 5 webhooks. Delete one to add another.',
         'delivery_missing' => 'Choose a delivery to redeliver.',
         'retries_used' => 'This import has been retried the most times allowed.',
+        'retry_queued' => 'A retry of this import is already queued.',
+        'import_running' => 'This import is still running. Retry it once it has failed.',
         'storage_missing' => 'Save an export destination first.',
     ];
 

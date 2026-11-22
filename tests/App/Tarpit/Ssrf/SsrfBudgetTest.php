@@ -104,6 +104,25 @@ final class SsrfBudgetTest extends TestCase
         }
     }
 
+    public function test_the_ten_minute_rate_covers_imports(): void
+    {
+        $h = new MintHarness(true, ['ssrf' => []]);
+        try {
+            $h->join();
+            $token = MintHarness::csrf($h->get('/settings/imports/new')['body']);
+            $statuses = [];
+            for ($i = 0; $i < SsrfState::RATE_MAX + 2; $i++) {
+                $statuses[] = $h->post('/settings/imports', ['csrf_token' => $token, 'kind' => 'orders_csv', 'source_url' => 'http://172.16.0.5/o' . $i . '.csv'])['status'];
+            }
+            self::assertSame(array_fill(0, SsrfState::RATE_MAX, 303), array_slice($statuses, 0, SsrfState::RATE_MAX));
+            self::assertSame([429, 429], array_slice($statuses, SsrfState::RATE_MAX), 'an import is a send like a ping');
+            $h->now += SsrfState::RATE_WINDOW_S + 1;
+            self::assertSame(303, $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body']), 'kind' => 'orders_csv', 'source_url' => 'http://172.16.0.5/late.csv'])['status']);
+        } finally {
+            $h->cleanup();
+        }
+    }
+
     public function test_units_are_charged_in_the_state_transaction(): void
     {
         $faults = new class () {

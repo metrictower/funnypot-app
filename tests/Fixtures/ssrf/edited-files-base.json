@@ -513,6 +513,24 @@
                 "Funnypot\\Core\\Support\\VisualPersona::fromseed"
             ],
             "extends": []
+        },
+        "src/App/Config/BuildStamp.php": {
+            "calls": [
+                "file_get_contents",
+                "hash_file",
+                "hash_final",
+                "hash_init",
+                "hash_update",
+                "is_file",
+                "preg_match",
+                "trim"
+            ],
+            "new": [],
+            "static": [],
+            "extends": []
         }
+    },
+    "added": {
+        "src/App/Config/BuildStamp.php": "dfcb33c"
     }
 }

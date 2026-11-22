@@ -176,7 +176,9 @@ final class CallScan
     /**
      * The allowlist's verdict on one file: each broken rule as "rule-id: detail @line".
      *
-     * @param array{functions:list<string>,classes:list<string>,static:list<string>,parents:list<string>,own:list<string>,store_only:array<string,list<string>>} $allow
+     * $allow['file_only'] names local-file functions one file (by basename) may call and no other.
+     *
+     * @param array{functions:list<string>,classes:list<string>,static:list<string>,parents:list<string>,own:list<string>,store_only:array<string,list<string>>,file_only?:array<string,list<string>>} $allow
      * @return list<string>
      */
     public static function violations(string $code, string $file, array $allow): array
@@ -198,6 +200,7 @@ final class CallScan
         $statics = array_flip(array_map('strtolower', $allow['static']));
         $parents = array_flip(array_map('strtolower', $allow['parents']));
         $base = basename($file);
+        $fileOnly = array_flip($allow['file_only'][$base] ?? []);
         $n = count($toks);
         foreach (token_get_all($code, TOKEN_PARSE) as $raw) {
             if ($raw === '`') {
@@ -286,7 +289,7 @@ final class CallScan
             }
             if (in_array($id, self::NAME_TOKENS, true) && $next === '(' && !in_array($prev, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION, T_NEW, T_CONST, T_FN], true)) {
                 $fn = self::resolveFunction($text, $ctx);
-                if (!isset($functions[$fn])) {
+                if (!isset($functions[$fn]) && !isset($fileOnly[$fn])) {
                     $out[] = 'function: ' . $fn . $at;
                 } elseif ($fn === 'error_log' && self::argCount($toks, $i + 1) !== 1) {
                     $out[] = 'error_log_type' . $at;

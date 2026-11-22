@@ -44,7 +44,7 @@ final class SsrfCorpus
         $net = Network::build(new SsrfKeys($key), $personaSeed, $cap, $index, $pointers, $extra);
         $answers = new NodeAnswers($net, 'Acme');
 
-        return ['net' => $net, 'index' => $index, 'answers' => $answers, 'fetch' => new FakeFetch($answers)];
+        return ['net' => $net, 'index' => $index, 'answers' => $answers, 'fetch' => new FakeFetch($answers, str_repeat("\x52", 32))];
     }
 
     public static function engine(): Honeypot

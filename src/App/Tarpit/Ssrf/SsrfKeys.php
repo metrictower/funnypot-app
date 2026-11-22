@@ -11,7 +11,7 @@ namespace Funnypot\App\Tarpit\Ssrf;
  */
 final class SsrfKeys
 {
-    public const PURPOSES = ['owner', 'ledger', 'ids', 'sig', 'netname', 'subnet', 'keyidx'];
+    public const PURPOSES = ['owner', 'ledger', 'ids', 'sig', 'netname', 'subnet', 'keyidx', 'rid'];
 
     /** @var array<string,string> */
     private array $keys = [];
