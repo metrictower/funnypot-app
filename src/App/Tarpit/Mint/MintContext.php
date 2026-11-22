@@ -156,7 +156,11 @@ final class MintContext
         $s->d['a'][$pos]['t'] = $now;
     }
 
-    /** Start a session for an account; returns the cookie value. Keeps the newest four sids. */
+    /**
+     * Start a session for an account; returns the cookie value. Keeps the newest four sids. The cookie
+     * rides only in the Cookie header, which core's attack rules never scan, so it needs only the
+     * fingerprint check; its first characters are fixed per source and could never be re-rolled anyway.
+     */
     public function startSession(MintState $s, int $pos, string $kref, int $now): string
     {
         $a = &$s->d['a'][$pos];
@@ -169,6 +173,9 @@ final class MintContext
             $cookie = $this->sessions->issue($kref, ((int) $a['i']) % 256, $sid, $now);
             if (InertSecret::isClean('"' . $cookie . '"')) {
                 break;
+            }
+            if ($try === 15) {
+                throw new \LogicException('no clean session cookie within the tries');
             }
         }
         $a['s'][] = ['id' => bin2hex($sid), 'c' => $now, 'l' => $now];
@@ -191,15 +198,10 @@ final class MintContext
 
     // --- CSRF ------------------------------------------------------------------------------------
 
-    /** A fresh form token, nudged by a second until it is fingerprint-clean. */
+    /** A fresh form token, nudged back a second at a time until it is fit to issue. */
     public function csrfToken(string $sid, string $formId, int $epoch, int $now): string
     {
-        $t = $this->csrf->issue($sid, $formId, $epoch, $now);
-        for ($i = 1; $i < 8 && !InertSecret::isClean("'" . $t . "'"); $i++) {
-            $t = $this->csrf->issue($sid, $formId, $epoch, $now - $i);
-        }
-
-        return $t;
+        return IssuedValue::first(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i));
     }
 
     /** The sid a form is bound to: the session's, or the source reference for signed-out forms. */
@@ -230,8 +232,8 @@ final class MintContext
     }
 
     /**
-     * Add a token entry (pat or oat) and return [position, string]. The variant is the first that
-     * renders fingerprint-clean, and is stored so the string re-derives exactly.
+     * Add a token entry (pat or oat) and return [position, string]. The variant is the first whose
+     * string is fit to issue, and is stored so the string re-derives exactly.
      *
      * @param list<string> $scopes
      * @return array{0:int,1:string}
@@ -246,14 +248,11 @@ final class MintContext
         ];
         $s->d['a'][$pos]['k'][] = $entry;
         $tpos = count($s->d['a'][$pos]['k']) - 1;
-        $token = '';
-        for ($v = 0; $v < 64; $v++) {
+        $token = IssuedValue::first(64, function (int $v) use ($s, $pos, $tpos, $kref): string {
             $s->d['a'][$pos]['k'][$tpos]['v'] = $v;
-            $token = $this->tokenString($s, $pos, $tpos, $kref);
-            if (InertSecret::isClean('"' . $token . '"')) {
-                break;
-            }
-        }
+
+            return $this->tokenString($s, $pos, $tpos, $kref);
+        });
 
         return [$tpos, $token];
     }
@@ -261,19 +260,28 @@ final class MintContext
     /** A 12-hex public id that always holds a digit, so it is always an `{id}` the routes own. */
     public function publicId(string $label): string
     {
-        for ($v = 0; $v < 64; $v++) {
-            $id = $this->keys->hexId($label . ($v === 0 ? '' : '|v' . $v), 12);
-            if (preg_match('/[0-9]/', $id) === 1) {
-                return $id;
-            }
-        }
+        return IssuedValue::first(64, function (int $v) use ($label): ?string {
+            $id = $this->keys->hexId($label . self::step($v), 12);
 
-        return '0' . substr($id, 1);
+            return preg_match('/[0-9]/', $id) === 1 ? $id : null;
+        });
+    }
+
+    /** The derivation suffix for re-roll step $v; step 0 adds nothing, so a first pick keeps its value. */
+    private static function step(int $v): string
+    {
+        return $v === 0 ? '' : '|v' . $v;
+    }
+
+    /** A hex value fit to issue, re-rolled over the label's steps. */
+    private function hexValue(string $label, int $chars): string
+    {
+        return IssuedValue::first(64, fn (int $v): string => $this->keys->hexId($label . self::step($v), $chars));
     }
 
     public function clientId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
     {
-        return $this->keys->hexId('client|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 20);
+        return $this->hexValue('client|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 20);
     }
 
     public function appPublicId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
@@ -283,12 +291,40 @@ final class MintContext
 
     public function clientSecret(string $kref, MintState $s, int $acctSerial, int $appSerial, int $secretN): string
     {
-        return substr(hash_hmac('sha256', 'clientsecret|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial . '|' . $secretN, $this->keys->key('token')), 0, 40);
+        $label = 'clientsecret|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial . '|' . $secretN;
+
+        return IssuedValue::first(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 40));
     }
 
     public function oauthCode(string $kref, MintState $s, int $acctSerial, int $n): string
     {
-        return substr(hash_hmac('sha256', 'code|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $n, $this->keys->key('token')), 0, 20);
+        $label = 'code|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $n;
+
+        return IssuedValue::first(64, fn (int $v): string => substr(hash_hmac('sha256', $label . self::step($v), $this->keys->key('token')), 0, 20));
+    }
+
+    /** A refresh token fit to issue, re-rolled by stepping the variant in its binding. */
+    public function refreshToken(string $kref, MintState $s, int $pos, int $rn): string
+    {
+        $a = $s->d['a'][$pos];
+
+        return IssuedValue::first(64, fn (int $v): string => $this->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v));
+    }
+
+    /** A sign-in JWT fit to issue; only its `jti` steps. */
+    public function loginJwt(string $k8, MintState $s, int $pos, int $jn, int $now): string
+    {
+        $a = $s->d['a'][$pos];
+        $serial = (int) $a['i'];
+
+        return IssuedValue::first(16, fn (int $v): string => JwtCodec::encode([
+            'sub' => (string) $a['u'],
+            'sid' => DecoyPrincipalResolver::sessionClaim($k8, $s->epoch(), $serial),
+            'scope' => 'read:user',
+            'iat' => $now,
+            'exp' => $now + JwtCodec::LIFETIME_S,
+            'jti' => $this->keys->hexId('jwt|' . $k8 . '|' . $serial . '|' . $jn . '|' . $v, 16),
+        ], $this->keys->key('jwt')));
     }
 
     public function totpSecret(string $kref, MintState $s, int $acctSerial, int $enrol): string
@@ -296,21 +332,17 @@ final class MintContext
         return substr(hash_hmac('sha256', 'totp|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $enrol, $this->keys->key('totp'), true), 0, 20);
     }
 
-    /** @return list<string> ten single-use recovery codes, each fingerprint-clean */
+    /** @return list<string> ten single-use recovery codes, each fit to issue */
     public function recoveryCodes(string $kref, MintState $s, int $acctSerial, int $enrol): array
     {
         $out = [];
         for ($i = 0; $i < MintState::RECOVERY_CODES; $i++) {
-            $code = '';
-            for ($v = 0; $v < 16; $v++) {
+            $out[] = IssuedValue::first(16, function (int $v) use ($kref, $s, $acctSerial, $enrol, $i): string {
                 $raw = hash_hmac('sha256', 'recovery|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $enrol . '|' . $i . '|' . $v, $this->keys->key('totp'), true);
                 $b32 = strtolower(Totp::base32(substr($raw, 0, 7)));
-                $code = substr($b32, 0, 5) . '-' . substr($b32, 5, 5);
-                if (InertSecret::isClean('"' . $code . '"')) {
-                    break;
-                }
-            }
-            $out[] = $code;
+
+                return substr($b32, 0, 5) . '-' . substr($b32, 5, 5);
+            });
         }
 
         return $out;
@@ -318,7 +350,7 @@ final class MintContext
 
     public function requestId(string $kref, MintState $s, int $n): string
     {
-        return $this->keys->hexId('req|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $n, 12);
+        return $this->hexValue('req|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $n, 12);
     }
 
     /** Numeric account id, in a range that never reads as a rule number. */

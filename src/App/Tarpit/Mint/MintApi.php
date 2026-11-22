@@ -294,22 +294,8 @@ final class MintApi
             if ($s === null || $pos === null || !hash_equals((string) $s->d['a'][$pos]['pw'], $this->c->pwHash($kref, $pass))) {
                 return MintContext::out(null, false, $units, $bad);
             }
-            $serial = (int) $s->d['a'][$pos]['i'];
             $jn = (int) ($s->d['a'][$pos]['jn'] ?? 0);
-            $jwt = '';
-            for ($v = 0; $v < 16; $v++) {
-                $jwt = JwtCodec::encode([
-                    'sub' => (string) $s->d['a'][$pos]['u'],
-                    'sid' => DecoyPrincipalResolver::sessionClaim($k8, $s->epoch(), $serial),
-                    'scope' => 'read:user',
-                    'iat' => $now,
-                    'exp' => $now + JwtCodec::LIFETIME_S,
-                    'jti' => $this->c->keys->hexId('jwt|' . $k8 . '|' . $serial . '|' . $jn . '|' . $v, 16),
-                ], $this->c->keys->key('jwt'));
-                if (\Funnypot\App\Tarpit\InertSecret::isClean('"' . $jwt . '"')) {
-                    break;
-                }
-            }
+            $jwt = $this->c->loginJwt($k8, $s, $pos, $jn, $now);
             $s->d['a'][$pos]['jn'] = $jn + 1;
             $s->d['a'][$pos]['t'] = $now;
 

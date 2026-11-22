@@ -213,6 +213,16 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   error render on the surface's own pages. Nothing from a GET query or a path is ever echoed in a GET
   answer or a header; the authorize request's `state` is held server-side and shown only, escaped, in the
   consent POST's answer.
+- **Issued values stay quiet.** A random value the surface issues and expects back (form tokens, access
+  and refresh tokens, JWTs, OAuth client ids, secrets and codes, recovery codes, request and public ids)
+  could by chance hold a word core's attack rules read, such as a form token ending in `env`, and the
+  visitor's own credential would then be logged and reported as an attack. Each is re-rolled, by stepping
+  a counter in its derivation, until it holds no such word at the place it is read (`IssuedValue`: a
+  value's start, after a `.`, its end, or anywhere). About one form token in twenty thousand is refused,
+  and a value that cannot be issued within the capped tries is a fault answered as today, never a
+  flagged value. The session cookie travels only in the Cookie header, which those rules never scan.
+  Tests check the word lists against the installed core and push a fixed-seed sample of every kind
+  through the engine wherever it travels.
 - **State.** Its own `token-mint.sqlite` (`FUNNYPOT_TOKEN_MINT_DB`): one JSON row per source (a keyed
   hash of the IP, never the IP) plus single-use code and refresh tables. Every state-changing request
   decides and writes inside one `BEGIN IMMEDIATE` before any byte is sent; any store error (busy, I/O, a

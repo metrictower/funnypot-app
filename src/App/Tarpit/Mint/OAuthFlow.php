@@ -251,7 +251,7 @@ final class OAuthFlow
             [, $access] = $this->c->addToken($s, $pos, $kref, 'oat', '', $scopes, $now + self::ACCESS_TTL_S, (int) $app['n'], $now);
             $rn = (int) ($s->d['a'][$pos]['rn'] ?? 0);
             $s->d['a'][$pos]['rn'] = $rn + 1;
-            $refreshToken = $this->refreshToken($kref, $s, $pos, $rn);
+            $refreshToken = $this->c->refreshToken($kref, $s, $pos, $rn);
             $tx->insertRefresh($this->c->keys->secretHash($refreshToken), (int) $s->d['a'][$pos]['i'], (int) $app['n'], $scopes, $now + self::REFRESH_TTL_S);
             $plan = MintPlan::json(200, [
                 'access_token' => $access,
@@ -268,20 +268,6 @@ final class OAuthFlow
         }
 
         return MintPlan::json(429, ['message' => MintVocabulary::text('api_retry')])->with('Retry-After', '5')->attribute(['outcome' => 'store_failure']);
-    }
-
-    private function refreshToken(string $kref, MintState $s, int $pos, int $rn): string
-    {
-        $a = $s->d['a'][$pos];
-        $t = '';
-        for ($v = 0; $v < 64; $v++) {
-            $t = $this->c->tokens->encode('ort', substr($kref, 0, 8), ((int) $a['i']) % 256, $rn % 256, $s->epoch() . '|' . $a['i'] . '|r' . $rn . '|' . $v);
-            if (\Funnypot\App\Tarpit\InertSecret::isClean('"' . $t . '"')) {
-                break;
-            }
-        }
-
-        return $t;
     }
 
     // --- organisation SSO ------------------------------------------------------------------------
