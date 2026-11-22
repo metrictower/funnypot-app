@@ -200,6 +200,10 @@ final class ConfigRegistry
             // --- Token-mint account surface. Opt-in AND needs the tarpit master switch + public mode. tokenMintDbPath is env-only (a path). ---
             'token_mint.enabled' => ['field' => 'tokenMintEnabled', 'env' => 'FUNNYPOT_TARPIT_TOKEN_MINT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
             'token_mint.friction' => ['field' => 'tokenMintFriction', 'env' => 'FUNNYPOT_TARPIT_TOKEN_FRICTION', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            // --- SSRF proof-bait on the token-mint account. Opt-in AND needs the token-mint surface wired. ssrfDbPath is env-only (a path). ---
+            'ssrf.enabled' => ['field' => 'ssrfEnabled', 'env' => 'FUNNYPOT_TARPIT_SSRF', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            'ssrf.denylist' => ['field' => 'ssrfDenylist', 'env' => 'FUNNYPOT_SSRF_DENYLIST', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
+            'ssrf.cred_pointers' => ['field' => 'ssrfCredPointers', 'env' => 'FUNNYPOT_SSRF_CRED_POINTERS', 'type' => 'bool', 'bool_style' => 'on_unless_0', 'default' => '1', 'group' => 'Tarpit', 'live' => false, 'secret' => false],
 
             // --- Engagement episode metrics (opt-in; restart-required: the store + caps are built at bootstrap). analyticsKey is env-only (a secret). ---
             'engagement.enabled' => ['field' => 'engagementEnabled', 'env' => 'FUNNYPOT_ENGAGEMENT', 'type' => 'bool', 'bool_style' => 'opt_in', 'default' => '0', 'group' => 'Engagement', 'live' => false, 'secret' => false],

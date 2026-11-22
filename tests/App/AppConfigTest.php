@@ -278,6 +278,35 @@ final class AppConfigTest extends TestCase
         self::assertFalse($c->tokenMintEnabled, 'an unrecognised value leaves the opt-in off');
     }
 
+    public function test_ssrf_defaults_off_with_denylist_and_pointers_on_and_its_own_store(): void
+    {
+        foreach (['FUNNYPOT_TARPIT_SSRF', 'FUNNYPOT_SSRF_DB', 'FUNNYPOT_SSRF_DENYLIST', 'FUNNYPOT_SSRF_CRED_POINTERS'] as $k) {
+            putenv($k);
+        }
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertFalse($c->ssrfEnabled, 'the SSRF decoy is opt-in');
+        self::assertTrue($c->ssrfDenylist);
+        self::assertTrue($c->ssrfCredPointers);
+        self::assertSame('/app/demo/storage/ssrf-decoy.sqlite', $c->ssrfDbPath);
+        putenv('FUNNYPOT_TARPIT_SSRF=1');
+        putenv('FUNNYPOT_SSRF_DB=/data/s.sqlite');
+        putenv('FUNNYPOT_SSRF_DENYLIST=0');
+        putenv('FUNNYPOT_SSRF_CRED_POINTERS=0');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertTrue($c->ssrfEnabled);
+        self::assertFalse($c->ssrfDenylist);
+        self::assertFalse($c->ssrfCredPointers);
+        self::assertSame('/data/s.sqlite', $c->ssrfDbPath);
+        putenv('FUNNYPOT_TARPIT_SSRF=maybe');
+        putenv('FUNNYPOT_SSRF_DENYLIST=no');
+        $c = AppConfig::fromEnv('/app/demo');
+        self::assertFalse($c->ssrfEnabled, 'an unrecognised value leaves the opt-in off');
+        self::assertTrue($c->ssrfDenylist, 'only an explicit 0 turns the denylist off');
+        foreach (['FUNNYPOT_TARPIT_SSRF', 'FUNNYPOT_SSRF_DB', 'FUNNYPOT_SSRF_DENYLIST', 'FUNNYPOT_SSRF_CRED_POINTERS'] as $k) {
+            putenv($k);
+        }
+    }
+
     public function test_config_carries_no_identity_field(): void
     {
         $c = AppConfig::fromEnv(sys_get_temp_dir());

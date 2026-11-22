@@ -55,6 +55,10 @@ use Funnypot\App\Storage\SqliteAttritionStore;
 use Funnypot\App\Storage\TokenMintStore;
 use Funnypot\App\Tarpit\Mint\AccountFront;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
+use Funnypot\App\Storage\SsrfStore;
+use Funnypot\App\Tarpit\Ssrf\SsrfDecoy;
+use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
+use Composer\InstalledVersions;
 use Funnypot\App\Tarpit\Attrition\AttritionArtifactRenderer;
 use Funnypot\App\Tarpit\Attrition\AttritionEntryIssuer;
 use Funnypot\App\Tarpit\Attrition\AttritionLimits;
@@ -400,8 +404,15 @@ if ($config->sleepDecoy) {
 // or a failed migration leaves it unwired and logs a fixed code, so its paths answer exactly as today.
 // It joins the honeypot at the serve seam only (detection, the row and the report are unchanged) and
 // the public "/" page through a nullable seam.
+//
+// FP-0816: the SSRF proof-bait (webhooks, imports, export destination) rides the token-mint account: opt-in
+// (FUNNYPOT_TARPIT_SSRF), only when the token-mint surface is wired, with its own ssrf-decoy.sqlite and a
+// key-index file beside it. A failed migration leaves it unwired with a fixed code. Wired, the token-mint
+// surface also gets the extension (scopes, nav, forms) and settings.py names the credential gateways
+// unless FUNNYPOT_SSRF_CRED_POINTERS=0.
 $tokenMint = null;
 $accountFront = null;
+$ssrf = null;
 if ($config->tarpitEnabled && $config->tokenMintEnabled && $config->mode === 'public') {
     $tokenMintKey = $identity->tokenMintKey();
     if ($tokenMintKey === null) {
@@ -409,8 +420,28 @@ if ($config->tarpitEnabled && $config->tokenMintEnabled && $config->mode === 'pu
     } else {
         $tokenMintStore = new TokenMintStore($config->tokenMintDbPath);
         if ($tokenMintStore->ready()) {
-            $tokenMint = TokenMintDecoy::build($tokenMintKey, $personaSeed, $tokenMintStore, $config->tokenMintFriction, $probeGate);
+            $ssrfStore = $config->ssrfEnabled ? new SsrfStore($config->ssrfDbPath) : null;
+            if ($ssrfStore !== null && !$ssrfStore->ready()) {
+                error_log('funnypot: ssrf decoy state migration failed; feature off (code=ssrf-decoy-migration-failed)');
+                $ssrfStore = null;
+            }
+            $tokenMint = TokenMintDecoy::build($tokenMintKey, $personaSeed, $tokenMintStore, $config->tokenMintFriction, $probeGate, null, null, $ssrfStore !== null ? SsrfRoutes::extension() : null);
             $accountFront = new AccountFront($tokenMint->context());
+            if ($ssrfStore !== null) {
+                $ssrf = SsrfDecoy::build(
+                    $tokenMint,
+                    $tokenMintKey,
+                    $personaSeed,
+                    $ssrfStore,
+                    (string) preg_replace('/\.sqlite\z/', '', $config->ssrfDbPath) . '-keyidx.sqlite',
+                    $identity->coreRenderSalt(),
+                    $identity->filesystemKey(),
+                    max(1, $config->tarpitBytesPerRespMb) * 1024 * 1024,
+                    $config->ssrfCredPointers,
+                    $config->ssrfDenylist,
+                    (string) InstalledVersions::getReference('metrictower/funnypot-core') . '|' . (string) (InstalledVersions::getRootPackage()['reference'] ?? ''),
+                );
+            }
         } else {
             error_log('funnypot: token-mint state migration failed; feature off (code=token-mint-migration-failed)');
         }
@@ -418,7 +449,7 @@ if ($config->tarpitEnabled && $config->tokenMintEnabled && $config->mode === 'pu
 }
 // The engine Config factory carries the identity's private render salt + visible persona material, so
 // the template tier resolves the SAME PersonaIdentity the app pages show (and the same X-Powered-By).
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $tokenMint);
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $tokenMint, null, $ssrf);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
@@ -539,7 +570,7 @@ if ($config->tarpitEnabled) {
     $labyrinth = new LabyrinthController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $config->tarpitLatencyMs, $tarpitPacingSw, $engagementRecorder, $attritionIssuer);
     // FP-0245c context-polluters share the SAME TarpitBudget (one slot pool + ledger across the whole
     // tarpit surface) and the same persona seed (coherent fakes). Off (null) when the tarpit is off.
-    $polluter = new PolluterController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder);
+    $polluter = new PolluterController($store, $geo, $tarpitBudget, $personaSeed, $config->tarpitBytesPerRespMb, $blocklist, null, null, $engagementRecorder, $ssrf !== null && $config->ssrfCredPointers);
 }
 
 // The generic decoy home at / (public mode); the funnypot dashboard moves to $config->funnypotPath. When

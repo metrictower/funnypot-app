@@ -32,7 +32,7 @@ Resolution order is override, then catalog default, then on.
 
 The catalog lists what the core engine serves from templates. funnypot-app also has its own surfaces
 that answer some paths with app code (the labyrinth and context-polluters, the attrition journey, the
-token-mint account surface, the fake AI-API chat, the Docker API). They are not catalog entries and
+token-mint account surface and its SSRF proof-bait, the fake AI-API chat, the Docker API). They are not catalog entries and
 `funnypot-vulns.json` does not switch them: each has its own environment flag, off by default, and
 most also need the tarpit master switch (`FUNNYPOT_TARPIT`). See `demo/README.md` for the flags.
 
@@ -41,7 +41,9 @@ They meet the engine in two different places:
   Docker API) answer their paths before the honeypot runs. The engine never sees that traffic, so a
   catalog switch has no effect there, and each surface does its own logging (and, where it has one, its
   own reporting).
-- **Serve-seam surfaces** (the token-mint account surface, and the web-shell console once merged) answer
+- **Serve-seam surfaces** (the token-mint account surface, its SSRF proof-bait — `/settings/webhooks…`,
+  `/settings/imports…`, `/settings/storage…`, `/api/v2/user/{hooks,imports,storage}…` and the `/v2/` twins —
+  and the web-shell console once merged) answer
   inside `HoneypotController` after the engine has run. Detection, the hit row and the AbuseIPDB / Threat
   Intel reports are the engine's, exactly as on any other path, so a catalog entry switched off stops
   being detected and reported there too; only the response body is the surface's.

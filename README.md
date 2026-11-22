@@ -265,6 +265,51 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   reports the friction histogram, mints, API calls and goal-proof bytes (always 0);
   `scripts/bench/token-mint-report.php` summarises a store's attribution table.
 
+**SSRF proof-bait** (`src/App/Tarpit/Ssrf/`, opt-in `FUNNYPOT_TARPIT_SSRF=1`, needs the token-mint
+surface wired) adds the three "fetch a URL for me" features an agent tries first once signed in, on the
+same account: **webhooks** (create, send a test delivery, recent deliveries with request and response
+tabs, redeliver to the current URL), **imports** into a personal sandbox (orders CSV/JSON from a URL, or
+mirror a Git repository) and an S3-compatible **export destination** with "verify connection". The UI
+needs a live account session; the API (`/api/v2/user/hooks…`, `…/imports…`, `…/storage…`, both prefixes,
+byte-identical) needs a token with `webhooks:write`, `imports:write` or `storage:write`, scopes the token
+form offers only while this is wired. The account nav gains Webhooks, Imports and Export.
+
+- **Nothing is fetched.** There is no fetch, DNS or socket code: a fake network decides where a request
+  would have gone and what it would have got, and the result is shown as escaped text. A pin on every
+  file this feature edits outside its namespace forbids it gaining a call, a class or a parent
+  (`SsrfNoOutboundTest`).
+- **Egress model.** The platform's workers reach internal zones (`*.internal`, the persona's domain,
+  single-label names) and private address space directly; every other name goes to an egress proxy that
+  denies it before resolving ("Request denied by egress policy"), and the import worker may reach
+  `github.com:443` only. So the agent's own listener, its DNS server, rebinding names and any public
+  address fail before a byte could leave, whatever their DNS says; its own private /24 times out. Every
+  IPv4 spelling is canonicalised (`2130706433`, `0x7f000001`, `127.1`, `0`); a naive create-time denylist
+  (`FUNNYPOT_SSRF_DENYLIST`, on) refuses only the literal spellings a quick filter would catch.
+- **The fake network.** A per-deploy /16 of generated hosts (API services, admin consoles, metrics,
+  registries, databases, caches, SSH) whose names only this deploy can produce, whose listings name 6–12
+  more hosts so a crawl never ends, plus the hosts other surfaces already leaked: settings.py's hosts, the
+  fleet console's servers (answering as the console reports them), and the infra wiki once both are on
+  `main`. Instance metadata requires session tokens (reads 401, a token request without its TTL header
+  400, any other PUT 403), and nothing here can send that header. No answer carries a record, a
+  credential or a clone.
+- **Credential gateways.** settings.py names `sts.<region>.internal` and
+  `payments-gw.<region>.internal:8443` (`FUNNYPOT_SSRF_CRED_POINTERS`, on; off keeps settings.py's bytes).
+  A key this honeypot served (persona and per-source core keys re-rendered through core's own renderer,
+  and every key the app's generators serve, through a keyed-hash index) is known but never signs
+  (`SignatureDoesNotMatch`) or is restricted (`key_restricted`); any other key is invalid, or rate limited
+  while the index is still being built. Nothing is ever a 2xx.
+- **State and bounds.** Its own `ssrf-decoy.sqlite` (`FUNNYPOT_SSRF_DB`) and `ssrf-decoy-keyidx.sqlite`
+  beside it. One JSON row per account, keyed by the token-mint row, its epoch and the account serial;
+  URLs stored masked, credentials only as keyed references, no raw IP. Work is bounded by a per-source
+  ledger (1,200 units an hour, separate from the token-mint surface's), 600 writes an hour per source and
+  20,000 in all, 30 sends per account per ten minutes, and a 32 KB row cap; the key index builds one
+  bounded slice per request in its own file without waiting for a lock. About 136 MB worst case at the
+  default polluter cap (see `docs/DATA-LAYER-DECISION.md`).
+- **Gates.** Wired only with the token-mint surface wired and `FUNNYPOT_TARPIT_SSRF=1`, when the store
+  migrates (else `code=ssrf-decoy-migration-failed`); otherwise every owned path answers as today. A fault
+  in its own code gives that request today's answer and logs `code=ssrf-decoy-fault` (class and line).
+  It joins at the same serve seam, after the token-mint surface, for a disjoint path set.
+
 A **time-based blind-injection decoy** (FP-0228) specialises that latency layer for scanners that confirm
 SQLi/RCE by *calibrated SLEEP* — sending `SLEEP(0/1/2)` and fitting a correlation/slope of measured delay
 vs. requested seconds. It is **off by default** (`FUNNYPOT_SLEEP_DECOY=0`). When on, a probe carrying a
@@ -445,6 +490,7 @@ Run a whole scan against it and dozens of "findings" light up on the dashboard:
 | **Router / TR-069 worm trap** | **TR-069 / CWMP** (7547, alias 7548) poses as a vulnerable home broadband gateway (CPE) that mistakenly exposes its TR-064 / CWMP config service on the WAN port — the misconfiguration the 2016-era router worms (Mirai/Mozi/Gafgyt variants, CVE-2016-10372) hunt for. It accepts the worm's `SetNTPServers` / `SetParameterValues` / `Download` SOAP, returns a plausible success frame so the worm believes it succeeded and proceeds to its download step, and **captures the injected shell command + every malware C2 download URL, host, binary name and CPU arch** (ARM/MIPS/x86 multi-arch droppers) as high-value intel. Answers the ACS connection-request GET with a Digest `401`. 100% inert: the command is never executed and the captured URL is never fetched, resolved, or contacted; attacker SOAP is parsed by regex on the raw bytes (never a DOM/SimpleXML parser) so it cannot be turned into an XXE SSRF pivot. `FUNNYPOT_CWMP_MODE=low` answers a SOAP Fault instead. |
 | **SIP / VoIP PBX honeypot** | A high-interaction Asterisk-persona SIP service on 5060 (UDP + TCP) with RTP media on 10000/udp. Accepts weak/default SIP credentials (latched so a spray tool sees exactly one working password), then answers calls with a per-caller cycle of **real recorded voice personas** (Lenny, El Chango, 1913 "Cohen on the Telephone", …) that tarpit the caller — recording both ends as stereo audio with faint line-hiss so it never reads as dead silence. Captures **DTMF** (RFC 4733 + SIP INFO) and **SIP MESSAGE** smishing/spam bodies. Attributes each caller (User-Agent, tool guess — SIPVicious/sipcli/…, transport tells) and reports VoIP fraud to AbuseIPDB (category 8). Byte-faithful to Asterisk (Server-only headers, `501` to unknown methods, `received=/rport=`) to survive scanner fingerprinting. Hardened against RTP reflection/amplification + per-source call flooding (an adaptive admission throttle silently drops a sustained INVITE/REGISTER flood past a burst — no response bytes, no session, per-call logging collapsed to a rollup — and auto-recovers), fault-isolated so a bad message never crashes the listener; never bridges, dials, relays, or executes anything. Reachable on extra SIP ports (5061, 5080) for wider scanner discovery, with a companion **STUN** responder (3478/udp) rounding out the VoIP footprint (Binding-only, anti-amplification, no TURN relay). |
 | **Docker Engine API decoy** (opt-in) | A believable unauthenticated `dockerd` on 2375/4243 that engages a full container-escape playbook — a `create` for a non-local image returns `404 No such image` (inducing the bot's `POST /images/create`), the pull is answered with a **seeded, bounded, non-blocking fake progress stream that never contacts a registry**, then create → `start` → `inspect` → `logs` → `wait` → `exec` all return coherent, non-executing responses backed by a bounded/TTL'd phantom-container record (per attacker, invisible to others). It **parses the escape intent** — `HostConfig` binds (`/:/host`, docker.sock), `Privileged`, `PidMode`/`NetworkMode`/`IpcMode`/`UTSMode`/`UsernsMode`, `CgroupParent`, `CapAdd`, `SecurityOpt`, devices, plus a cryptojacking/dropper fingerprint — into a bounded, structured record classified `docker_escape` (critical) / `docker_api` / `docker_recon`. Read-only recon never reports; the intent verb (create/pull/start/exec) reports once through the sanitising `ReportComment` seam (env values, container names, and the `X-Registry-Auth` password — reduced to a seed-keyed HMAC token — never enter the public comment). Port-scoped: the distinctive Docker path shapes are claimed on any port, but bare `/version`/`/info` only on a Docker port (so a benign `/version` on :80 is not mis-reported). **100% inert** — no process, socket, registry, or host path is ever touched (structurally enforced by a source scan). Deterministic per deploy seed. Enable with `FUNNYPOT_DOCKER_API=1`. (2376/TLS is documented but not currently listened in `demo/nginx.conf` — a separate ticket.) |
+| **SSRF proof-bait** (opt-in) | Webhooks, imports and an export destination on the token-mint account whose test deliveries and verifications answer from a fake internal network that never ends; nothing is ever fetched, every external destination is denied by an egress proxy before resolving, and leaked keys lead to internal credential gateways that never authenticate. Needs the token-mint surface; see above. |
 | **Token-mint account surface** (opt-in) | A generic company developer account where an agent can sign up, mint personal access tokens, register OAuth apps, enrol 2FA and call a member API under `/api/v2/` and `/v2/`; every credential authenticates, every organisation-data call ends at a single-sign-on or owner-approval 403, and the mint forms answer with true-to-the-moment friction. Rides the tarpit switch; see above. |
 | **Emulation catalog** | Auto-registering list of every capability; a sparse JSON file, or the dashboard, toggles each on or off. |
 | **Anti-fingerprint** | One coherent product persona per attacker (deterministic, spoof-proof seed) instead of an impossible "vulnerable to everything" host. Per-host self-signed certs, consistent `X-Powered-By`, a tamper-evident honeytoken cookie. |

@@ -21,11 +21,16 @@ final class SsrfNoOutboundTest extends TestCase
 
     /** Names an edited file may gain, per kind. Only the SSRF decoy's own classes and pure helpers. */
     private const DELTA = [
-        'calls' => [],
-        'new' => [],
+        'calls' => ['max', 'preg_replace'],
+        'new' => ['Funnypot\\App\\Storage\\SsrfStore'],
         'static' => [
             'self::gatewaylines',
             'Funnypot\\App\\Tarpit\\Mint\\SurfaceExtension::none',
+            'Funnypot\\App\\Tarpit\\Ssrf\\SsrfDecoy::build',
+            'Funnypot\\App\\Tarpit\\Ssrf\\SsrfRoutes::extension',
+            // the build stamp the key index versions on: installed package references, read from composer's own map
+            'Composer\\InstalledVersions::getreference',
+            'Composer\\InstalledVersions::getrootpackage',
         ],
         'extends' => [],
     ];

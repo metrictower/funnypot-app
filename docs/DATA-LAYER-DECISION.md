@@ -324,3 +324,40 @@ recovery codes are kept as keyed hashes.
 **Disk bound.** 2,000 rows × 48 KB + 2 × 20,000 side rows × about 200 B + 20,000 attribution rows × about
 200 B is about **108 MB** at the worst case, a constant independent of traffic.
 
+## 7. Feature stores: ssrf-decoy.sqlite and its key index
+
+The SSRF proof-bait keeps its state in `ssrf-decoy.sqlite` (`FUNNYPOT_SSRF_DB`), opened through
+`Sqlite::open()` and then given a 100 ms busy timeout, and its served-key index in
+`ssrf-decoy-keyidx.sqlite` beside it, so building the index never holds the state file's write lock.
+
+- **`ssrf_owner`** — one row per account, keyed by an HMAC of the token-mint row key, that row's epoch and
+  the account serial, so a re-created row never sees an old account's hooks. JSON layout (`SsrfState`):
+  `h` hooks (`id`, content type, the signing secret, events, active, up to 3 URL versions `u` of
+  `{n, url (masked, ≤ 560), cr (credential reference)}` and up to 10 deliveries `d` of
+  `{id, c, vi (the version it was sent to), ev, rd, f (facts: outcome, egress class, node kind and key,
+  port, path class, method, verdict)}`), `i` imports (5, FIFO, each with its URL, reference, retries and
+  facts), `st` the export destination (bucket, HMACs of the access and secret keys, masked URL,
+  reference, up to 5 verifications) and `rt` the last 30 send times. The worst case at every cap at once
+  is about 32.0 KB, under the 32 KB row cap without eviction (pinned by `SsrfStoreTest`). At most 4,000
+  rows, 24 hours idle expiry, least recently seen first out.
+- **`ssrf_ledger`** — one row per source (an HMAC of the IP): the hour bucket's work units and writes.
+  4,000 rows, LRU, 24 hours idle.
+- **`ssrf_turns`** — attribution only (route, egress class, node kind, outcome, an 8-byte keyed hash of
+  the target), never served. FIFO at 20,000 rows, pruned after 7 days.
+- **`ssrf_gauge`** — the global hourly write gauge.
+- **Key index** (`ssrf_keyidx`, `ssrf_meta`) — 12-byte keyed hashes of every key and settings.py host the
+  app's generators serve, under a version tag; no raw value. One slice per request at most (the small
+  sources, then 2,048 settings.py sections), taken without waiting for the lock. The version is the
+  deploy id (persona, polluter cap, pointer flag, installed package references) checked per request plus
+  a generator fingerprint recomputed only when the deploy id changes and hourly; a new version takes a
+  new tag and old rows are deleted 4,096 at a time. About 80 B per settings.py section: 0.8 MB at the
+  default 8 MB cap, about 49 MB at the 512 MB maximum (twice that while an old version drains).
+
+Every request runs load, charge, decide and write inside one `BEGIN IMMEDIATE` on the state file and
+commits before the answer is sent; a store error is one typed failure with nothing changed, answered with
+a coherent "couldn't save" page (UI) or a 429 with `Retry-After` (API). A state change past a write cap
+(600 per source and 20,000 in all per hour) is refused but its units are still charged.
+
+**Disk bound.** 4,000 × 32 KB + 4,000 × 120 B + 20,000 × 220 B + the key index is about **136 MB** at the
+default polluter cap (about 185 MB at the 512 MB maximum, about 235 MB while a version change drains).
+

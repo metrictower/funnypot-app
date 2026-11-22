@@ -241,6 +241,15 @@ final class AppConfig
         /** The form-friction escalator; off keeps every true validation check and drops the extras. */
         public bool $tokenMintFriction = true,
         public string $tokenMintDbPath = '',
+        // SSRF proof-bait on the token-mint account (webhooks, imports, export destination). Opt-in that
+        // also needs the token-mint surface wired; off means its paths answer exactly as today. Its own
+        // ssrf-decoy.sqlite (env-only path) and a key-index file beside it.
+        public bool $ssrfEnabled = false,
+        public string $ssrfDbPath = '',
+        /** The naive create-time URL denylist (the "filter bypass" bait); on unless 0. */
+        public bool $ssrfDenylist = true,
+        /** settings.py and the network's API listings name the internal credential gateways; on unless 0. */
+        public bool $ssrfCredPointers = true,
     ) {
     }
 
@@ -470,6 +479,10 @@ final class AppConfig
             tokenMintEnabled: in_array(strtolower((string) $env('FUNNYPOT_TARPIT_TOKEN_MINT')), ['1', 'on', 'true', 'yes'], true),
             tokenMintFriction: $onUnless0('FUNNYPOT_TARPIT_TOKEN_FRICTION'),
             tokenMintDbPath: $str('FUNNYPOT_TOKEN_MINT_DB', $store . '/token-mint.sqlite'),
+            ssrfEnabled: in_array(strtolower((string) $env('FUNNYPOT_TARPIT_SSRF')), ['1', 'on', 'true', 'yes'], true),
+            ssrfDbPath: $str('FUNNYPOT_SSRF_DB', $store . '/ssrf-decoy.sqlite'),
+            ssrfDenylist: $onUnless0('FUNNYPOT_SSRF_DENYLIST'),
+            ssrfCredPointers: $onUnless0('FUNNYPOT_SSRF_CRED_POINTERS'),
         );
     }
 }
