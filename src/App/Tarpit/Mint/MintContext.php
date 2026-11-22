@@ -241,7 +241,7 @@ final class MintContext
         $n = $s->nextTokenSerial($pos);
         $entry = [
             'n' => $n, 'v' => 0, 'k' => $kind,
-            'id' => $this->keys->hexId('tok|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $s->d['a'][$pos]['i'] . '|' . $n, 12),
+            'id' => $this->publicId('tok|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $s->d['a'][$pos]['i'] . '|' . $n),
             'nt' => $note, 'sc' => $scopes, 'c' => $now, 'x' => $expires, 'lu' => 0, 'ap' => $app, 'rl' => [0, 0],
         ];
         $s->d['a'][$pos]['k'][] = $entry;
@@ -258,6 +258,19 @@ final class MintContext
         return [$tpos, $token];
     }
 
+    /** A 12-hex public id that always holds a digit, so it is always an `{id}` the routes own. */
+    public function publicId(string $label): string
+    {
+        for ($v = 0; $v < 64; $v++) {
+            $id = $this->keys->hexId($label . ($v === 0 ? '' : '|v' . $v), 12);
+            if (preg_match('/[0-9]/', $id) === 1) {
+                return $id;
+            }
+        }
+
+        return '0' . substr($id, 1);
+    }
+
     public function clientId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
     {
         return $this->keys->hexId('client|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 20);
@@ -265,7 +278,7 @@ final class MintContext
 
     public function appPublicId(string $kref, MintState $s, int $acctSerial, int $appSerial): string
     {
-        return $this->keys->hexId('app|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial, 12);
+        return $this->publicId('app|' . bin2hex($kref) . '|' . $s->epoch() . '|' . $acctSerial . '|' . $appSerial);
     }
 
     public function clientSecret(string $kref, MintState $s, int $acctSerial, int $appSerial, int $secretN): string

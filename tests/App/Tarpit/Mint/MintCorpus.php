@@ -149,6 +149,7 @@ final class MintCorpus
             '/settings/tokens/1/delete.php', '/orgs/other/sso', '/idp/other/signin', '/idp/x/login', '/api/v2/orders/export',
             '/v2/orders/export', '/settings/cluster', '/settings/general', '/settings/plugins', '/admin/root/html', '/admin/access-login',
             '/settings/tokens/abc/delete', '/settings/applications/ab', '/api/v2/users/-x', '/api/v2/orders/abcdefghijklmnopqrstuvw',
+            '/settings/applications/abcdefgh', '/api/v2/orders/' . str_repeat('1', 21), '/v2/orders/ABC123',
         ];
     }
 }

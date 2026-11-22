@@ -66,6 +66,44 @@ final class TokenMintOwnershipTest extends TestCase
         }
     }
 
+    /** Ownership of an id never depends on its length: every length from 1 to 20 answers alike. */
+    public function test_id_ownership_is_contiguous_in_length_and_never_takes_a_word(): void
+    {
+        $r = self::routes();
+        foreach (['/api/v2/orders/', '/v2/orders/', '/settings/applications/', '/settings/tokens/%s/delete', '/settings/applications/%s/secrets'] as $base) {
+            for ($len = 1; $len <= 20; $len++) {
+                foreach ([str_repeat('9', $len), substr('a1b2c3d4e5f6a7b8c9d0', 0, $len), str_pad('7', $len, 'z')] as $id) {
+                    if (preg_match('/[0-9]/', $id) !== 1) {
+                        continue;
+                    }
+                    $p = str_contains($base, '%s') ? sprintf($base, $id) : $base . $id;
+                    self::assertTrue($r->owns($p), "{$p} ({$len} chars) is owned");
+                }
+            }
+            foreach (['export', 'abcdefgh', 'new', 'abcdefghijklmnopqrst', str_repeat('9', 21), 'ABC123', 'a1-b2'] as $word) {
+                $p = str_contains($base, '%s') ? sprintf($base, $word) : $base . $word;
+                if (isset(MintRoutes::EXACT[$p])) {
+                    continue; // an exact page such as /settings/applications/new, not an id
+                }
+                self::assertFalse($r->owns($p), "{$p} is not an id");
+            }
+        }
+    }
+
+    public function test_no_compiled_core_route_falls_inside_an_owned_path(): void
+    {
+        $compiled = require dirname(__DIR__, 3) . '/vendor/metrictower/funnypot-core/resources/compiled/nuclei-index.full.php';
+        $r = self::routes();
+        $hits = [];
+        foreach (array_keys($compiled['routes']) as $key) {
+            $path = (string) substr((string) $key, (int) strpos((string) $key, ' ') + 1);
+            if ($r->owns(substr($path, 0, (int) (strcspn($path, '?')) ?: strlen($path)))) {
+                $hits[] = $key;
+            }
+        }
+        self::assertSame([], $hits, 'the core keeps every route it compiles');
+    }
+
     public function test_unowned_paths_stay_unowned_whatever_core_answers(): void
     {
         $r = self::routes();

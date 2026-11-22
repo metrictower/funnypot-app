@@ -11,14 +11,16 @@ use Funnypot\App\Http\HoneypotController;
  * of the method, the body or the engine's answer), so it is known before any serve decision.
  *
  * Exact routes match after stripping one trailing slash; the few patterns take bounded segments:
- * `{org}` is only the persona's organisation slug, `{login}` a username-shaped segment, `{id}` a short
- * digit run or a lowercase id. A segment ending in `.php` (any case) never matches a pattern, and no
+ * `{org}` is only the persona's organisation slug, `{login}` a username-shaped segment, `{id}` a
+ * lowercase alphanumeric segment of 1–20 characters with at least one digit (so a letter-only word such
+ * as `export` is never an id). A segment ending in `.php` (any case) never matches a pattern, and no
  * path a backup-archive or text decoy would serve is ever owned, so those keep their answers.
  */
 final class MintRoutes
 {
     public const LOGIN = '[A-Za-z0-9][A-Za-z0-9_.-]{0,38}';
-    public const ID = '(?:[0-9]{1,5}|[a-z0-9]{8,20})';
+    /** Any 1–20 character lowercase id holding a digit: every length answers alike, words never match. */
+    public const ID = '(?=[a-z0-9]{0,19}[0-9])[a-z0-9]{1,20}';
 
     /** path => [route id, methods] */
     public const EXACT = [

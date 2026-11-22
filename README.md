@@ -187,8 +187,10 @@ confirmed nor refuted.
   tells the truth: an answer that discloses no object (every 401, and on an id-bearing path any 403, 404,
   405, 413, 429, OPTIONS 204, expired-form 422 or no-session redirect, whatever the method) is logged
   unserved and feeds the bulk-scan pin like the miss it replaces. The
-  serve delay is paid exactly when the engine served nothing, so latency never shows which answered. No
-  backup-archive or text-decoy path, no `.php` name and no other `/api/v2/*` path is ever owned. The
+  serve delay is paid exactly when the engine served nothing, so latency never shows which answered. An
+  id in a path is any 1–20 character lowercase segment holding a digit, so no id length answers
+  differently; a letter-only word is never an id. No backup-archive or text-decoy path, no `.php` name and
+  no other `/api/v2/*` path is ever owned. The
   public `/` page gets a nullable seam: a live session sees the account home, the signed-out page gains
   one sign-up link, a sign-in to an account this source created signs in, and every other credential
   takes the unchanged funnel byte for byte. Every page's nav follows the session's live state in the store,
