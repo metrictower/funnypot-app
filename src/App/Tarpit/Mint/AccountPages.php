@@ -23,9 +23,10 @@ final class AccountPages
         return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    private static function msg(string $key, array $vars = []): string
+    /** A message, with the persona's own fillers always available to it. */
+    private function msg(string $key, array $vars = []): string
     {
-        return self::e(MintVocabulary::text($key, $vars));
+        return self::e(MintVocabulary::text($key, $vars + ['company' => $this->p->company]));
     }
 
     // --- chrome ----------------------------------------------------------------------------------
@@ -72,18 +73,18 @@ final class AccountPages
     }
 
     /** @param array<string,string> $errors */
-    private static function fieldError(array $errors, string $field): string
+    private function fieldError(array $errors, string $field): string
     {
-        return isset($errors[$field]) ? '<p class=err>' . self::msg($errors[$field]) . '</p>' : '';
+        return isset($errors[$field]) ? '<p class=err>' . $this->msg($errors[$field]) . '</p>' : '';
     }
 
     /** @param array<string,string> $values */
-    private static function input(string $label, string $name, array $values, array $errors, string $type = 'text', string $extra = ''): string
+    private function input(string $label, string $name, array $values, array $errors, string $type = 'text', string $extra = ''): string
     {
         $v = $type === 'password' ? '' : ($values[$name] ?? '');
 
         return '<label>' . self::e($label) . "<input type={$type} name={$name} value='" . self::e($v) . "'{$extra}></label>"
-            . self::fieldError($errors, $name);
+            . $this->fieldError($errors, $name);
     }
 
     private static function date(int $ts): string
@@ -114,10 +115,10 @@ final class AccountPages
     {
         $main = '<div class=card><h1>Create your ' . self::e($this->p->company) . ' account</h1>'
             . "<form method=post action='/join'>" . self::csrf($csrf)
-            . self::input('Username', 'username', $values, $errors, 'text', ' autocomplete=username')
-            . self::input('Email', 'email', $values, $errors, 'email', ' autocomplete=email')
-            . self::input('Password', 'password', $values, $errors, 'password', ' autocomplete=new-password')
-            . self::input('Confirm password', 'password_confirmation', $values, $errors, 'password', ' autocomplete=new-password')
+            . $this->input('Username', 'username', $values, $errors, 'text', ' autocomplete=username')
+            . $this->input('Email', 'email', $values, $errors, 'email', ' autocomplete=email')
+            . $this->input('Password', 'password', $values, $errors, 'password', ' autocomplete=new-password')
+            . $this->input('Confirm password', 'password_confirmation', $values, $errors, 'password', ' autocomplete=new-password')
             . '<button type=submit>Create account</button></form>'
             . "<p class=muted>Already have an account? <a href='/'>Sign in</a></p></div>";
 
@@ -139,8 +140,8 @@ final class AccountPages
         $main = '<div class=card><h1>Public profile</h1>'
             . '<p class=muted>Username: ' . self::e((string) $a['u']) . ' · Email: ' . self::e((string) $a['em']) . '</p>'
             . "<form method=post action='/settings/profile'>" . self::csrf($csrf)
-            . self::input('Name', 'name', $values, $errors)
-            . self::input('Bio', 'bio', $values, $errors)
+            . $this->input('Name', 'name', $values, $errors)
+            . $this->input('Bio', 'bio', $values, $errors)
             . '<button type=submit>Update profile</button></form></div>';
 
         return $this->layout('Profile', $main, true, $notice);
@@ -153,9 +154,9 @@ final class AccountPages
     public function security(array $a, string $csrf, ?string $secretB32, array $errors, ?array $recovery, ?string $notice): string
     {
         if ($a['tf'] !== null) {
-            $body = '<p>' . self::msg('twofa_on') . '</p><p class=muted>Recovery codes left: ' . count($a['tf']['rc']) . '.</p>';
+            $body = '<p>' . $this->msg('twofa_on') . '</p><p class=muted>Recovery codes left: ' . count($a['tf']['rc']) . '.</p>';
             if ($recovery !== null) {
-                $body .= '<p>' . self::msg('recovery_intro') . '</p><p class=mono>' . implode('<br>', array_map([self::class, 'e'], $recovery)) . '</p>';
+                $body .= '<p>' . $this->msg('recovery_intro') . '</p><p class=mono>' . implode('<br>', array_map([self::class, 'e'], $recovery)) . '</p>';
             }
         } else {
             $label = $this->p->company . ':' . (string) $a['u'];
@@ -163,7 +164,7 @@ final class AccountPages
             $body = '<p>Add this key to your authenticator app, then enter the six-digit code it shows.</p>'
                 . '<p class=mono>' . self::e((string) $secretB32) . '</p><p class=mono>' . self::e($uri) . '</p>'
                 . "<form method=post action='/settings/security'>" . self::csrf($csrf)
-                . self::input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')
+                . $this->input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')
                 . '<button type=submit>Enable two-factor authentication</button></form>';
         }
 
@@ -173,12 +174,12 @@ final class AccountPages
     /** @param array<string,string> $errors */
     public function confirm(string $csrf, bool $twoFactor, array $errors): string
     {
-        $main = '<div class=card><h1>Confirm access</h1><p class=muted>' . self::msg('confirm_intro') . '</p>'
+        $main = '<div class=card><h1>Confirm access</h1><p class=muted>' . $this->msg('confirm_intro') . '</p>'
             . "<form method=post action='/settings/confirm'>" . self::csrf($csrf)
-            . self::input('Password', 'password', [], $errors, 'password', ' autocomplete=current-password')
+            . $this->input('Password', 'password', [], $errors, 'password', ' autocomplete=current-password')
             . ($twoFactor
-                ? self::input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')
-                    . self::input('Or a recovery code', 'recovery_code', [], $errors)
+                ? $this->input('Authentication code', 'otp', [], $errors, 'text', ' inputmode=numeric autocomplete=one-time-code')
+                    . $this->input('Or a recovery code', 'recovery_code', [], $errors)
                 : '')
             . '<button type=submit>Confirm</button></form></div>';
 
@@ -192,7 +193,7 @@ final class AccountPages
     public function tokens(array $tokens, array $deleteCsrf, ?string $newToken, ?string $notice): string
     {
         $fresh = $newToken !== null
-            ? '<div class=card><p>' . self::msg('token_created') . '</p><p class=mono>' . self::e($newToken) . '</p></div>'
+            ? '<div class=card><p>' . $this->msg('token_created') . '</p><p class=mono>' . self::e($newToken) . '</p></div>'
             : '';
         $rows = '';
         foreach ($tokens as $t) {
@@ -231,9 +232,9 @@ final class AccountPages
                 . self::e(ScopeSet::ALL[$s]) . '</span></label>';
         }
         $main = "<div class=card><h1>New personal access token</h1><form method=post action='/settings/tokens'>" . self::csrf($csrf)
-            . self::input('Note', 'note', $values, $errors)
-            . "<label>Expiration<select name=expiration>{$opts}</select></label>" . self::fieldError($errors, 'expiration')
-            . '<h2>Scopes</h2>' . $scopes . self::fieldError($errors, 'scopes')
+            . $this->input('Note', 'note', $values, $errors)
+            . "<label>Expiration<select name=expiration>{$opts}</select></label>" . $this->fieldError($errors, 'expiration')
+            . '<h2>Scopes</h2>' . $scopes . $this->fieldError($errors, 'scopes')
             . '<button type=submit>Generate token</button></form></div>';
 
         return $this->layout('New token', $main, true);
@@ -257,10 +258,10 @@ final class AccountPages
     public function appNew(string $csrf, array $values, array $errors): string
     {
         $main = "<div class=card><h1>Register a new OAuth application</h1><form method=post action='/settings/applications'>" . self::csrf($csrf)
-            . self::input('Application name', 'name', $values, $errors)
-            . self::input('Homepage URL', 'homepage_url', $values, $errors, 'url')
-            . self::input('Authorization callback URL', 'callback_url', $values, $errors, 'url')
-            . self::input('Description', 'description', $values, $errors)
+            . $this->input('Application name', 'name', $values, $errors)
+            . $this->input('Homepage URL', 'homepage_url', $values, $errors, 'url')
+            . $this->input('Authorization callback URL', 'callback_url', $values, $errors, 'url')
+            . $this->input('Description', 'description', $values, $errors)
             . '<button type=submit>Register application</button></form></div>';
 
         return $this->layout('New OAuth application', $main, true);
@@ -274,7 +275,7 @@ final class AccountPages
         foreach ($app['sx'] as $s) {
             $secrets .= '<li>Client secret created ' . self::date((int) $s[2]) . '</li>';
         }
-        $main = ($newSecret !== null ? '<div class=card><p>' . self::msg('secret_created') . '</p><p class=mono>' . self::e($newSecret) . '</p></div>' : '')
+        $main = ($newSecret !== null ? '<div class=card><p>' . $this->msg('secret_created') . '</p><p class=mono>' . self::e($newSecret) . '</p></div>' : '')
             . '<div class=card><h1>' . self::e((string) $app['nm']) . '</h1>'
             . '<p>Client ID</p><p class=mono>' . self::e((string) $app['ci']) . '</p>'
             . '<p class=muted>Homepage URL: <span class=mono>' . self::e((string) $app['hp']) . '</span></p>'
@@ -283,7 +284,7 @@ final class AccountPages
             . '<h2>Client secrets</h2>' . ($secrets === '' ? '<p class=muted>No client secrets.</p>' : '<ul>' . $secrets . '</ul>')
             . "<form method=post action='/settings/applications/{$id}/secrets'>" . self::csrf($csrfSecret)
             . '<button type=submit>Generate a new client secret</button></form></div>'
-            . '<div class=card><h2>Organization access</h2><p>' . self::msg('approval_pending', ['company' => $this->p->company]) . '</p></div>'
+            . '<div class=card><h2>Organization access</h2><p>' . $this->msg('approval_pending', ['company' => $this->p->company]) . '</p></div>'
             . "<div class=card><h2>Delete application</h2><form method=post action='/settings/applications/{$id}/delete'>" . self::csrf($csrfDelete)
             . '<button class=danger type=submit>Delete application</button></form></div>';
 
@@ -310,7 +311,7 @@ final class AccountPages
 
     public function code(string $appName, string $code, ?string $state): string
     {
-        $main = '<div class=card><h1>Authorization code</h1><p>' . self::msg('code_issued', ['app' => $appName]) . '</p>'
+        $main = '<div class=card><h1>Authorization code</h1><p>' . $this->msg('code_issued', ['app' => $appName]) . '</p>'
             . '<p class=mono>' . self::e($code) . '</p>'
             . ($state !== null ? '<p class=muted>State: <span class=mono>' . self::e($state) . '</span></p>' : '')
             . '</div>';
@@ -320,7 +321,7 @@ final class AccountPages
 
     public function denied(string $appName): string
     {
-        return $this->layout('Authorization denied', '<div class=card><h1>Authorization denied</h1><p>' . self::msg('denied', ['app' => $appName]) . '</p></div>', true);
+        return $this->layout('Authorization denied', '<div class=card><h1>Authorization denied</h1><p>' . $this->msg('denied', ['app' => $appName]) . '</p></div>', true);
     }
 
     public function sso(string $csrf, string $requestId, bool $approval, ?string $appName): string
@@ -328,7 +329,7 @@ final class AccountPages
         $c = self::e($this->p->company);
         $what = $approval && $appName !== null
             ? '<p>' . self::e($appName) . ' needs approval from an owner of ' . $c . ' before it can access organization data.</p>'
-            : '<p>' . self::msg('sso_intro', ['company' => $this->p->company]) . '</p>';
+            : '<p>' . $this->msg('sso_intro', ['company' => $this->p->company]) . '</p>';
         $main = '<div class=card><h1>' . ($approval ? 'Request organization approval' : 'Single sign-on to ' . $c) . '</h1>' . $what
             . "<form method=post action='/orgs/" . self::e($this->p->slug) . "/sso'>" . self::csrf($csrf)
             . "<input type=hidden name=authorization_request value='" . self::e($requestId) . "'>"
@@ -339,7 +340,7 @@ final class AccountPages
 
     public function approvalRequested(): string
     {
-        return $this->layout('Approval requested', '<div class=card><h1>Approval requested</h1><p>' . self::msg('approval_requested') . '</p></div>', true);
+        return $this->layout('Approval requested', '<div class=card><h1>Approval requested</h1><p>' . $this->msg('approval_requested') . '</p></div>', true);
     }
 
     /** @param array<string,string> $values */
@@ -351,10 +352,10 @@ final class AccountPages
             . "<meta name=viewport content='width=device-width,initial-scale=1'><title>Sign in · " . $c . ' Identity</title>'
             . '<style>' . self::css() . '.idp{max-width:360px;margin:4rem auto}</style></head><body><main class=idp><div class=card>'
             . '<h1>' . $c . ' Identity</h1>'
-            . ($errorKey !== null ? '<p class=err>' . self::msg($errorKey) . '</p>' : '')
+            . ($errorKey !== null ? '<p class=err>' . $this->msg($errorKey) . '</p>' : '')
             . "<form method=post action='/idp/" . self::e($this->p->slug) . "/signin'>" . self::csrf($csrf)
-            . self::input('Username or email', 'username', $values, [], 'text', ' autocomplete=username')
-            . self::input('Password', 'password', [], [], 'password', ' autocomplete=current-password')
+            . $this->input('Username or email', 'username', $values, [], 'text', ' autocomplete=username')
+            . $this->input('Password', 'password', [], [], 'password', ' autocomplete=current-password')
             . '<button type=submit>Sign in</button></form></div></main></body></html>';
     }
 
@@ -409,7 +410,7 @@ final class AccountPages
 
     public function notFound(bool $signedIn, string $messageKey = 'not_found'): string
     {
-        return $this->layout('Not Found', '<div class=card><h1>Not Found</h1><p>' . self::msg($messageKey) . "</p><p><a href='/'>Go home</a></p></div>", $signedIn);
+        return $this->layout('Not Found', '<div class=card><h1>Not Found</h1><p>' . $this->msg($messageKey) . "</p><p><a href='/'>Go home</a></p></div>", $signedIn);
     }
 
     public function methodNotAllowed(): string

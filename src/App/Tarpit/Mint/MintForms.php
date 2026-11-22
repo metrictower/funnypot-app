@@ -32,7 +32,7 @@ final class MintForms
      */
     public const CALLBACK_FORMS = [
         'https' => [
-            'pattern' => '~\Ahttps://' . self::HOST . self::PORT . self::REST . '\z~',
+            'pattern' => '#\Ahttps://' . self::HOST . self::PORT . self::REST . '\z#',
             'examples' => [
                 'https://app.example.com/cb',
                 'https://app.example.com:8443/oauth/callback',
@@ -46,11 +46,11 @@ final class MintForms
             ],
         ],
         'localhost' => [
-            'pattern' => '~\Ahttp://localhost' . self::PORT . self::REST . '\z~',
+            'pattern' => '#\Ahttp://localhost' . self::PORT . self::REST . '\z#',
             'examples' => ['http://localhost/cb', 'http://localhost:8080/cb', 'http://localhost:3000/auth/callback?x=1'],
         ],
         'loopback' => [
-            'pattern' => '~\Ahttp://127\.0\.0\.1' . self::PORT . self::REST . '\z~',
+            'pattern' => '#\Ahttp://127\.0\.0\.1' . self::PORT . self::REST . '\z#',
             'examples' => ['http://127.0.0.1/cb', 'http://127.0.0.1:8080/cb', 'http://127.0.0.1:5000/oauth2/callback?a=b&c=d'],
         ],
     ];
@@ -58,7 +58,7 @@ final class MintForms
     /** Spellings that look like callbacks but are refused (kept as negative fixtures). */
     public const REFUSED_CALLBACKS = ['http://[::1]:8080/cb', 'http://[::1]/cb'];
 
-    private const HOMEPAGE = '~\Ahttps?://' . self::HOST . self::PORT . self::REST . '\z~';
+    private const HOMEPAGE = '#\Ahttps?://' . self::HOST . self::PORT . self::REST . '\z#';
 
     public static function validCallback(string $url): bool
     {

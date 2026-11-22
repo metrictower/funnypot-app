@@ -54,6 +54,12 @@ final class MintHarness
     public MintPersona $persona;
     public ?MintPlan $last = null;
 
+    /** @var list<string> PHP warnings and notices raised while handling, other than the CLI header noise */
+    public array $warnings = [];
+
+    /** Set only by tests that inject non-store faults on purpose. */
+    public bool $allowFaults = false;
+
     /** @var array<string,string> cookie name => value, per jar name */
     public array $jars = ['default' => []];
 
@@ -165,9 +171,27 @@ final class MintHarness
         $headers += ['User-Agent' => 'Mozilla/5.0'];
         $this->last = null;
         $before = $this->maxHitId();
+        $faults = $this->decoy?->faults() ?? 0;
         ob_start();
-        $this->controller->handle(new RequestContext($method, $path, $query, $headers, $body), $ip, 'off');
-        $out = (string) ob_get_clean();
+        // CLI has no real response: header() after test output warns "headers already sent", which
+        // is the harness, not the code. Every other warning or notice is recorded for the tests.
+        set_error_handler(function (int $no, string $msg, string $file = '', int $line = 0): bool {
+            if (!str_contains($msg, 'headers already sent')) {
+                $this->warnings[] = "{$msg} @ {$file}:{$line}";
+            }
+
+            return true;
+        });
+        try {
+            $this->controller->handle(new RequestContext($method, $path, $query, $headers, $body), $ip, 'off');
+        } finally {
+            restore_error_handler();
+            $out = (string) ob_get_clean();
+        }
+        if (!$this->allowFaults && $this->decoy !== null && $this->decoy->faults() > $faults) {
+            $e = $this->decoy->lastFault();
+            throw new \RuntimeException("fault path on {$method} {$path}: " . ($e ? get_class($e) . ' ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() : '?'));
+        }
         $plan = $this->last;
         if ($plan !== null) {
             foreach ($plan->headers() as [$n, $v]) {
@@ -287,6 +311,36 @@ final class MintHarness
         throw new \RuntimeException('could not mint');
     }
 
+    /** The TOTP secret once enable2fa() ran, so retries can pass confirm-access. */
+    public ?string $totp = null;
+
+    /**
+     * Retry a form submission past friction: re-sign-in after a lapsed session, pass confirm-access,
+     * wait out a throttle, reload a stale form. $attempt does one GET-then-POST and returns the POST.
+     *
+     * @param callable():array $attempt
+     * @param callable(array):bool $done
+     */
+    public function until(callable $attempt, callable $done, string $jar = 'default', string $ip = self::IP, int $max = 40): array
+    {
+        for ($i = 0; $i < $max; $i++) {
+            $this->now += 7;
+            $r = $attempt();
+            if ($done($r)) {
+                return $r;
+            }
+            $loc = $r['plan']?->header('Location');
+            if ($loc === '/') {
+                $this->signIn('artex1', 'Passw0rd!x', $jar, $ip);
+            } elseif ($loc === '/settings/confirm') {
+                $this->confirm($jar, $ip, 'Passw0rd!x', $this->totp);
+            } elseif (($r['status'] ?? 0) === 429) {
+                $this->now += (int) ($r['plan']?->header('Retry-After') ?? 60) + 1;
+            }
+        }
+        throw new \RuntimeException('form never succeeded');
+    }
+
     /** Pass confirm-access (with the account's TOTP when 2FA is on). */
     public function confirm(string $jar = 'default', string $ip = self::IP, string $password = 'Passw0rd!x', ?string $totpSecret = null): array
     {
@@ -307,6 +361,7 @@ final class MintHarness
         preg_match('/<p class=mono>([A-Z2-7]{32})<\/p>/', $page['body'], $m);
         $raw = self::base32decode($m[1]);
         $r = $this->post('/settings/security', ['csrf_token' => self::csrf($page['body']), 'otp' => \Funnypot\App\Tarpit\Mint\Totp::code($raw, \Funnypot\App\Tarpit\Mint\Totp::step($this->now))], $jar, $ip);
+        $this->totp = $raw;
         $codes = [];
         if (preg_match('~<p class=mono>((?:[a-z2-7]{5}-[a-z2-7]{5}(?:<br>)?)+)</p>~', $r['body'], $block) === 1) {
             $codes = explode('<br>', $block[1]);

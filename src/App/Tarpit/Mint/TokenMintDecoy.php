@@ -28,6 +28,7 @@ final class TokenMintDecoy
     private OAuthFlow $oauth;
     private MintApi $api;
     private int $faults = 0;
+    private ?Throwable $lastFault = null;
 
     /** @var Closure(MintPlan):void */
     private Closure $emitter;
@@ -79,6 +80,7 @@ final class TokenMintDecoy
             return $r->isHead() ? $plan->forHead() : $plan;
         } catch (Throwable $e) {
             $this->faults++;
+            $this->lastFault = $e;
 
             return null;
         }
@@ -148,5 +150,10 @@ final class TokenMintDecoy
     public function faults(): int
     {
         return $this->faults;
+    }
+
+    public function lastFault(): ?Throwable
+    {
+        return $this->lastFault;
     }
 }
