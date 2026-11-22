@@ -119,4 +119,39 @@ final class TokenMintLinkClosureTest extends TestCase
             $crawl->cleanup();
         }
     }
+
+    /** With the SSRF decoy wired, every target is still owned by one of the two surfaces or is `/`, and the nav names its pages. */
+    public function test_link_closure_with_ssrf_wired(): void
+    {
+        foreach ([1, 5] as $seed) {
+            $tour = (new \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour($seed))->run();
+            try {
+                $checked = 0;
+                foreach ($tour->plans as [$label, $plan]) {
+                    foreach (self::targets($plan) as $t) {
+                        $path = (string) parse_url($t, PHP_URL_PATH);
+                        self::assertStringNotContainsString('://', $t, "{$label} links off-site: {$t}");
+                        self::assertTrue($path === '/' || $tour->h->decoy->owns($path) || $tour->h->ssrf->owns($path), "seed {$seed}: {$label} links {$t}, which no surface owns");
+                        $checked++;
+                    }
+                }
+                self::assertGreaterThan(300, $checked);
+                $tokens = $tour->h->get('/settings/tokens')['body'];
+                foreach (["href='/settings/webhooks'>Webhooks", "href='/settings/imports'>Imports", "href='/settings/storage'>Export"] as $nav) {
+                    self::assertStringContainsString($nav, $tokens, 'wired: the nav names the SSRF pages');
+                }
+            } finally {
+                $tour->cleanup();
+            }
+        }
+        $crawl = new MintCrawl(1);
+        try {
+            $crawl->run();
+            foreach ($crawl->plans as [, $plan]) {
+                self::assertStringNotContainsString('/settings/webhooks', $plan->body, 'unwired: no SSRF nav item or link');
+            }
+        } finally {
+            $crawl->cleanup();
+        }
+    }
 }

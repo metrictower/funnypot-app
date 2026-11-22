@@ -637,6 +637,38 @@ final class ServedSurfacesFingerprintTest extends TestCase
         self::assertGreaterThan(1_000_000, $bytes, "the scan covered the full output ({$bytes} bytes)");
     }
 
+    /**
+     * Every page, JSON body and header the SSRF proof-bait renders, for eight personas: webhooks with
+     * deliveries in every state, imports of each kind, the export destination, the fake network's
+     * answers and the credential gateways' verdicts. A kind floor and a byte floor prove the scan reached
+     * them.
+     */
+    public function test_ssrf_surfaces_carry_no_fingerprint_signature(): void
+    {
+        $kinds = [];
+        $bytes = 0;
+        for ($seed = 1; $seed <= 8; $seed++) {
+            $tour = (new \Funnypot\Tests\App\Tarpit\Ssrf\SsrfTour($seed))->run();
+            try {
+                foreach ($tour->plans as [$label, $plan]) {
+                    self::assertServedClean($plan->body, "ssrf seed {$seed} {$label}");
+                    foreach ($plan->headers() as [$n, $v]) {
+                        self::assertServedClean("{$n}: {$v}", "ssrf seed {$seed} {$label} header {$n}");
+                    }
+                    $bytes += strlen($plan->body);
+                    $kinds[(string) preg_replace('~/[a-f0-9]{12}~', '/{id}', $label) . ' ' . $plan->status] = true;
+                }
+            } finally {
+                $tour->cleanup();
+            }
+        }
+        foreach (\Funnypot\App\Tarpit\Ssrf\SsrfForms::MESSAGES as $key => $text) {
+            self::assertServedClean($text, "ssrf message {$key}");
+        }
+        self::assertGreaterThanOrEqual(20, count($kinds), 'page and JSON kinds');
+        self::assertGreaterThan(1_000_000, $bytes, "the scan covered the full output ({$bytes} bytes)");
+    }
+
     // --- 3f. HoneypotController::robots() — a small, self-contained static surface -------------------
 
     /**

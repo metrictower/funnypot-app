@@ -126,6 +126,25 @@ final class SsrfCorpus
         };
     }
 
+    /** The concrete path of a route with the given ids (the API spelling under /api/v2/). */
+    public static function routePath(string $route, string $id, string $did): string
+    {
+        foreach ([SsrfRoutes::UI_EXACT, SsrfRoutes::UI_PATTERNS] as $table) {
+            foreach ($table as $shape => [$r]) {
+                if ($r === $route) {
+                    return strtr($shape, ['{id}' => $id, '{did}' => $did]);
+                }
+            }
+        }
+        foreach (SsrfRoutes::API as $shape => [$r]) {
+            if ($r === $route) {
+                return '/api/v2/' . strtr($shape, ['{id}' => $id, '{did}' => $did]);
+            }
+        }
+
+        return '/';
+    }
+
     /**
      * Every owned route and method, with real ids for a seed.
      *
