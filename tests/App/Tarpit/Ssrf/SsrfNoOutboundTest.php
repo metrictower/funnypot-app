@@ -25,6 +25,7 @@ final class SsrfNoOutboundTest extends TestCase
         'new' => [],
         'static' => [
             'self::gatewaylines',
+            'Funnypot\\App\\Tarpit\\Mint\\SurfaceExtension::none',
         ],
         'extends' => [],
     ];

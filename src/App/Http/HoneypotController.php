@@ -9,6 +9,7 @@ use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Storage\HitStore;
 use Funnypot\App\Tarpit\Mint\IssuedValue;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
+use Funnypot\App\Tarpit\Ssrf\SsrfDecoy;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -48,6 +49,8 @@ final class HoneypotController
         private ?TokenMintDecoy $tokenMint = null,
         /** Replaces serveDelay()'s sleep (tests count calls instead of sleeping). */
         private ?Closure $delayer = null,
+        /** The SSRF decoy (account webhooks, imports, export destination): a second owned-path surface. */
+        private ?SsrfDecoy $ssrf = null,
     ) {
     }
 
@@ -322,11 +325,18 @@ final class HoneypotController
         // narrow window where a fatal mid-emit loses the row is the store's standing best-effort posture.
         $decoyServed = false;
         $llm = null;
-        // A path in the token-mint surface's closed set gets that surface's answer in place of the
-        // serve branch below. Detection, the engine's answer and what it satisfied are already fixed
-        // above, and the row and the report below are built from them exactly as for any request.
-        $mint = $this->tokenMint?->prepare($context, $clientIp, IssuedValue::forEngine($funnypot, $this->attackClassifier));
-        if ($mint !== null) {
+        // A path in an owned-path surface's closed set (the token-mint account, then the SSRF decoy;
+        // the sets are disjoint) gets that surface's answer in place of the serve branch below.
+        // Detection, the engine's answer and what it satisfied are already fixed above, and the row and
+        // the report below are built from them exactly as for any request.
+        $issued = IssuedValue::forEngine($funnypot, $this->attackClassifier);
+        $surface = $this->tokenMint;
+        $mint = $this->tokenMint?->prepare($context, $clientIp, $issued);
+        if ($mint === null && $this->ssrf !== null) {
+            $surface = $this->ssrf;
+            $mint = $this->ssrf->prepare($context, $clientIp, $issued);
+        }
+        if ($mint !== null && $surface !== null) {
             // The branch replaced pays serveDelay() exactly when the engine served nothing; the
             // engine already slept for any fake it served, so latency never shows which answered.
             if ($response === null) {
@@ -336,9 +346,9 @@ final class HoneypotController
             // replaces, so feed the pin at the point the miss path would; an engine match never
             // reaches that path, so it never pins.
             if (!$mint->served && $response === null) {
-                $this->tokenMint->notServed($clientIp);
+                $surface->notServed($clientIp);
             }
-            $this->tokenMint->emit($mint);
+            $surface->emit($mint);
         } elseif ($response !== null) {
             ResponseEmitter::emit($response);
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
@@ -380,8 +390,8 @@ final class HoneypotController
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.
         $this->maybeReport($logged->matched || $payloadClass !== null, $clientIp, $context, $payloadClass);
 
-        if ($mint !== null) {
-            $this->tokenMint->attribute($mint, $clientIp);
+        if ($mint !== null && $surface !== null) {
+            $surface->attribute($mint, $clientIp);
         }
     }
 

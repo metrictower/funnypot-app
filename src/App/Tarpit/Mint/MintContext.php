@@ -33,6 +33,8 @@ final class MintContext
     public readonly CsrfCodec $csrf;
     public readonly FrictionPicker $friction;
     public readonly AccountPages $pages;
+    /** What a sibling surface adds to the account (scopes, forms, pages); empty unless one is wired. */
+    public readonly SurfaceExtension $ext;
     private ?IssuedValue $issued = null;
 
     /** @param Closure():int $clock */
@@ -42,12 +44,14 @@ final class MintContext
         public readonly TokenMintStore $store,
         private Closure $clock,
         bool $friction = true,
+        ?SurfaceExtension $ext = null,
     ) {
+        $this->ext = $ext ?? SurfaceExtension::none();
         $this->tokens = new TokenCodec($keys->key('token'), $persona->prefix);
         $this->sessions = new SessionCodec($keys->key('session'));
         $this->csrf = new CsrfCodec($keys->key('csrf'));
         $this->friction = new FrictionPicker($keys->key('pick'), $friction);
-        $this->pages = new AccountPages($persona);
+        $this->pages = new AccountPages($persona, $this->ext);
     }
 
     /**
@@ -259,14 +263,16 @@ final class MintContext
 
     /**
      * A fresh form token, nudged back a second at a time until it is fit to issue on its own form's
-     * action ($id fills the action's `{id}`).
+     * action ($id fills the action's `{id}`). A form the wired extension adds is looked up after the
+     * surface's own.
      */
     public function csrfToken(string $sid, string $formId, int $epoch, int $now, string $id = ''): string
     {
-        if (!isset(self::FORM_ACTIONS[$formId])) {
+        $template = self::FORM_ACTIONS[$formId] ?? $this->ext->forms[$formId] ?? null;
+        if ($template === null) {
             throw new \LogicException('unknown form ' . $formId);
         }
-        $action = strtr(self::FORM_ACTIONS[$formId], ['{id}' => $id, '{org}' => $this->persona->slug]);
+        $action = strtr($template, ['{id}' => $id, '{org}' => $this->persona->slug]);
 
         return $this->issue(8, fn (int $i): string => $this->csrf->issue($sid, $formId, $epoch, $now - $i), [$action]);
     }

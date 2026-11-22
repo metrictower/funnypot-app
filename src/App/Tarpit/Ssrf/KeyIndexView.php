@@ -20,4 +20,7 @@ interface KeyIndexView
     public function containsHash(string $hashHex): bool;
 
     public function complete(): bool;
+
+    /** Run at most one bounded build step, never waiting for a lock. */
+    public function advance(int $now): void;
 }

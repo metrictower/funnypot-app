@@ -48,7 +48,7 @@ final class MintCrawl
 
     public function cleanup(): void
     {
-        exec('rm -rf ' . escapeshellarg($this->dir));
+        \Funnypot\Tests\App\Tarpit\Mint\MintHarness::removeTree($this->dir);
     }
 
     public function send(string $method, string $path, string $query = '', ?array $fields = null, array $headers = [], ?string $raw = null, string $ip = '45.79.50.50'): MintPlan

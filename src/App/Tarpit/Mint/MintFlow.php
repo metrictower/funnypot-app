@@ -324,11 +324,11 @@ final class MintFlow
             $s->d['a'][$pos]['cu'] = $now + 900;
             $to = (string) $a['rt'];
             $s->d['a'][$pos]['rt'] = '';
-            if (!MintPlan::allowedLocation($to, $this->c->persona) || $to === '/settings/reauth') {
+            if (!MintPlan::allowedLocation($to, $this->c->persona, $this->c->ext->locations) || $to === '/settings/reauth') {
                 $to = '/settings/tokens';
             }
 
-            return [MintPlan::redirect($to, $this->c->persona)->attribute(['outcome' => 'confirmed']), true];
+            return [MintPlan::redirect($to, $this->c->persona, true, $this->c->ext->locations)->attribute(['outcome' => 'confirmed']), true];
         }, true, '/settings/reauth');
     }
 
@@ -373,9 +373,15 @@ final class MintFlow
 
     private function tokenNewPage(MintRequest $r): MintPlan
     {
-        $checked = ScopeSet::parseParam((string) $r->queryStr('scopes'));
+        $checked = ScopeSet::parseParam((string) $r->queryStr('scopes'), $this->c->ext->scopes);
 
-        return $this->page($r, fn (MintState $s, int $pos, array $sess, int $now): MintPlan => MintPlan::html(200, $this->c->pages->tokenNew($this->csrf($sess, 'token_create', $s, $pos, $now), [], [], $checked, array_keys(ScopeSet::ALL))));
+        return $this->page($r, fn (MintState $s, int $pos, array $sess, int $now): MintPlan => MintPlan::html(200, $this->c->pages->tokenNew($this->csrf($sess, 'token_create', $s, $pos, $now), [], [], $checked, $this->offeredScopes())));
+    }
+
+    /** @return list<string> the scopes the token form offers: the surface's own, then a wired extension's */
+    private function offeredScopes(): array
+    {
+        return [...array_keys(ScopeSet::ALL), ...array_keys($this->c->ext->scopes)];
     }
 
     private function tokenCreate(MintRequest $r): MintPlan
@@ -400,14 +406,14 @@ final class MintFlow
 
                 return false;
             };
-            $errors = MintForms::token($note, $exp, $scopes, $taken);
-            $norm = ScopeSet::normalise($scopes ?? []);
+            $errors = MintForms::token($note, $exp, $scopes, $taken, $this->c->ext->scopes);
+            $norm = ScopeSet::normalise($scopes ?? [], $this->c->ext->scopes);
             $form = fn (array $err): MintPlan => MintPlan::html(422, $this->c->pages->tokenNew(
                 $this->csrf($sess, 'token_create', $s, $pos, $now),
                 array_filter(['note' => !isset($err['note']) ? $note : null, 'expiration' => $exp !== null && isset(MintForms::EXPIRATIONS[$exp]) ? $exp : null], static fn ($v): bool => $v !== null),
                 $err,
                 $norm,
-                array_keys(ScopeSet::ALL),
+                $this->offeredScopes(),
             ))->attribute(['outcome' => 'invalid', 'scopes' => implode(' ', $norm)]);
             if ($errors !== []) {
                 return [$form($errors), false];

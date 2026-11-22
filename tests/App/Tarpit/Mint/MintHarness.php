@@ -22,6 +22,9 @@ use Funnypot\App\Tarpit\Mint\AccountFront;
 use Funnypot\App\Tarpit\Mint\MintPersona;
 use Funnypot\App\Tarpit\Mint\MintPlan;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
+use Funnypot\App\Storage\SsrfStore;
+use Funnypot\App\Tarpit\Ssrf\SsrfDecoy;
+use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\ThreatIntelReporter;
@@ -54,6 +57,8 @@ final class MintHarness
     public AppConfig $config;
     public MintPersona $persona;
     public ?MintPlan $last = null;
+    public ?SsrfDecoy $ssrf = null;
+    public ?SsrfStore $ssrfStore = null;
 
     /** @var list<string> PHP warnings and notices raised while handling, other than the CLI header noise */
     public array $warnings = [];
@@ -65,7 +70,8 @@ final class MintHarness
     public array $jars = ['default' => []];
 
     /**
-     * @param array{friction?:bool,llm?:?int,probeGate?:bool,decoyArchive?:bool,storeLimits?:array<string,int>,storeFaults?:?Closure,sleepDecoy?:?SleepDecoy,storePath?:string,velocity?:array{0:int,1:int}} $opts
+     * @param array{friction?:bool,llm?:?int,probeGate?:bool,decoyArchive?:bool,storeLimits?:array<string,int>,storeFaults?:?Closure,sleepDecoy?:?SleepDecoy,storePath?:string,velocity?:array{0:int,1:int},ssrf?:array<string,mixed>} $opts
+     *        ssrf arms the SSRF decoy too (keys: limits, cap, pointers, denylist, extraHosts, faults, indexPath, stamp)
      */
     public function __construct(public bool $armed = true, array $opts = [])
     {
@@ -115,8 +121,18 @@ final class MintHarness
                     $this->last = $p;
                     echo $p->body;
                 },
+                isset($opts['ssrf']) ? SsrfRoutes::extension() : null,
             );
             $this->front = new AccountFront($this->decoy->context());
+            if (isset($opts['ssrf'])) {
+                $o = $opts['ssrf'];
+                $this->ssrfStore = new SsrfStore($o['storePath'] ?? $this->dir . '/ssrf-decoy.sqlite', $o['limits'] ?? [], $o['faults'] ?? null);
+                $this->ssrf = SsrfDecoy::build(
+                    $this->decoy, self::KEY, $seed, $this->ssrfStore, $o['indexPath'] ?? $this->dir . '/ssrf-keyidx.sqlite',
+                    IdentityTestSupport::httpIdentity()->coreRenderSalt(), IdentityTestSupport::httpIdentity()->filesystemKey(),
+                    $o['cap'] ?? (256 << 10), $o['pointers'] ?? true, $o['denylist'] ?? true, $o['stamp'] ?? 'test', $o['extraHosts'] ?? [],
+                );
+            }
         }
         $this->controller = new HoneypotController(
             $this->hits,
@@ -135,6 +151,7 @@ final class MintHarness
             function (): void {
                 $this->delays++;
             },
+            $this->ssrf,
         );
     }
 
@@ -154,7 +171,19 @@ final class MintHarness
 
     public function cleanup(): void
     {
-        exec('rm -rf ' . escapeshellarg($this->dir));
+        self::removeTree($this->dir);
+    }
+
+    /** Delete a temp directory with PHP's own file functions (no shell, so a child with exec disabled can run it). */
+    public static function removeTree(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST) as $f) {
+            $f->isDir() ? rmdir($f->getPathname()) : unlink($f->getPathname());
+        }
+        rmdir($dir);
     }
 
     /**
@@ -205,7 +234,7 @@ final class MintHarness
         $headers += ['User-Agent' => 'Mozilla/5.0'];
         $this->last = null;
         $before = $this->maxHitId();
-        $faults = $this->decoy?->faults() ?? 0;
+        $faults = ($this->decoy?->faults() ?? 0) + ($this->ssrf?->faults() ?? 0);
         ob_start();
         // CLI has no real response: header() after test output warns "headers already sent", which
         // is the harness, not the code. Every other warning or notice is recorded for the tests.
@@ -226,8 +255,8 @@ final class MintHarness
             restore_error_handler();
             $out = (string) ob_get_clean();
         }
-        if (!$this->allowFaults && $this->decoy !== null && $this->decoy->faults() > $faults) {
-            $e = $this->decoy->lastFault();
+        if (!$this->allowFaults && $this->decoy !== null && $this->decoy->faults() + ($this->ssrf?->faults() ?? 0) > $faults) {
+            $e = $this->ssrf?->lastFault() ?? $this->decoy->lastFault();
             throw new \RuntimeException("fault path on {$method} {$path}: " . ($e ? get_class($e) . ' ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() : '?'));
         }
         $plan = $this->last;

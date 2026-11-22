@@ -135,6 +135,9 @@ final class NodeAnswers
 
     private function httpApi(NetNode $node, string $stem, string $m, PathClass $pc): Reply
     {
+        if ($pc === PathClass::Health && ($m === 'GET' || $m === 'POST')) {
+            return self::json(200, ['status' => 'ok', 'checks' => ['database' => 'ok', 'cache' => 'ok', 'queue' => self::pick($node->key, 'q', 4) === 0 ? 'degraded' : 'ok']]);
+        }
         if ($m === 'PUT' || $m === 'DELETE' || $m === 'PATCH') {
             return self::json(405, ['error' => 'method not allowed']);
         }

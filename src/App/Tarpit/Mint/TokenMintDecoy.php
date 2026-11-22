@@ -45,11 +45,14 @@ final class TokenMintDecoy
         };
     }
 
-    /** @param Closure():int|null $clock */
-    public static function build(string $tokenMintKey, int $personaSeed, TokenMintStore $store, bool $friction, ?ProbeGate $gate = null, ?Closure $clock = null, ?Closure $emitter = null): self
+    /**
+     * @param Closure():int|null $clock
+     * @param SurfaceExtension|null $ext what a wired sibling surface adds; none keeps every answer as is
+     */
+    public static function build(string $tokenMintKey, int $personaSeed, TokenMintStore $store, bool $friction, ?ProbeGate $gate = null, ?Closure $clock = null, ?Closure $emitter = null, ?SurfaceExtension $ext = null): self
     {
         return new self(
-            new MintContext(new MintKeys($tokenMintKey), MintPersona::fromSeed($personaSeed), $store, $clock ?? static fn (): int => time(), $friction),
+            new MintContext(new MintKeys($tokenMintKey), MintPersona::fromSeed($personaSeed), $store, $clock ?? static fn (): int => time(), $friction, $ext),
             $gate,
             $emitter,
         );
@@ -101,7 +104,8 @@ final class TokenMintDecoy
         }
     }
 
-    private static function nonDisclosing(MintPlan $p): bool
+    /** An answer that returns no stored object; a sibling surface applies the same rule to its own. */
+    public static function nonDisclosing(MintPlan $p): bool
     {
         return in_array($p->status, [204, 401, 403, 404, 405, 413, 429], true)
             || ($p->status === 422 && ($p->turn['outcome'] ?? '') === 'csrf');

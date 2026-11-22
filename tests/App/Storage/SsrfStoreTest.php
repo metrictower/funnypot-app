@@ -93,7 +93,7 @@ final class SsrfStoreTest extends TestCase
         }
         $s->d['st'] = ['b' => str_repeat('b', 63), 'ak' => str_repeat('a', 24), 'sk' => str_repeat('s', 24), 'url' => $url, 'cr' => $cr, 'c' => 1795300000, 't' => 1795300000, 'v' => []];
         for ($i = 0; $i < 9; $i++) {
-            $s->addVerification(['id' => str_repeat('v', 12), 'c' => 1795300000, 'f' => $facts]);
+            $s->addVerification(['id' => str_repeat('v', 12), 'c' => 1795300000, 'u' => str_repeat('u', 120), 'f' => $facts]);
         }
         for ($i = 0; $i < 40; $i++) {
             $s->pushRate(1795300000 + $i);

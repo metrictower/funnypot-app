@@ -86,7 +86,7 @@ final class FakeFetch
         $error = NodeAnswers::error($o) ?? $reply?->error;
         $ok = $reply !== null && $reply->ok() && $reply->status !== null && $reply->status < 300;
         if ($reply !== null && $reply->ok() && !$ok) {
-            $error = 'HTTP ' . $reply->status;
+            $error = 'HTTP ' . $reply->status . ($o === 'proxy_denied' ? ': ' . NodeAnswers::PROXY_DENIED : '');
         }
 
         return new FetchResult($ok ? 'delivered' : 'failed', $reply, $ok ? null : ($error ?? 'Delivery failed'), $ms, [['at' => $t0, 'state' => $ok ? 'delivered' : 'failed', 'error' => $ok ? null : $error, 'ms' => $ms]]);

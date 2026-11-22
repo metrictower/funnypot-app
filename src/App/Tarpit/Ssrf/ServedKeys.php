@@ -196,6 +196,23 @@ final class ServedKeys
         ];
     }
 
+    /**
+     * The reference for a key given in its own field (an export destination's access key), used as a
+     * signed request's credential.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function keyReference(string $key, string $clientIp): ?array
+    {
+        if ($key === '') {
+            return null;
+        }
+        $key = substr($key, 0, 128);
+        $kind = self::kindOf($key) ?? 'other';
+
+        return ['k' => $kind, 'h' => $this->index->hashOf($kind, $key), 'f' => $kind === 'other' ? null : $this->direct($key, $clientIp), 'd' => 0, 'x' => 0, 'st' => 'none', 'w' => 'query'];
+    }
+
     /** An X-Amz-Date (YYYYMMDDTHHMMSSZ) as epoch seconds, by arithmetic alone; 0 when malformed. */
     public static function amzDate(string $v): int
     {

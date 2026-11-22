@@ -27,22 +27,24 @@ final class ScopeSet
     /** Scopes behind the organization's single sign-on. */
     public const ORG_DATA = ['users:read', 'orders:read', 'orders:export'];
 
-    public static function known(string $scope): bool
+    /** @param array<string,string> $extra scopes a wired extension adds (scope => label) */
+    public static function known(string $scope, array $extra = []): bool
     {
-        return isset(self::ALL[$scope]);
+        return isset(self::ALL[$scope]) || isset($extra[$scope]);
     }
 
     /**
      * Normalise a list to known scopes, sorted and unique. Unknown names are dropped.
      *
      * @param list<string> $scopes
+     * @param array<string,string> $extra
      * @return list<string>
      */
-    public static function normalise(array $scopes): array
+    public static function normalise(array $scopes, array $extra = []): array
     {
         $out = [];
         foreach ($scopes as $s) {
-            if (self::known($s)) {
+            if (self::known($s, $extra)) {
                 $out[$s] = true;
             }
         }
@@ -61,12 +63,13 @@ final class ScopeSet
     /**
      * Split an OAuth `scope` parameter (space or comma separated) into known scopes.
      *
+     * @param array<string,string> $extra
      * @return list<string>
      */
-    public static function parseParam(string $param): array
+    public static function parseParam(string $param, array $extra = []): array
     {
         $parts = preg_split('/[\s,]+/', substr($param, 0, 256), 16) ?: [];
 
-        return self::normalise(array_values(array_filter($parts, static fn ($p): bool => $p !== '')));
+        return self::normalise(array_values(array_filter($parts, static fn ($p): bool => $p !== '')), $extra);
     }
 }

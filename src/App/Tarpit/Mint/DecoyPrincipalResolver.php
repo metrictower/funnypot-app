@@ -110,9 +110,12 @@ final class DecoyPrincipalResolver
     }
 
     /**
-     * The account a request acts as, by session or bearer, or null.
+     * The account a request acts as, by session or bearer, or null. Besides the login, kind and scopes
+     * it names the row (k, k8), the row's epoch and the account serial, so a sibling surface can key
+     * its own state to exactly this account; a session also gives its sid (hex) and the account's
+     * form epoch, and a token its serial (tn).
      *
-     * @return array{login:string,kind:string,scopes:list<string>}|null
+     * @return array{login:string,kind:string,scopes:list<string>,k:string,k8:string,epoch:string,acct:int,tn?:int,sid?:string,ce?:int}|null
      */
     public function resolve(MintRequest $r): ?array
     {
@@ -122,7 +125,13 @@ final class DecoyPrincipalResolver
             $s = $this->c->store->load(bin2hex($sess['kref']));
             $pos = $this->c->liveAccount($s, $sess, $now);
             if ($s !== null && $pos !== null) {
-                return ['login' => (string) $s->d['a'][$pos]['u'], 'kind' => 'session', 'scopes' => []];
+                $k = bin2hex($sess['kref']);
+
+                return [
+                    'login' => (string) $s->d['a'][$pos]['u'], 'kind' => 'session', 'scopes' => [],
+                    'k' => $k, 'k8' => substr($k, 0, 16), 'epoch' => $s->epoch(), 'acct' => (int) $s->d['a'][$pos]['i'],
+                    'sid' => bin2hex($sess['sid']), 'ce' => (int) $s->d['a'][$pos]['ce'],
+                ];
             }
         }
         [$cred] = $this->bearer($r, $now);
@@ -135,6 +144,14 @@ final class DecoyPrincipalResolver
             return null;
         }
 
-        return ['login' => (string) $s->d['a'][$pos]['u'], 'kind' => (string) $cred['kind'], 'scopes' => (array) $cred['scopes']];
+        $out = [
+            'login' => (string) $s->d['a'][$pos]['u'], 'kind' => (string) $cred['kind'], 'scopes' => (array) $cred['scopes'],
+            'k' => (string) $cred['k'], 'k8' => (string) $cred['k8'], 'epoch' => $s->epoch(), 'acct' => (int) $cred['acct'],
+        ];
+        if (isset($cred['tn'])) {
+            $out['tn'] = (int) $cred['tn'];
+        }
+
+        return $out;
     }
 }

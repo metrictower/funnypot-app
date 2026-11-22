@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
 use Funnypot\App\Bench\TokenMintLoop;
+use Funnypot\App\Tarpit\Mint\MintPlan;
+use Funnypot\Tests\App\Tarpit\Mint\MintCorpus;
 use Funnypot\Tests\App\Tarpit\Mint\MintCrawl;
+use Funnypot\Tests\App\Tarpit\Mint\MintHarness;
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 4) . '/scripts/support/TokenMintLoop.php';
@@ -105,6 +108,46 @@ final class Fp0815SurfacePinTest extends TestCase
         foreach (self::LOOP as $key => $want) {
             [$profile, $seed] = explode(' ', $key);
             self::assertSame($want, self::loopHash($profile, (int) $seed), "TokenMintLoop {$key} differs from the base " . self::BASE);
+        }
+    }
+
+    /**
+     * A PAT minted with webhooks:write while the extension was wired keeps working on the account's own
+     * pages and API once the extension is switched off; SSRF paths then answer as today.
+     */
+    public function test_flipping_the_flag_after_a_mint_faults_no_page(): void
+    {
+        $wired = new MintHarness(true, ['ssrf' => []]);
+        try {
+            $wired->join();
+            $pat = $wired->mint(['read:user', 'webhooks:write']);
+            $form = $wired->get('/settings/webhooks/new');
+            $r = $wired->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body']), 'payload_url' => 'http://172.16.0.5/']);
+            self::assertSame(303, $r['status']);
+            $plain = new MintHarness(true, ['storePath' => $wired->dir . '/token-mint.sqlite']);
+            $plain->now = $wired->now;
+            $plain->jars = $wired->jars;
+            $checked = 0;
+            foreach (MintCorpus::ownedPaths(MintCorpus::slug()) as $p) {
+                foreach ([[], ['Authorization' => 'Bearer ' . $pat]] as $headers) {
+                    $res = $plain->get($p, '', 'default', MintHarness::IP, $headers);
+                    if ($res['plan'] !== null) {
+                        MintHarness::assertClosed($res['plan'], MintCorpus::slug(), $p);
+                        $checked++;
+                    }
+                }
+            }
+            self::assertGreaterThan(40, $checked);
+            self::assertSame(0, $plain->decoy->faults());
+            self::assertSame([], $plain->warnings);
+            self::assertStringContainsString('webhooks:write', $plain->get('/settings/tokens')['body'], 'the stored scope still lists');
+            self::assertSame(200, $plain->get('/api/v2/user', '', 'default', MintHarness::IP, ['Authorization' => 'Bearer ' . $pat])['status']);
+            $ssrf = $plain->get('/settings/webhooks');
+            self::assertNull($ssrf['plan'], 'SSRF paths answer as today once unwired');
+            self::assertStringContainsString('404 Not Found', $ssrf['body']);
+            $plain->cleanup();
+        } finally {
+            $wired->cleanup();
         }
     }
 }

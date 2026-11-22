@@ -56,10 +56,14 @@ final class MintPlan
             ->with('X-Content-Type-Options', 'nosniff');
     }
 
-    /** A 303 to one of the surface's own pages, with the tiny HTML body browsers never show. */
-    public static function redirect(string $location, MintPersona $persona, bool $served = true): self
+    /**
+     * A 303 to one of the surface's own pages, with the tiny HTML body browsers never show.
+     *
+     * @param list<string> $extraPatterns pages a wired extension adds
+     */
+    public static function redirect(string $location, MintPersona $persona, bool $served = true, array $extraPatterns = []): self
     {
-        if (!self::allowedLocation($location, $persona)) {
+        if (!self::allowedLocation($location, $persona, $extraPatterns)) {
             throw new LogicException('redirect target outside the closed set');
         }
         $esc = htmlspecialchars($location, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -74,11 +78,20 @@ final class MintPlan
         return (new self($status, '', true))->with('Content-Type', $contentType);
     }
 
-    /** The on-site pages a redirect may name. */
-    public static function allowedLocation(string $location, MintPersona $persona): bool
+    /**
+     * The on-site pages a redirect may name.
+     *
+     * @param list<string> $extraPatterns patterns of the pages a wired extension adds
+     */
+    public static function allowedLocation(string $location, MintPersona $persona, array $extraPatterns = []): bool
     {
         if (in_array($location, ['/', '/settings/reauth', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $persona->slug . '/signin'], true)) {
             return true;
+        }
+        foreach ($extraPatterns as $pattern) {
+            if (preg_match($pattern, $location) === 1) {
+                return true;
+            }
         }
 
         return preg_match('~\A/settings/applications/[a-f0-9]{12}\z~', $location) === 1;

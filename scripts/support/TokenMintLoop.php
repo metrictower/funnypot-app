@@ -92,7 +92,7 @@ final class TokenMintLoop
 
     public function cleanup(): void
     {
-        exec('rm -rf ' . escapeshellarg($this->dir));
+        \Funnypot\Tests\App\Tarpit\Mint\MintHarness::removeTree($this->dir);
     }
 
     public function store(): TokenMintStore

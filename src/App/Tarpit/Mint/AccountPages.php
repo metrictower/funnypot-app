@@ -14,8 +14,11 @@ namespace Funnypot\App\Tarpit\Mint;
  */
 final class AccountPages
 {
-    public function __construct(private MintPersona $p)
+    private SurfaceExtension $ext;
+
+    public function __construct(private MintPersona $p, ?SurfaceExtension $ext = null)
     {
+        $this->ext = $ext ?? SurfaceExtension::none();
     }
 
     public static function e(string $s): string
@@ -34,9 +37,13 @@ final class AccountPages
     public function layout(string $title, string $main, bool $signedIn, ?string $notice = null): string
     {
         $c = self::e($this->p->company);
+        $extra = '';
+        foreach ($this->ext->nav as [$href, $label]) {
+            $extra .= "<a href='" . self::e($href) . "'>" . self::e($label) . '</a>';
+        }
         $nav = $signedIn
             ? "<nav><a href='/settings/profile'>Profile</a><a href='/settings/security'>Security</a>"
-                . "<a href='/settings/tokens'>Tokens</a><a href='/settings/applications'>OAuth apps</a>"
+                . "<a href='/settings/tokens'>Tokens</a><a href='/settings/applications'>OAuth apps</a>" . $extra
                 . "<a href='/docs/api'>API docs</a><a href='/signout'>Sign out</a></nav>"
             : "<nav><a href='/docs/api'>API docs</a><a href='/'>Sign in</a></nav>";
 
@@ -229,7 +236,7 @@ final class AccountPages
         foreach ($offered as $s) {
             $scopes .= "<label class=scope><input type=checkbox name='scopes[]' value='" . self::e($s) . "'"
                 . (in_array($s, $checked, true) ? ' checked' : '') . '>' . self::e($s) . ' <span class=muted>'
-                . self::e(ScopeSet::ALL[$s]) . '</span></label>';
+                . self::e(ScopeSet::ALL[$s] ?? $this->ext->scopes[$s] ?? $s) . '</span></label>';
         }
         $main = "<div class=card><h1>New personal access token</h1><form method=post action='/settings/tokens'>" . self::csrf($csrf)
             . $this->input('Note', 'note', $values, $errors)
@@ -374,6 +381,7 @@ final class AccountPages
             ['GET', 'orders/{id}', 'One order (single sign-on)', 'orders:read'],
             ['POST', 'orders/exports', 'Start an order export (single sign-on)', 'orders:export'],
             ['POST', 'auth/login', 'Exchange a username and password for a 15-minute token', 'none'],
+            ...$this->ext->ops,
         ];
         $rows = '';
         foreach ($ops as [$m, $path, $what, $scope]) {

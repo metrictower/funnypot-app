@@ -40,4 +40,8 @@ final class MemoryKeyIndex implements KeyIndexView
     {
         return $this->complete;
     }
+
+    public function advance(int $now): void
+    {
+    }
 }

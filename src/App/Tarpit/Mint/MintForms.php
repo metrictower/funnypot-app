@@ -133,7 +133,7 @@ final class MintForms
      * @param callable(string):bool $noteTaken
      * @return array<string,string>
      */
-    public static function token(?string $note, ?string $expiration, ?array $scopes, callable $noteTaken): array
+    public static function token(?string $note, ?string $expiration, ?array $scopes, callable $noteTaken, array $extraScopes = []): array
     {
         $errors = [];
         $n = self::text($note, 100, true);
@@ -146,7 +146,7 @@ final class MintForms
             $errors['scopes'] = 'scopes_none';
         } else {
             foreach ($scopes as $s) {
-                if (!ScopeSet::known($s)) {
+                if (!ScopeSet::known($s, $extraScopes)) {
                     $errors['scopes'] = 'scopes_unknown';
                     break;
                 }
