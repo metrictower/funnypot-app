@@ -300,12 +300,12 @@ final class Router
         // dashboard back here.
         if ($path === '/' && !isset($_GET['admin'])) {
             if ($method === 'GET' && $_GET === []) {
-                $this->home->index();
+                $this->home->index($ctx, $clientIp);
 
                 return;
             }
             if ($method === 'POST') {
-                $this->home->login($clientIp);
+                $this->home->login($clientIp, $ctx);
 
                 return;
             }

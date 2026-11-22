@@ -7,7 +7,11 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Admin\AdminAuth;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\Mint\AccountFront;
+use Funnypot\App\Tarpit\Mint\AccountPages;
+use Funnypot\App\Tarpit\Mint\MintVocabulary;
 use Funnypot\App\ThreatIntel\Blocklist;
+use Funnypot\Core\RequestContext;
 use Geo;
 
 /**
@@ -51,20 +55,37 @@ final class HomeController
          *  a match mints a real session and redirects to the dashboard. Null (or an empty adminUser)
          *  disables the overlay — the form is then a pure decoy. */
         private ?AdminAuth $adminAuth = null,
+        /** The token-mint account surface's seam. Null leaves every byte of this page as it was:
+         *  armed, a live account session gets the account home, the signed-out page gains a sign-up
+         *  link, and a sign-in naming an account this source created signs in. */
+        private ?AccountFront $account = null,
     ) {
     }
 
-    public function index(): void
+    public function index(?RequestContext $ctx = null, string $clientIp = ''): void
     {
+        if ($this->account !== null && $ctx !== null) {
+            $home = $this->account->home($ctx, $clientIp);
+            if ($home !== null) {
+                $home->emit();
+
+                return;
+            }
+        }
         header('Content-Type: text/html; charset=utf-8');
-        echo $this->page('Sign in', $this->loginForm(''));
+        echo $this->page('Sign in', $this->loginForm('') . $this->signedOutExtra($ctx, $clientIp));
+    }
+
+    private function signedOutExtra(?RequestContext $ctx, string $clientIp): string
+    {
+        return $this->account !== null && $ctx !== null ? $this->account->signedOutExtra($ctx, $clientIp) : '';
     }
 
     /** POST /: capture the credential attempt (record-only), then funnel the caller into the no-auth
      *  admin-panel decoy — a real app drops a signed-in user on its dashboard, so a 302 there reads as
      *  a successful login. The target is a fixed internal path (app-chosen, never an open redirect); a
      *  meta-refresh body backs the header for clients that parse HTML but don't follow a 302. */
-    public function login(string $clientIp): void
+    public function login(string $clientIp, ?RequestContext $ctx = null): void
     {
         $user = substr((string) ($_POST['username'] ?? $_POST['email'] ?? ''), 0, 120);
         $pass = substr((string) ($_POST['password'] ?? ''), 0, 120);
@@ -91,6 +112,24 @@ final class HomeController
         }
 
         $this->log($clientIp, 'POST', '/', 'login', 'high', 'home-login', 'user=' . $user . ' pass=' . $pass);
+
+        // An account this source created on the token-mint surface signs in for real; every other
+        // credential (including one for an account created elsewhere) takes the funnel below.
+        $signIn = $this->account !== null && $ctx !== null ? $this->account->signIn($ctx, $clientIp, $user, $pass) : null;
+        if (isset($signIn['cookie'])) {
+            header('Content-Type: text/html; charset=utf-8');
+            header('Set-Cookie: ' . $signIn['cookie'], false);
+            header('Location: /', true, 302);
+            echo '<!doctype html><meta http-equiv="refresh" content="0;url=/"><title>Redirecting&hellip;</title>';
+
+            return;
+        }
+        if (isset($signIn['error'])) {
+            header('Content-Type: text/html; charset=utf-8');
+            echo $this->page('Sign in', $this->loginForm('<p class=err>' . AccountPages::e(MintVocabulary::text($signIn['error'])) . '</p>') . $this->signedOutExtra($ctx, $clientIp));
+
+            return;
+        }
 
         header('Content-Type: text/html; charset=utf-8');
         header('Location: ' . self::ADMIN_PANEL_PATH, true, 302);

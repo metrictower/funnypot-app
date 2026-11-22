@@ -44,12 +44,9 @@ final class ProbeGate
         // freely; the pin check is skipped too, so an already-pinned test IP recovers immediately.
         $exempt = self::ipMatches($ip, $this->allowIps);
         if (!$exempt) {
-            if ($this->store->isBulkFlagged($ip)) {
-                return ['generate' => false, 'reason' => 'bulk-scan-pinned'];
-            }
-            if ($this->velocity->isBulkScan($this->store->probeVelocity($ip))) {
-                $this->store->flagBulkScan($ip, $this->pinHours);  // pin so a quiet-then-probe cannot dodge it
-                return ['generate' => false, 'reason' => 'bulk-scan'];
+            $pinned = $this->pinIfBulk($ip);
+            if ($pinned !== null) {
+                return ['generate' => false, 'reason' => $pinned];
             }
             // After the pin/velocity block so a bulk scanner is still pinned while the hour is spent.
             // Fail-closed inside exhausted(): a ledger fault stops fresh generation, never cached serving.
@@ -62,6 +59,27 @@ final class ProbeGate
         }
 
         return ['generate' => true, 'reason' => $exempt ? 'allowlisted' : 'plausible'];
+    }
+
+    /**
+     * Gate A's pin step on its own: an IP already pinned, or one whose velocity window now reads as a
+     * bulk scan (which pins it), returns the reason; anything else, allowlisted IPs included, returns
+     * null. Callers that answer a miss without going through decide() use it to pin at the same point.
+     */
+    public function pinIfBulk(string $ip): ?string
+    {
+        if (self::ipMatches($ip, $this->allowIps)) {
+            return null;
+        }
+        if ($this->store->isBulkFlagged($ip)) {
+            return 'bulk-scan-pinned';
+        }
+        if ($this->velocity->isBulkScan($this->store->probeVelocity($ip))) {
+            $this->store->flagBulkScan($ip, $this->pinHours);  // pin so a quiet-then-probe cannot dodge it
+            return 'bulk-scan';
+        }
+
+        return null;
     }
 
     /** True if $ip exactly equals, or falls inside an IPv4 CIDR from, any entry in $list. */

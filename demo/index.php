@@ -52,6 +52,9 @@ use Funnypot\App\Http\PolluterController;
 use Funnypot\App\Http\Router;
 use Funnypot\App\Http\SleepDecoy;
 use Funnypot\App\Storage\SqliteAttritionStore;
+use Funnypot\App\Storage\TokenMintStore;
+use Funnypot\App\Tarpit\Mint\AccountFront;
+use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\App\Tarpit\Attrition\AttritionArtifactRenderer;
 use Funnypot\App\Tarpit\Attrition\AttritionEntryIssuer;
 use Funnypot\App\Tarpit\Attrition\AttritionLimits;
@@ -264,6 +267,10 @@ if ($config->llmEnabled || $config->aiApiEnabled) {
     ));
 }
 $llmFakes = null;
+// One probe gate (velocity window + bulk-scan pin) shared by the LLM tier and the token-mint surface,
+// so an answer that discloses nothing pins a spraying source exactly as the miss it replaces would.
+// Null with the LLM off: nothing pins then, armed or not.
+$probeGate = null;
 if ($config->llmEnabled) {
     $breaker = new CircuitBreaker($config->llmCacheDb, $config->llmBreakerThreshold, $config->llmBreakerCooldownS);
     // Priority order: WordPress, phpMyAdmin, Grafana, then AdminLTE last — its broad /admin match
@@ -287,14 +294,15 @@ if ($config->llmEnabled) {
     // back (escaped) on a later read of the same view, per ip + persona seed, so a stored-vuln probe
     // looks like it landed. Its own SQLite file, bounded + TTL'd, lazy-opened, fail-open.
     $fakePersistence = new FakePersistenceStore(dirname($config->dbPath) . '/stored-bait.sqlite');
+    $probeGate = new ProbeGate(
+        new ProbeClassifier(),
+        new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),
+        $store,
+        allowIps: $config->llmGateAllowIps,
+        budget: $llmBudget,
+    );
     $llmFakes = new LlmFakeResponder(
-        new ProbeGate(
-            new ProbeClassifier(),
-            new VelocityTracker($config->llmVelocityPer60s, $config->llmVelocityPer10m),
-            $store,
-            allowIps: $config->llmGateAllowIps,
-            budget: $llmBudget,
-        ),
+        $probeGate,
         $llmCache,
         new LlmClient($config->llmUrl, $config->llmTimeoutMs, $config->llmNPredict, $breaker),
         $llmSanitizer,
@@ -386,9 +394,31 @@ if ($config->sleepDecoy) {
     );
     $sleepDecoy = new SleepDecoy($sleepBudget, $config, new AttackClassifier());
 }
+// Token-mint account surface (sign-up, personal access tokens, OAuth apps, a member API) — opt-in
+// (FUNNYPOT_TARPIT_TOKEN_MINT) and it rides the tarpit master switch; public mode only. It needs the
+// additive token-mint key and its own token-mint.sqlite: a missing key (a bundle not yet re-prepared)
+// or a failed migration leaves it unwired and logs a fixed code, so its paths answer exactly as today.
+// It joins the honeypot at the serve seam only (detection, the row and the report are unchanged) and
+// the public "/" page through a nullable seam.
+$tokenMint = null;
+$accountFront = null;
+if ($config->tarpitEnabled && $config->tokenMintEnabled && $config->mode === 'public') {
+    $tokenMintKey = $identity->tokenMintKey();
+    if ($tokenMintKey === null) {
+        error_log('funnypot: token-mint enabled but the HTTP identity bundle predates its key; feature off (code=token-mint-key-missing)');
+    } else {
+        $tokenMintStore = new TokenMintStore($config->tokenMintDbPath);
+        if ($tokenMintStore->ready()) {
+            $tokenMint = TokenMintDecoy::build($tokenMintKey, $personaSeed, $tokenMintStore, $config->tokenMintFriction, $probeGate);
+            $accountFront = new AccountFront($tokenMint->context());
+        } else {
+            error_log('funnypot: token-mint state migration failed; feature off (code=token-mint-migration-failed)');
+        }
+    }
+}
 // The engine Config factory carries the identity's private render salt + visible persona material, so
 // the template tier resolves the SAME PersonaIdentity the app pages show (and the same X-Powered-By).
-$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy);
+$honeypot = new HoneypotController($store, $geo, $config, __DIR__ . '/decoys', new CoreConfigFactory($identity, $poweredBy), $blocklist, $abuse, $threatIntel, $llmFakes, new AttackClassifier(), $operatorBlock, $sleepDecoy, $tokenMint);
 // Operator auth (FP-0242b) — Argon2id user + server-side session + CSRF + login lockout, in its own
 // admin.sqlite beside the hit store. The session cookie is scoped to the dashboard base (never the
 // decoy surface) and Secure over HTTPS (behind nginx, read via X-Forwarded-Proto). bootstrap() seeds
@@ -517,7 +547,7 @@ if ($config->tarpitEnabled) {
 // FP-0295: the composition root hands HomeController the SAME $adminAuth, so the real operator login is
 // overlaid on the public "/" decoy — a username-gated Argon2id verify that, on success, mints the real
 // session (cookie scoped to $adminBase = funnypotPath here) and redirects to the dashboard.
-$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth);
+$home = new HomeController($store, $geo, $config, __DIR__ . '/assets', $blocklist, $labyrinth !== null ? LabyrinthController::entryHint() : null, $adminAuth, $accountFront);
 // The stealth-mode corporate front (fronts / and /login when FUNNYPOT_MODE=stealth). FP-0245e: it carries
 // the SAME LLM-only labyrinth entry hint on its credential-submission (login POST) response when the
 // tarpit is on, so the deep-engagement decoy engages in a stealth deployment too — never a href, never in

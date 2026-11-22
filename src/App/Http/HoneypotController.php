@@ -7,6 +7,7 @@ namespace Funnypot\App\Http;
 use Funnypot\App\Config\AppConfig;
 use Funnypot\App\Llm\LlmFakeResponder;
 use Funnypot\App\Storage\HitStore;
+use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\App\ThreatIntel\AbuseIpdb;
 use Funnypot\App\ThreatIntel\AttackClassifier;
 use Funnypot\App\ThreatIntel\Blocklist;
@@ -19,6 +20,7 @@ use Funnypot\Core\Log4ShellProbe;
 use Funnypot\App\Emulation\EmulationPolicy;
 use Funnypot\App\Render\PanelRoute;
 use Funnypot\Core\RequestContext;
+use Closure;
 use Geo;
 
 /**
@@ -41,6 +43,10 @@ final class HoneypotController
         private ?AttackClassifier $attackClassifier = null,
         private ?OperatorBlocklist $operatorBlock = null,
         private ?SleepDecoy $sleepDecoy = null,
+        /** The token-mint account surface: answers its closed path set in place of the serve branch. */
+        private ?TokenMintDecoy $tokenMint = null,
+        /** Replaces serveDelay()'s sleep (tests count calls instead of sleeping). */
+        private ?Closure $delayer = null,
     ) {
     }
 
@@ -79,6 +85,11 @@ final class HoneypotController
      *  dashboard's decoy-404 branches share one implementation and cannot drift apart. */
     private function serveDelay(): void
     {
+        if ($this->delayer !== null) {
+            ($this->delayer)();
+
+            return;
+        }
         self::serveDelayFor($this->config);
     }
 
@@ -310,7 +321,23 @@ final class HoneypotController
         // narrow window where a fatal mid-emit loses the row is the store's standing best-effort posture.
         $decoyServed = false;
         $llm = null;
-        if ($response !== null) {
+        // A path in the token-mint surface's closed set gets that surface's answer in place of the
+        // serve branch below. Detection, the engine's answer and what it satisfied are already fixed
+        // above, and the row and the report below are built from them exactly as for any request.
+        $mint = $this->tokenMint?->prepare($context, $clientIp);
+        if ($mint !== null) {
+            // The branch replaced pays serveDelay() exactly when the engine served nothing; the
+            // engine already slept for any fake it served, so latency never shows which answered.
+            if ($response === null) {
+                $this->serveDelay();
+            }
+            // An answer that discloses nothing counts toward the bulk-scan window like the miss it
+            // replaces, so feed the pin at the point the miss path would.
+            if (!$mint->served) {
+                $this->tokenMint->notServed($clientIp);
+            }
+            $this->tokenMint->emit($mint);
+        } elseif ($response !== null) {
             ResponseEmitter::emit($response);
         } elseif (!($decoyServed = $this->serveDecoyArchive($context, $clientIp))) {
             // A plausible unknown path may get an LLM-generated fake; everything else (declined,
@@ -337,7 +364,7 @@ final class HoneypotController
             'matched' => $logged->matched || $payloadClass !== null,
             'severity' => $payloadClass !== null ? AttackClassifier::severityFor($payloadClass) : $logged->highestSeverity,
             'templates' => $payloadClass !== null ? ['payload-' . $payloadClass] : array_slice($logged->templateIds(), 0, 8),
-            'served' => $response !== null || $decoyServed || $llm !== null,
+            'served' => $mint !== null ? $mint->served : ($response !== null || $decoyServed || $llm !== null),
             'style' => $this->config->style,
             'body' => $context->rawBody !== null ? substr($context->rawBody, 0, 300) : null,
             'referer' => substr($context->headers['Referer'] ?? '', 0, 160) ?: null,
@@ -350,6 +377,10 @@ final class HoneypotController
         // Queue an AbuseIPDB report for the attacker (a fast local write; the drain worker sends it):
         // an engine match, OR a payload class the fall-through classifier caught on an unmatched path.
         $this->maybeReport($logged->matched || $payloadClass !== null, $clientIp, $context, $payloadClass);
+
+        if ($mint !== null) {
+            $this->tokenMint->attribute($mint, $clientIp);
+        }
     }
 
     /** Queue a web attacker for the reporters (AbuseIPDB and/or our Threat Intel service), with the
@@ -391,7 +422,7 @@ final class HoneypotController
      *
      * @return array{0:string,1:string}|null [decoyFile, contentType], or null for an unmapped suffix.
      */
-    private static function decoyForPath(string $path): ?array
+    public static function decoyForPath(string $path): ?array
     {
         $map = [
             '.tar.gz' => ['backup.tar.gz', 'application/gzip'],
