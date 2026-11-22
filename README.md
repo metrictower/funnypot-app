@@ -187,7 +187,9 @@ or UI text, so it reads as the persona's own platform rather than a clone of a n
   exactly as for any request, and only the response body is the surface's. The row's `served` flag
   tells the truth: an answer that discloses no object (every 401, and on an id-bearing path any 403, 404,
   405, 413, 429, OPTIONS 204, expired-form 422 or no-session redirect, whatever the method) is logged
-  unserved and feeds the bulk-scan pin like the miss it replaces. The
+  unserved and feeds the bulk-scan pin like the miss it replaces. The exception is a form token the surface
+  itself signed: a 422 or 429 answering an expired or used form of ours is use of our own pages and never
+  counts, while a request with no such token (a blind spray) still does. The
   serve delay is paid exactly when the engine served nothing, so latency never shows which answered. An
   id in a path is any 1–20 character lowercase segment holding a digit, so no id length answers
   differently; a letter-only word is never an id. No backup-archive or text-decoy path, no `.php` name and

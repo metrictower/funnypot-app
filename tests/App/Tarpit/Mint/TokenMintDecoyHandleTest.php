@@ -1007,20 +1007,22 @@ final class TokenMintDecoyHandleTest extends TestCase
         $armed = $this->h();
         $unarmed = $this->h(false);
         $armed->join('velo2', 'Passw0rd!x', 'default', '45.87.0.1');
+        // The oversized leg runs six requests, enough to pass the five-path window: the engine itself
+        // spends about a third of a second on each 16 KB body, so forty would dominate the file.
         $legs = [
-            'PUT users' => ['PUT', fn (int $i): string => '/api/v2/users/nobody' . $i, '{}', ['Content-Type' => 'application/json'], 'nojar'],
-            'DELETE users' => ['DELETE', fn (int $i): string => '/v2/users/nobody' . $i, null, [], 'nojar'],
-            'POST users' => ['POST', fn (int $i): string => '/api/v2/users/nobody' . $i, 'a=1', [], 'nojar'],
-            'OPTIONS users' => ['OPTIONS', fn (int $i): string => '/api/v2/users/nobody' . $i, null, [], 'nojar'],
-            'POST orders' => ['POST', fn (int $i): string => '/api/v2/orders/' . (500 + $i), 'a=1', [], 'nojar'],
-            'csrf delete' => ['POST', fn (int $i): string => '/settings/tokens/' . sprintf('%012x', 0xbee000 + $i) . '/delete', 'csrf_token=x', [], 'default'],
-            'oversized' => ['POST', fn (int $i): string => '/settings/applications/' . sprintf('%012x', 0xcab000 + $i) . '/secrets', str_repeat('a', 17000), [], 'default'],
+            'PUT users' => ['PUT', fn (int $i): string => '/api/v2/users/nobody' . $i, '{}', ['Content-Type' => 'application/json'], 'nojar', 40],
+            'DELETE users' => ['DELETE', fn (int $i): string => '/v2/users/nobody' . $i, null, [], 'nojar', 40],
+            'POST users' => ['POST', fn (int $i): string => '/api/v2/users/nobody' . $i, 'a=1', [], 'nojar', 40],
+            'OPTIONS users' => ['OPTIONS', fn (int $i): string => '/api/v2/users/nobody' . $i, null, [], 'nojar', 40],
+            'POST orders' => ['POST', fn (int $i): string => '/api/v2/orders/' . (500 + $i), 'a=1', [], 'nojar', 40],
+            'csrf delete' => ['POST', fn (int $i): string => '/settings/tokens/' . sprintf('%012x', 0xbee000 + $i) . '/delete', 'csrf_token=x', [], 'default', 40],
+            'oversized' => ['POST', fn (int $i): string => '/settings/applications/' . sprintf('%012x', 0xcab000 + $i) . '/secrets', str_repeat('a', 16385), [], 'nojar', 6],
         ];
         $n = 0;
-        foreach ($legs as $name => [$m, $path, $body, $hd, $jar]) {
+        foreach ($legs as $name => [$m, $path, $body, $hd, $jar, $count]) {
             $ip = $jar === 'default' ? '45.87.0.1' : '45.88.0.' . (++$n);
             $before = $armed->hits->probeVelocity($ip);
-            for ($i = 0; $i < 40; $i++) {
+            for ($i = 0; $i < $count; $i++) {
                 $a = $armed->request($m, $path($i), '', $body, $hd, $ip, $jar);
                 self::assertNotNull($a['plan'], "{$name} is answered by the surface");
                 self::assertFalse($a['main']['served'], "{$name}: {$a['plan']->status} discloses nothing");
@@ -1028,10 +1030,53 @@ final class TokenMintDecoyHandleTest extends TestCase
             }
             if ($jar === 'nojar') {
                 self::assertSame($unarmed->hits->probeVelocity($ip), $armed->hits->probeVelocity($ip), $name);
+                self::assertSame($count, $armed->hits->probeVelocity($ip)['recent'], "{$name} counts every request");
             } else {
                 self::assertGreaterThan($before['recent'], $armed->hits->probeVelocity($ip)['recent'], "{$name} counts toward the window");
             }
         }
+    }
+
+    public function test_replayed_own_forms_never_pin_but_a_blind_non_get_spray_does(): void
+    {
+        $llm = ['llm' => 500, 'probeGate' => true];
+
+        // An account scrapes its six delete forms, signs in again (a new session, so every scraped token
+        // is stale) and replays them: six 422s to forms we signed, which is use of our own pages.
+        $h = $this->h(true, $llm + ['friction' => false]);
+        $ip = '45.90.0.1';
+        $h->join('replay', 'Passw0rd!x', 'default', $ip);
+        for ($i = 0; $i < 6; $i++) {
+            $h->mint(['read:user'], 'r' . $i, 'default', $ip, 'Passw0rd!x', 'replay');
+        }
+        $list = $h->get('/settings/tokens', '', 'default', $ip);
+        preg_match_all("~/settings/tokens/([a-f0-9]{12})/delete'><input type=hidden name=csrf_token value='([^']+)'~", $list['body'], $forms, PREG_SET_ORDER);
+        self::assertCount(6, $forms);
+        $h->signIn('replay', 'Passw0rd!x', 'default', $ip);
+        foreach ($forms as [, $id, $csrf]) {
+            $r = $h->post('/settings/tokens/' . $id . '/delete', ['csrf_token' => $csrf], 'default', $ip);
+            self::assertSame(422, $r['status']);
+            self::assertStringContainsString('This form has expired', $r['body'], 'the answer is unchanged');
+            self::assertTrue($r['main']['served'], 'a stale form of ours does not count');
+        }
+        self::assertFalse($h->hits->isBulkFlagged($ip), 'replaying our own forms never pins');
+        self::assertSame(0, $h->hits->probeVelocity($ip)['recent']);
+
+        // A blind PUT/DELETE spray carries no token of ours: it pins at the same request as unarmed.
+        $pinAt = function (bool $armed, string $sprayIp) use ($llm): ?int {
+            $s = $this->h($armed, $llm);
+            for ($i = 0; $i < 12; $i++) {
+                $s->request($i % 2 === 0 ? 'PUT' : 'DELETE', '/api/v2/users/blind' . $i, '', $i % 2 === 0 ? 'csrf_token=' . str_repeat('A', 36) : null, [], $sprayIp, 'nojar');
+                if ($s->hits->isBulkFlagged($sprayIp)) {
+                    return $i;
+                }
+            }
+
+            return null;
+        };
+        $armedAt = $pinAt(true, '45.90.1.1');
+        self::assertNotNull($armedAt, 'a blind spray still pins');
+        self::assertSame($pinAt(false, '45.90.1.2'), $armedAt, 'at the unarmed index');
     }
 
     // --- 18. timing parity ---------------------------------------------------------------------------

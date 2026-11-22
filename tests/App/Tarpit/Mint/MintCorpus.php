@@ -19,7 +19,7 @@ final class MintCorpus
 {
     public const F = ['Content-Type' => 'application/x-www-form-urlencoded'];
     public const J = ['Content-Type' => 'application/json'];
-    public const CSRF = 'csrf_token=AAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    public const CSRF = 'csrf_token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     public const BEARER = 'pal_pat_0123456789abcdefABCDEF012345678';
 
     /** Owned paths the benign-input invariant exempts: core's /login-suffix oracle fires on any POST. */

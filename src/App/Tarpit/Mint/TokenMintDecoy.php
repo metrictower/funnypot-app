@@ -77,8 +77,10 @@ final class TokenMintDecoy
             $plan = $this->dispatch($r);
             $plan->attribute(['route' => $r->route]);
             // On an id-bearing path, an answer that returns no object counts like the miss it replaces,
-            // whatever the method.
-            if ($r->pattern && self::nonDisclosing($plan)) {
+            // whatever the method. A form answer to a form token this surface signed (an expired or
+            // used one included) is engagement with our own pages, which never counts.
+            if ($r->pattern && self::nonDisclosing($plan)
+                && !(in_array($plan->status, [422, 429], true) && $this->c->csrf->issuedByUs($r->str(CsrfCodec::FIELD)))) {
                 $plan->served = false;
             }
 
