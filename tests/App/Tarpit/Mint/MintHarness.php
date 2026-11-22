@@ -82,7 +82,7 @@ final class MintHarness
         $llm = null;
         if (($opts['probeGate'] ?? false) || array_key_exists('llm', $opts)) {
             [$v60, $v10] = $opts['velocity'] ?? [5, 15];
-            $this->gate = new ProbeGate(new ProbeClassifier(), new VelocityTracker($v60, $v10), $this->hits);
+            $this->gate = new ProbeGate(new ProbeClassifier(), new VelocityTracker($v60, $v10), $this->hits, 24, $opts['allowIps'] ?? []);
         }
         if (array_key_exists('llm', $opts) && $opts['llm'] !== null) {
             $status = $opts['llm'];
@@ -137,9 +137,42 @@ final class MintHarness
         );
     }
 
+    /** Point the surface at another store (same keys and clock), e.g. one whose file cannot open. */
+    public function swapStore(TokenMintStore $store): void
+    {
+        $seed = IdentityTestSupport::httpIdentity()->personaSeed();
+        $this->store = $store;
+        $this->decoy = TokenMintDecoy::build(self::KEY, $seed, $store, true, $this->gate, fn (): int => $this->now, function (MintPlan $p): void {
+            $this->last = $p;
+            echo $p->body;
+        });
+        $this->front = new AccountFront($this->decoy->context());
+        $rp = new \ReflectionProperty(HoneypotController::class, 'tokenMint');
+        $rp->setValue($this->controller, $this->decoy);
+    }
+
     public function cleanup(): void
     {
         exec('rm -rf ' . escapeshellarg($this->dir));
+    }
+
+    /**
+     * The hit rows written after row $id, mapped exactly as the store maps them for its readers.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function rowsSince(int $id): array
+    {
+        $db = new PDO('sqlite:' . $this->dir . '/hits.sqlite');
+        $st = $db->prepare('SELECT * FROM hits WHERE id > :id ORDER BY id');
+        $st->execute([':id' => $id]);
+        $map = new \ReflectionMethod(SqliteHitStore::class, 'mapRow');
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $raw) {
+            $out[] = ['id' => (int) $raw['id']] + $map->invoke($this->hits, $raw);
+        }
+
+        return $out;
     }
 
     private function maxHitId(): int
@@ -176,6 +209,10 @@ final class MintHarness
         // CLI has no real response: header() after test output warns "headers already sent", which
         // is the harness, not the code. Every other warning or notice is recorded for the tests.
         set_error_handler(function (int $no, string $msg, string $file = '', int $line = 0): bool {
+            // An @-suppressed call reports nothing in production either.
+            if ((error_reporting() & $no) === 0) {
+                return true;
+            }
             if (!str_contains($msg, 'headers already sent')) {
                 $this->warnings[] = "{$msg} @ {$file}:{$line}";
             }
@@ -204,7 +241,7 @@ final class MintHarness
                 }
             }
         }
-        $rows = array_values(array_filter($this->hits->delta(0)['rows'], static fn (array $r): bool => (int) ($r['id'] ?? 0) > $before));
+        $rows = $this->rowsSince($before);
         $main = null;
         foreach ($rows as $r) {
             if (!in_array($r['event'] ?? '', ['llm-fake', 'panel', 'decoy-archive'], true)) {
@@ -301,7 +338,7 @@ final class MintHarness
                     return $m[1];
                 }
             } elseif ($loc === '/settings/confirm') {
-                $this->confirm($jar, $ip, $password);
+                $this->confirm($jar, $ip, $password, $this->totp);
             } elseif ($loc === '/') {
                 $this->signIn($username, $password, $jar, $ip);
             } elseif (($r['status'] ?? 0) === 429) {

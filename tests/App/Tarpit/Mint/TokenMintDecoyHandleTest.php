@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Tarpit\Mint;
 
 use Funnypot\App\Tarpit\Mint\MintPlan;
+use Funnypot\Tests\App\Tarpit\Mint\MintCorpus;
 use Funnypot\App\Tarpit\Mint\Totp;
 use PHPUnit\Framework\TestCase;
 
@@ -365,5 +366,667 @@ final class TokenMintDecoyHandleTest extends TestCase
         }
         self::assertSame(MintPlan::JSON, $this->tokenPost($h, [])['plan']->header('Content-Type'));
         self::assertSame(413, $h->request('POST', '/join', '', str_repeat('a', 17000))['status']);
+    }
+
+    /** Every answer is in the closed status and header sets, and every redirect stays on-site. */
+    private static function assertClosed(MintPlan $p, string $slug, string $what): void
+    {
+        self::assertContains($p->status, MintPlan::STATUSES, $what);
+        self::assertLessThan(500, $p->status, $what);
+        foreach ($p->headers() as [$n, $v]) {
+            self::assertContains($n, MintPlan::HEADER_NAMES, "{$what} header {$n}");
+            if ($n === 'Location') {
+                self::assertTrue(
+                    in_array($v, ['/', '/settings/confirm', '/settings/tokens', '/settings/applications', '/settings/security', '/idp/' . $slug . '/signin'], true)
+                    || preg_match('~\A/settings/applications/[a-f0-9]{12}\z~', $v) === 1,
+                    "{$what} Location {$v}"
+                );
+            }
+            if ($n === 'X-SSO') {
+                self::assertMatchesRegularExpression('~\Arequired; url=/orgs/' . preg_quote($slug, '~') . '/sso\?authorization_request=[a-f0-9]{12}\z~', $v, $what);
+            }
+        }
+        self::assertDoesNotMatchRegularExpression('~<meta[^>]+refresh|window\.location|location\.href~i', $p->body, "{$what} navigates");
+    }
+
+    // --- 7. fuzz -------------------------------------------------------------------------------------
+
+    public function test_fuzz_stays_in_the_closed_sets_with_no_fault_and_no_warning(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $tok = $h->mint(['read:user']);
+        $slug = $h->persona->slug;
+        $session = $h->jars['default']['session'];
+        mt_srand(815);
+        $paths = \Funnypot\Tests\App\Tarpit\Mint\MintCorpus::ownedPaths($slug);
+        $methods = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
+        $cookies = [null, 'session=' . $session, 'session=' . substr($session, 0, -2) . 'AA', 'session=' . str_repeat('A', 60), 'session=x', str_repeat('a=b; ', 900)];
+        $auths = [[], ['Authorization' => 'Bearer ' . $tok], ['Authorization' => 'Bearer ' . str_repeat('A', 5000)], ['Authorization' => 'Bearer a.b.c'],
+            ['Authorization' => 'Bearer ' . substr($tok, 0, -1) . 'Q'], ['X-Api-Key' => $tok], ['Authorization' => 'Basic Zm9vOmJhcg=='], ['Authorization' => str_repeat('x', 300)]];
+        // Inputs cheap for the engine go through handle(); the few the engine itself spends seconds on
+        // (huge pair counts, brace floods) are run through the surface's own prepare() below.
+        $bodies = [
+            null,
+            'csrf_token=AAAAAAAAAAAAAAAAAAAAAAAAAAA&note=x&scopes%5B%5D=read%3Auser&expiration=30',
+            str_repeat('a=1&', 120),
+            'note%5B%5D=x&scopes=read%3Auser&scopes%5Ba%5D%5Bb%5D=c&csrf_token%5B%5D=y&expiration%5B%5D=30',
+            '[1,2,3]',
+            '{"name":["a"],"bio":{"x":1},"username":5,"password":true}',
+            '{"a":{"b":{"c":{"d":{"e":1}}}}}',
+            str_repeat('{', 40),
+            'grant_type%5B%5D=authorization_code&code%5B%5D=x&client_id=' . str_repeat('9', 2000),
+            'username=' . str_repeat('a', 1500) . '&password=x',
+            "\x00\xff\xfe" . str_repeat("\x80", 500),
+            'authorization_request=ab12cd34ef56&authorize=1&deny=1&csrf_token=' . str_repeat('A', 27),
+        ];
+        $queries = ['', 'scopes=a,b,read:user', 'client_id=' . str_repeat('a', 20) . '&state=%3Cscript%3E', str_repeat('x=1&', 90), 'access_token=' . $tok, 'authorization_request=../../etc/passwd'];
+        for ($i = 0; $i < 2000; $i++) {
+            $path = $paths[mt_rand(0, count($paths) - 1)];
+            $method = $methods[mt_rand(0, count($methods) - 1)];
+            $headers = $auths[mt_rand(0, count($auths) - 1)];
+            $cookie = $cookies[mt_rand(0, count($cookies) - 1)];
+            if ($cookie !== null) {
+                $headers['Cookie'] = $cookie;
+            }
+            $body = in_array($method, ['GET', 'HEAD', 'OPTIONS'], true) ? null : $bodies[mt_rand(0, count($bodies) - 1)];
+            if ($body !== null) {
+                $headers['Content-Type'] = mt_rand(0, 1) === 1 ? 'application/json' : 'application/x-www-form-urlencoded';
+            }
+            $h->now += mt_rand(0, 90);
+            $r = $h->request($method, $path, $queries[mt_rand(0, count($queries) - 1)], $body, $headers, '45.79.' . mt_rand(1, 3) . '.9', 'fuzz');
+            self::assertNotNull($r['plan'], "{$method} {$path} was answered");
+            self::assertClosed($r['plan'], $slug, "#{$i} {$method} {$path}");
+        }
+        $heavy = [
+            ['POST', str_repeat('a=1&', 4000), ''], ['POST', str_repeat('{', 3000), ''], ['POST', 'username=' . str_repeat('a', 9000) . '&password=x', ''],
+            ['GET', null, str_repeat('x=1&', 3000)], ['POST', str_repeat('scopes%5B%5D=read%3Auser&', 700), ''], ['POST', str_repeat('A', 20000), ''],
+        ];
+        set_error_handler(static function (int $no, string $msg): bool {
+            if ((error_reporting() & $no) === 0) {
+                return true;
+            }
+            throw new \ErrorException($msg, 0, $no);
+        });
+        try {
+            foreach ($paths as $path) {
+                foreach ($heavy as [$m, $b, $q]) {
+                    foreach (['application/json', 'application/x-www-form-urlencoded'] as $ct) {
+                        $p = $h->decoy->prepare(new \Funnypot\Core\RequestContext($m, $path, $q, ['Content-Type' => $ct, 'Cookie' => 'session=' . $session], $b), '45.79.4.9');
+                        self::assertNotNull($p, "{$m} {$path} heavy input");
+                        self::assertClosed($p, $slug, "heavy {$m} {$path}");
+                    }
+                }
+            }
+        } finally {
+            restore_error_handler();
+        }
+        self::assertSame(0, $h->decoy->faults());
+    }
+
+    public function test_a_non_store_fault_before_commit_serves_todays_answer_and_changes_nothing(): void
+    {
+        $stage = null;
+        $h = $this->h(true, ['storeFaults' => function (string $s) use (&$stage): void {
+            if ($s === $stage) {
+                throw new \RuntimeException('renderer bug');
+            }
+        }]);
+        $h->join();
+        $before = $h->store->db()->query('SELECT state FROM mint_state')->fetchAll(\PDO::FETCH_COLUMN);
+        $form = $h->get('/settings/tokens/new');
+        $stage = 'write';
+        $h->allowFaults = true;
+        $r = $h->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => 'x', 'expiration' => '30', 'scopes' => ['read:user']]);
+        $stage = null;
+        self::assertNull($r['plan'], 'the surface stepped aside');
+        self::assertStringContainsString('<center><h1>404 Not Found</h1></center>', $r['body'], "today's believable 404");
+        self::assertSame(1, $h->decoy->faults());
+        self::assertSame($before, $h->store->db()->query('SELECT state FROM mint_state')->fetchAll(\PDO::FETCH_COLUMN), 'rolled back');
+    }
+
+    // --- 8. deterministic work-unit budget ---------------------------------------------------------
+
+    public function test_the_unit_budget_sheds_at_the_same_request_whatever_the_clock_or_store_speed(): void
+    {
+        $indexes = [];
+        foreach (['fast' => [0, false], 'slow' => [2, false], 'sleeping store' => [0, true]] as $case => [$step, $sleep]) {
+            $h = $this->h(true, $sleep ? ['storeFaults' => static function (string $s): void {
+                if ($s === 'begin') {
+                    usleep(300);
+                }
+            }] : []);
+            $h->now = 1763798400; // an hour boundary, so the slow clock stays in one bucket
+            $h->join();
+            $shed = null;
+            for ($i = 0; $i < 1600; $i++) {
+                $h->now += $step;
+                $r = $h->get('/settings/tokens');
+                if ($r['status'] === 429) {
+                    $shed = $i;
+                    self::assertSame((string) (3600 - ($h->now % 3600)), $r['plan']->header('Retry-After'), $case);
+                    break;
+                }
+            }
+            $indexes[$case] = $shed;
+        }
+        self::assertNotNull($indexes['fast']);
+        self::assertSame(1, count(array_unique($indexes)), 'shed index per clock: ' . json_encode($indexes));
+        self::assertSame(1500 - 3, $indexes['fast'], 'the sign-up POST cost 3 units, then one per page');
+        $clockReads = 0;
+        foreach (glob(dirname(__DIR__, 4) . '/src/App/Tarpit/Mint/*.php') ?: [] as $f) {
+            $src = (string) file_get_contents($f);
+            self::assertStringNotContainsString('TarpitBudget', $src, basename($f) . ' takes no tarpit slot');
+            self::assertDoesNotMatchRegularExpression('/hrtime|microtime|usleep|\bsleep\(/', $src, basename($f) . ' reads no wall clock');
+            $clockReads += preg_match_all('/\btime\(\)/', $src);
+        }
+        self::assertSame(1, $clockReads, 'the only clock is the injectable default in TokenMintDecoy::build()');
+    }
+
+    // --- 9. write caps -------------------------------------------------------------------------------
+
+    public function test_past_the_source_write_cap_forms_throttle_and_api_reads_still_answer(): void
+    {
+        $h = $this->h(true, ['storeLimits' => ['source_writes_hr' => 40]]);
+        $h->join();
+        $tok = $h->mint(['read:user']);
+        $capped = false;
+        for ($i = 0; $i < 60 && !$capped; $i++) {
+            $page = $h->get('/settings/profile');
+            $r = $h->post('/settings/profile', ['csrf_token' => MintHarness::csrf($page['body']), 'name' => 'n' . $i]);
+            $capped = $r['status'] === 429;
+        }
+        self::assertTrue($capped, 'the cap was reached');
+        $form = $h->get('/settings/tokens/new');
+        $mint = $h->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => 'after cap', 'expiration' => '30', 'scopes' => ['read:user']]);
+        self::assertSame(429, $mint['status']);
+        self::assertNotNull($mint['plan']->header('Retry-After'));
+        $api = $h->get('/api/v2/user', '', 'default', MintHarness::IP, ['Authorization' => 'Bearer ' . $tok]);
+        self::assertSame(200, $api['status'], 'reads answer from loaded state');
+    }
+
+    // --- 11. cross-IP continuity ---------------------------------------------------------------------
+
+    public function test_a_session_and_a_token_work_from_another_ip_but_a_password_sign_in_does_not(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $tok = $h->mint(['read:user']);
+        $b = '45.79.200.7';
+        self::assertSame(200, $h->get('/settings/tokens', '', 'default', $b)['status']);
+        self::assertSame(200, $h->get('/api/v2/user', '', 'default', $b, ['Authorization' => 'Bearer ' . $tok])['status']);
+        self::assertNull($h->front->signIn(new \Funnypot\Core\RequestContext('POST', '/'), $b, 'artex1', 'Passw0rd!x'), 'another source takes the funnel');
+        self::assertArrayHasKey('cookie', (array) $h->front->signIn(new \Funnypot\Core\RequestContext('POST', '/'), MintHarness::IP, 'artex1', 'Passw0rd!x'));
+        self::assertSame(['error' => 'signin_wrong'], $h->front->signIn(new \Funnypot\Core\RequestContext('POST', '/'), MintHarness::IP, 'artex1', 'wrong-password'));
+    }
+
+    // --- 12. detection and report parity -------------------------------------------------------------
+
+    public function test_rows_and_reports_match_the_unarmed_host_for_every_corpus_case(): void
+    {
+        $slug = \Funnypot\Tests\App\Tarpit\Mint\MintCorpus::slug();
+        $cases = [];
+        foreach (\Funnypot\Tests\App\Tarpit\Mint\MintCorpus::benign($slug) as $c) {
+            $cases[] = $c;
+        }
+        foreach (\Funnypot\Tests\App\Tarpit\Mint\MintCorpus::ownedPaths($slug) as $p) {
+            foreach (\Funnypot\Tests\App\Tarpit\Mint\MintCorpus::attacks() as [$m, $q, $b, $hd]) {
+                $cases[] = [$m, $p, $q, $b, $hd];
+            }
+        }
+        $armed = $this->h();
+        $unarmed = $this->h(false);
+        $armed->join('parity', 'Passw0rd!x', 'default', '45.80.0.1');
+        foreach ($cases as $i => [$m, $p, $q, $b, $hd]) {
+            $ip = '45.' . (81 + intdiv($i, 250)) . '.' . intdiv($i % 250, 1) . '.' . (1 + $i % 200);
+            $ra = $armed->request($m, $p, $q, $b, $hd, $ip);
+            $ru = $unarmed->request($m, $p, $q, $b, $hd, $ip);
+            self::assertNotNull($ra['plan'], "armed answered {$m} {$p}");
+            self::assertNotNull($ra['main'], "armed wrote its main row for {$m} {$p}");
+            self::assertNotNull($ru['main'], "unarmed wrote its main row for {$m} {$p}");
+            self::assertSame($ip, $ra['main']['ip']);
+            $strip = static function (?array $row): array {
+                unset($row['ts'], $row['served'], $row['id']);
+
+                return (array) $row;
+            };
+            self::assertSame($strip($ru['main']), $strip($ra['main']), "main row for {$m} {$p} {$q}");
+            self::assertSame(
+                $ra['plan']->served,
+                !in_array($ra['plan']->status, [401], true) && !(in_array($ra['plan']->status, [303, 403, 404], true) && preg_match('~/(?:settings/(?:tokens|applications)/[^/]+|orgs/|idp/|users/|orders/[^/e])~', $p) === 1 && $ra['plan']->status !== 200),
+                "served flag for {$ra['plan']->status} {$m} {$p}"
+            );
+        }
+        $norm = static fn (array $r): array => ['abuse' => $r['abuse'], 'ti' => $r['ti']];
+        self::assertSame($norm($unarmed->reports()), $norm($armed->reports()), 'identical report queues');
+        self::assertNotEmpty($armed->reports()['abuse'], 'sanity: attacks were reported');
+
+        // An XSS note on the mint form, from a signed-in account: the charset error, and the same row and report.
+        $armed->now += 10;
+        $form = $armed->get('/settings/tokens/new', '', 'default', '45.80.0.1');
+        $xss = $armed->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => '<script>alert(1)</script>', 'expiration' => '30', 'scopes' => ['read:user']], 'default', '45.80.0.1');
+        self::assertSame(422, $xss['status']);
+        self::assertStringContainsString('Note may only contain', html_entity_decode($xss['body']));
+        self::assertTrue((bool) $xss['main']['matched']);
+        self::assertContains('attack-xss', $xss['main']['templates']);
+    }
+
+    // --- 13. fail closed -----------------------------------------------------------------------------
+
+    public function test_every_state_creating_route_fails_closed_in_each_store_failure_mode(): void
+    {
+        $mode = null;
+        $h = $this->h(true, ['storeFaults' => function (string $s) use (&$mode): void {
+            if ($mode === 'commit' && $s === 'commit') {
+                throw new \PDOException('disk I/O error');
+            }
+        }]);
+        $h->join();
+        $app = $this->app($h);
+        $code = $this->consent($h, $app['client'], 'read:user', 'st1');
+        preg_match('~<p class=mono>([a-f0-9]{20})</p>~', $code['body'], $cm);
+        $ex = self::json($this->tokenPost($h, ['grant_type' => 'authorization_code', 'code' => $cm[1], 'client_id' => $app['client'], 'client_secret' => $app['secret']]));
+        $code2 = $this->consent($h, $app['client'], 'read:user', 'st2');
+        preg_match('~<p class=mono>([a-f0-9]{20})</p>~', $code2['body'], $cm2);
+        $h->now += 1000;
+
+        // Each route: [prepare (its form GETs, run before the failure starts), act (the state-creating request)].
+        $routes = [
+            'mint' => [fn (): array => ['c' => MintHarness::csrf($h->get('/settings/tokens/new')['body'])],
+                fn (array $d): array => $h->post('/settings/tokens', ['csrf_token' => $d['c'], 'note' => 'failmint', 'expiration' => '30', 'scopes' => ['read:user']])],
+            'app' => [fn (): array => ['c' => MintHarness::csrf($h->get('/settings/applications/new')['body'])],
+                fn (array $d): array => $h->post('/settings/applications', ['csrf_token' => $d['c'], 'name' => 'fail-app', 'homepage_url' => 'https://a.example.com', 'callback_url' => 'https://a.example.com/cb'])],
+            'secret' => [function () use ($h, $app): array {
+                $f = $h->get($app['page']);
+
+                return ['c' => MintHarness::csrf(substr($f['body'], (int) strpos($f['body'], '/secrets')))];
+            }, fn (array $d): array => $h->post($app['page'] . '/secrets', ['csrf_token' => $d['c']])],
+            'code' => [function () use ($h, $app): array {
+                $page = $h->get('/login/oauth/authorize', http_build_query(['client_id' => $app['client'], 'scope' => 'read:user', 'state' => 'zz']));
+                preg_match("~name=authorization_request value='([a-f0-9]{12})'~", $page['body'], $m);
+
+                return ['c' => MintHarness::csrf($page['body']), 'r' => $m[1] ?? ''];
+            }, fn (array $d): array => $h->post('/login/oauth/authorize', ['csrf_token' => $d['c'], 'authorization_request' => $d['r'], 'authorize' => '1'])],
+            'exchange' => [fn (): array => [], fn (array $d): array => $this->tokenPost($h, ['grant_type' => 'authorization_code', 'code' => $cm2[1], 'client_id' => $app['client'], 'client_secret' => $app['secret']])],
+            'refresh' => [fn (): array => [], fn (array $d): array => $this->tokenPost($h, ['grant_type' => 'refresh_token', 'refresh_token' => $ex['refresh_token'], 'client_id' => $app['client'], 'client_secret' => $app['secret']])],
+            'join' => [fn (): array => ['c' => MintHarness::csrf($h->get('/join', '', 'joiner', '45.79.77.7')['body'])],
+                fn (array $d): array => $h->post('/join', ['csrf_token' => $d['c'], 'username' => 'newbie', 'email' => 'n@example.com', 'password' => 'Passw0rd!x', 'password_confirmation' => 'Passw0rd!x'], 'joiner', '45.79.77.7')],
+            'signin' => [fn (): array => [], fn (array $d): array => ['plan' => null, 'status' => null, 'body' => '', 'signin' => $h->front->signIn(new \Funnypot\Core\RequestContext('POST', '/'), MintHarness::IP, 'artex1', 'Passw0rd!x')]],
+            'twofa' => [function () use ($h): array {
+                $page = $h->get('/settings/security');
+                preg_match('/<p class=mono>([A-Z2-7]{32})<\/p>/', $page['body'], $m);
+
+                return ['c' => MintHarness::csrf($page['body']), 'otp' => Totp::code(MintHarness::base32decode($m[1]), Totp::step($h->now))];
+            }, fn (array $d): array => $h->post('/settings/security', ['csrf_token' => $d['c'], 'otp' => $d['otp']])],
+            'confirm' => [fn (): array => ['c' => MintHarness::csrf($h->get('/settings/confirm')['body'])],
+                fn (array $d): array => $h->post('/settings/confirm', ['csrf_token' => $d['c'], 'password' => 'Passw0rd!x'])],
+        ];
+        $snapshot = static function (MintHarness $h): string {
+            $db = new \PDO('sqlite:' . $h->dir . '/token-mint.sqlite');
+
+            return json_encode([
+                $db->query('SELECT k, state FROM mint_state ORDER BY k')->fetchAll(\PDO::FETCH_ASSOC),
+                $db->query('SELECT h, used FROM mint_codes ORDER BY h')->fetchAll(\PDO::FETCH_ASSOC),
+                $db->query('SELECT h, used FROM mint_refresh ORDER BY h')->fetchAll(\PDO::FETCH_ASSOC),
+            ]);
+        };
+        $cookieBefore = $h->jars['default']['session'];
+        foreach (['commit', 'locked', 'unopenable'] as $m) {
+            foreach ($routes as $name => [$prepare, $act]) {
+                $h->now += 3;
+                $h->jars['default']['session'] = $cookieBefore;
+                $data = $prepare();
+                $before = $snapshot($h);
+                $lock = null;
+                $real = $h->store;
+                if ($m === 'commit') {
+                    $mode = 'commit';
+                } elseif ($m === 'locked') {
+                    $lock = new \PDO('sqlite:' . $h->dir . '/token-mint.sqlite');
+                    $lock->exec('BEGIN IMMEDIATE');
+                } else {
+                    @mkdir($h->dir . '/blocked', 0500);
+                    $h->swapStore(new \Funnypot\App\Storage\TokenMintStore($h->dir . '/blocked/sub/token-mint.sqlite'));
+                }
+                try {
+                    $r = $act($data);
+                } finally {
+                    $mode = null;
+                    $lock?->exec('ROLLBACK');
+                    if ($m === 'unopenable') {
+                        $h->swapStore($real);
+                    }
+                }
+                $what = "{$name} under {$m}";
+                if ($name === 'signin') {
+                    $res = $r['signin'];
+                    self::assertArrayNotHasKey('cookie', (array) $res, $what);
+                    self::assertTrue($res === null || $res === ['error' => 'signin_failed'], $what . ' ' . json_encode($res));
+                } else {
+                    $plan = $r['plan'];
+                    self::assertNotNull($plan, "{$what}: never today's 404, an LLM page or a core body");
+                    $ok = $name === 'exchange' || $name === 'refresh' ? [400, 429] : [422, 429, 303];
+                    self::assertContains($plan->status, $ok, $what);
+                    self::assertDoesNotMatchRegularExpression('/[a-z]{2,4}_(?:pat|oat|ort)_[0-9A-Za-z]{31}/', $r['body'], $what);
+                    self::assertDoesNotMatchRegularExpression('~<p class=mono>[a-f0-9]{20,40}</p>~', $r['body'], $what);
+                    self::assertDoesNotMatchRegularExpression('~<p class=mono>[a-z2-7]{5}-~', $r['body'], $what);
+                    self::assertStringNotContainsString('Authorization code for', $r['body'], $what);
+                    foreach ($plan->headers() as [$hn, $hv]) {
+                        self::assertFalse($hn === 'Set-Cookie' && preg_match('/\Asession=[A-Za-z0-9_-]+/', $hv) === 1, "{$what} set a session");
+                    }
+                    if ($plan->status === 303) {
+                        self::assertSame('/', $plan->header('Location'), "{$what}: only the no-session answer redirects (the store could not read the session)");
+                    }
+                }
+                self::assertSame($before, $snapshot($h), "{$what} changed stored state");
+            }
+        }
+        self::assertSame(0, $h->decoy->faults());
+    }
+
+    // --- 15. OpenAPI contract ------------------------------------------------------------------------
+
+    public function test_the_api_answers_the_contract_core_documents(): void
+    {
+        $hp = MintCorpus::engine();
+        $ops = [];
+        $schemes = [];
+        foreach (['/openapi.json', '/swagger.json', '/v2/api-docs'] as $doc) {
+            $r = $hp->respond(new \Funnypot\Core\RequestContext('GET', $doc, '', ['User-Agent' => 'curl/8']));
+            self::assertNotNull($r, $doc);
+            $spec = json_decode($r->body, true);
+            self::assertIsArray($spec, $doc);
+            $base = isset($spec['servers'][0]['url']) ? (string) parse_url($spec['servers'][0]['url'], PHP_URL_PATH) : (string) ($spec['basePath'] ?? '');
+            self::assertSame('/v2', rtrim($base, '/'), "{$doc} documents the /v2 base path");
+            foreach ((array) $spec['paths'] as $path => $methods) {
+                foreach ((array) $methods as $m => $op) {
+                    $ops[strtoupper($m) . ' ' . $path] = array_map('intval', array_keys((array) ($op['responses'] ?? [])));
+                }
+            }
+            $schemes += (array) ($spec['components']['securitySchemes'] ?? $spec['securityDefinitions'] ?? []);
+        }
+        self::assertArrayHasKey('GET /users', $ops);
+        self::assertArrayHasKey('POST /auth/login', $ops);
+        self::assertArrayHasKey('GET /orders/{id}', $ops);
+        self::assertNotEmpty($schemes);
+        $index = $hp->respond(new \Funnypot\Core\RequestContext('GET', '/api/v2', '', ['User-Agent' => 'curl/8']));
+        preg_match_all('~/api/v2/(users|orders|auth/login)~', (string) $index?->body, $listed);
+        self::assertNotEmpty($listed[1], 'the /api/v2 index advertises its operations');
+
+        $h = $this->h();
+        $h->join();
+        $tok = $h->mint(['read:user']);
+        $docs = $h->get('/docs/api');
+        foreach (array_keys($ops) as $op) {
+            [$m, $path] = explode(' ', $op, 2);
+            $concrete = str_replace('{id}', '10422', $path);
+            foreach (['/api/v2', '/v2'] as $pre) {
+                self::assertTrue($h->decoy->owns($pre . $concrete), "{$pre}{$concrete} is answered");
+            }
+            self::assertStringContainsString('/v2/' . ltrim($path, '/'), $docs['body'], "/docs/api lists {$op}");
+            if ($m === 'GET') {
+                $bodies = [];
+                foreach (['/api/v2', '/v2'] as $pre) {
+                    foreach ([['Authorization' => 'Bearer ' . $tok], ['X-Api-Key' => $tok]] as $auth) {
+                        $r = $h->get($pre . $concrete, '', 'default', MintHarness::IP, $auth);
+                        self::assertContains($r['status'], array_merge($ops[$op], [401, 403, 429]), "{$pre}{$concrete}");
+                        self::assertNotSame(401, $r['status'], 'both documented schemes authenticate');
+                        $bodies[] = $r['body'];
+                    }
+                }
+                self::assertCount(1, array_unique($bodies), "{$op}: byte-identical under both spellings and both schemes");
+            }
+        }
+        foreach (['/api/v2', '/v2'] as $pre) {
+            $ok = $h->request('POST', $pre . '/auth/login', '', '{"username":"artex1","password":"Passw0rd!x"}', ['Content-Type' => 'application/json']);
+            self::assertSame(200, $ok['status']);
+            self::assertSame('bearer', self::json($ok)['token_type']);
+            self::assertCount(3, explode('.', self::json($ok)['access_token']));
+            self::assertSame(400, $h->request('POST', $pre . '/auth/login', '', '{}', ['Content-Type' => 'application/json'])['status']);
+            self::assertSame(401, $h->request('POST', $pre . '/auth/login', '', '{"username":"artex1","password":"nope-nope"}', ['Content-Type' => 'application/json'])['status']);
+        }
+    }
+
+    // --- 16. IDOR ------------------------------------------------------------------------------------
+
+    public function test_another_accounts_ids_answer_exactly_like_nonexistent_ones(): void
+    {
+        $h = $this->h();
+        $h->join('alice', 'Passw0rd!x', 'a');
+        $tokA = $h->mint(['read:user'], 'ci token', 'a', MintHarness::IP, 'Passw0rd!x', 'alice');
+        $listA = $h->get('/settings/tokens', '', 'a');
+        preg_match("~/settings/tokens/([a-f0-9]{12})/delete~", $listA['body'], $tm);
+        $tokenId = $tm[1];
+        $h->join('bob', 'Passw0rd!x', 'b');
+        $h->join('carol', 'Passw0rd!x', 'c', '45.79.99.99');
+        $ghost = 'abcdef012345';
+        foreach (['b' => MintHarness::IP, 'c' => '45.79.99.99'] as $jar => $ip) {
+            $a = $h->post('/settings/tokens/' . $tokenId . '/delete', ['csrf_token' => $this->deleteCsrf($h, $jar, $ip)], $jar, $ip);
+            $n = $h->post('/settings/tokens/' . $ghost . '/delete', ['csrf_token' => $this->deleteCsrf($h, $jar, $ip)], $jar, $ip);
+            self::assertSame([$n['status'], $n['plan']->headers(), $n['body']], [$a['status'], $a['plan']->headers(), $a['body']], "token id via {$jar}");
+            self::assertSame(404, $a['status']);
+            self::assertFalse($a['plan']->served);
+        }
+        self::assertSame(200, $h->get('/api/v2/user', '', 'a', MintHarness::IP, ['Authorization' => 'Bearer ' . $tokA])['status'], "alice's token survived");
+
+        $appA = $this->appFor($h, 'a', 'alice');
+        foreach (['b' => MintHarness::IP, 'c' => '45.79.99.99'] as $jar => $ip) {
+            $x = $h->get('/settings/applications/' . $appA['id'], '', $jar, $ip);
+            $y = $h->get('/settings/applications/' . $ghost, '', $jar, $ip);
+            self::assertSame([$y['status'], $y['body']], [$x['status'], $x['body']], "app page via {$jar}");
+            $auth = $h->get('/login/oauth/authorize', http_build_query(['client_id' => $appA['client'], 'scope' => 'read:user']), $jar, $ip);
+            $none = $h->get('/login/oauth/authorize', http_build_query(['client_id' => str_repeat('0', 20), 'scope' => 'read:user']), $jar, $ip);
+            self::assertSame([$none['status'], $none['body']], [$auth['status'], $auth['body']], "client id via {$jar}");
+            $ex = $this->tokenPost($h, ['grant_type' => 'authorization_code', 'code' => $appA['code'], 'client_id' => str_repeat('0', 20), 'client_secret' => 'x'], $ip);
+            $exNone = $this->tokenPost($h, ['grant_type' => 'authorization_code', 'code' => str_repeat('0', 20), 'client_id' => str_repeat('0', 20), 'client_secret' => 'x'], $ip);
+            self::assertSame([$exNone['status'], $exNone['body']], [$ex['status'], $ex['body']], 'a code issued to another client reads as nonexistent');
+            $sso = $h->get('/orgs/' . $h->persona->slug . '/sso', 'authorization_request=' . $appA['request'], $jar, $ip);
+            $ssoNone = $h->get('/orgs/' . $h->persona->slug . '/sso', 'authorization_request=' . $ghost, $jar, $ip);
+            self::assertSame(
+                preg_replace("~value='[^']+'~", '', $ssoNone['body']),
+                preg_replace("~value='[^']+'~", '', $sso['body']),
+                "request id via {$jar}"
+            );
+        }
+    }
+
+    /** A valid delete-form token for the jar's account (an account without tokens shows no delete form). */
+    private function deleteCsrf(MintHarness $h, string $jar, string $ip): string
+    {
+        $ctx = $h->decoy->context();
+        $sess = $ctx->sessions->parse((string) $h->jars[$jar]['session'], $h->now);
+        $s = $h->store->load(bin2hex($sess['kref']));
+
+        return $ctx->csrfToken($sess['sid'], 'token_delete', (int) $s->d['a'][$s->accountPos($sess['acct'])]['ce'], $h->now);
+    }
+
+    /** @return array{id:string,client:string,code:string,request:string} */
+    private function appFor(MintHarness $h, string $jar, string $user): array
+    {
+        $created = $h->until(function () use ($h, $jar): array {
+            $form = $h->get('/settings/applications/new', '', $jar);
+
+            return $h->post('/settings/applications', ['csrf_token' => MintHarness::csrf($form['body']), 'name' => 'alice-app', 'homepage_url' => 'https://a.example.com', 'callback_url' => 'https://a.example.com/cb'], $jar);
+        }, static fn (array $r): bool => preg_match('~\A/settings/applications/[a-f0-9]{12}\z~', (string) $r['plan']?->header('Location')) === 1, $jar);
+        $page = (string) $created['plan']->header('Location');
+        $show = $h->get($page, '', $jar);
+        preg_match('~<p>Client ID</p><p class=mono>([a-f0-9]{20})</p>~', $show['body'], $cm);
+        $consent = $h->get('/login/oauth/authorize', http_build_query(['client_id' => $cm[1], 'scope' => 'read:user']), $jar);
+        preg_match("~name=authorization_request value='([a-f0-9]{12})'~", $consent['body'], $rq);
+        $code = $h->until(function () use ($h, $jar, $cm): array {
+            $c = $h->get('/login/oauth/authorize', http_build_query(['client_id' => $cm[1], 'scope' => 'read:user']), $jar);
+            preg_match("~name=authorization_request value='([a-f0-9]{12})'~", $c['body'], $m);
+
+            return $h->post('/login/oauth/authorize', ['csrf_token' => MintHarness::csrf($c['body']), 'authorization_request' => $m[1], 'authorize' => '1'], $jar);
+        }, static fn (array $r): bool => str_contains($r['body'], 'Authorization code for'), $jar);
+        preg_match('~<p class=mono>([a-f0-9]{20})</p>~', $code['body'], $cd);
+
+        return ['id' => substr($page, strlen('/settings/applications/')), 'client' => $cm[1], 'code' => $cd[1], 'request' => $rq[1]];
+    }
+
+    // --- 17. siblings unchanged ----------------------------------------------------------------------
+
+    public function test_sibling_paths_and_the_velocity_window_are_unchanged(): void
+    {
+        foreach ([null, 'llm'] as $llm) {
+            $opts = $llm === null ? [] : ['llm' => 200];
+            $armed = $this->h(true, $opts);
+            $unarmed = $this->h(false, $opts);
+            foreach (['/api/v2/backup.zip', '/api/v2/users/backup.zip', '/api/v2/www.tar.gz', '/api/v2/customers', '/api/v2/info', '/v2/x', '/api/v2'] as $i => $p) {
+                $ip = '45.82.' . ($llm === null ? 1 : 2) . '.' . (10 + $i);
+                $a = $armed->get($p, '', 'default', $ip);
+                $u = $unarmed->get($p, '', 'default', $ip);
+                self::assertNull($a['plan'], "{$p} is not the surface's");
+                self::assertSame($u['body'], $a['body'], "{$p} body");
+                $strip = static fn (array $rows): array => array_map(static function (array $r): array {
+                    unset($r['ts'], $r['id']);
+
+                    return $r;
+                }, $rows);
+                self::assertNotSame([], $u['rows'], "{$p} wrote rows");
+                self::assertSame($strip($u['rows']), $strip($a['rows']), "{$p} rows");
+            }
+        }
+
+        // Velocity, by construction: with the LLM off every unarmed miss is an unserved 404.
+        $armed = $this->h();
+        $unarmed = $this->h(false);
+        $armed->join('velo', 'Passw0rd!x', 'default', '45.83.0.1');
+        $read = $armed->mint(['read:user'], 'v', 'default', '45.83.0.1', 'Passw0rd!x', 'velo');
+        $armed->enable2fa('default', '45.83.0.1');
+        $orders = $armed->mint(['orders:read'], 'o', 'default', '45.83.0.1', 'Passw0rd!x', 'velo');
+        $sprays = [
+            'wordlist' => fn (int $i): string => '/api/v2/word' . $i,
+            'users' => fn (int $i): string => '/api/v2/users/nobody' . $i,
+            'orders' => fn (int $i): string => '/api/v2/orders/' . (20000 + $i),
+            'app pages' => fn (int $i): string => '/settings/applications/' . sprintf('%012x', 0xabc000 + $i),
+        ];
+        $n = 0;
+        foreach ($sprays as $name => $path) {
+            foreach (['none' => [], 'read' => ['Authorization' => 'Bearer ' . $read], 'orders' => ['Authorization' => 'Bearer ' . $orders]] as $cred => $auth) {
+                $ip = '45.84.' . intdiv($n, 200) . '.' . (1 + $n % 200);
+                $n++;
+                for ($i = 0; $i < 40; $i++) {
+                    $armed->get($path($i), '', 'nojar', $ip, $auth);
+                    $unarmed->get($path($i), '', 'nojar', $ip, $auth);
+                }
+                self::assertSame($unarmed->hits->probeVelocity($ip), $armed->hits->probeVelocity($ip), "{$name} spray with {$cred}");
+                self::assertGreaterThan(0, $armed->hits->probeVelocity($ip)['recent'], "{$name} with {$cred} counts");
+            }
+        }
+        $ctl = '45.85.0.1';
+        for ($i = 0; $i < 40; $i++) {
+            $r = $armed->get('/api/v2/user', '', 'nojar', $ctl, ['Authorization' => 'Bearer ' . $read]);
+            self::assertTrue($r['main']['served']);
+        }
+        self::assertSame(['recent' => 0, 'extended' => 0], $armed->hits->probeVelocity($ctl), 'served answers do not count');
+    }
+
+    // --- 18. timing parity ---------------------------------------------------------------------------
+
+    public function test_the_serve_delay_is_paid_exactly_when_the_unarmed_branch_would_pay_it(): void
+    {
+        $cases = [
+            'null-core GET' => ['GET', '/settings/tokens', '', null, []],
+            'null-core API' => ['GET', '/api/v2/user', '', null, []],
+            'xss note' => ['POST', '/settings/tokens', '', 'note=%3Cscript%3Ealert(1)%3C%2Fscript%3E', MintCorpus::F],
+            'cpsrvd login' => ['POST', '/api/v2/auth/login', '', '{"username":"a","password":"b"}', MintCorpus::J],
+        ];
+        foreach ($cases as $name => [$m, $p, $q, $b, $hd]) {
+            $a = $this->h();
+            $u = $this->h(false);
+            $a->request($m, $p, $q, $b, $hd);
+            $u->request($m, $p, $q, $b, $hd);
+            self::assertSame($u->delays, $a->delays, $name);
+            self::assertSame(in_array($name, ['xss note', 'cpsrvd login'], true) ? 0 : 1, $a->delays, "{$name}: the engine already slept for a matched request");
+        }
+    }
+
+    // --- 19. SleepDecoy ------------------------------------------------------------------------------
+
+    public function test_a_sleep_probe_on_a_form_field_is_delayed_like_any_field_and_answered_unchanged(): void
+    {
+        $run = function (bool $decoyOn, array $notes): array {
+            $sleeps = [];
+            $config = \Funnypot\App\Config\AppConfig::fromEnv(sys_get_temp_dir());
+            $config->sleepDecoy = $decoyOn;
+            $config->sleepPerReqCapMs = 2000;
+            $budget = new \Funnypot\App\Storage\TarpitBudget(sys_get_temp_dir() . '/fp0815sd_' . bin2hex(random_bytes(5)) . '.sqlite', true, 8, 4, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, PHP_INT_MAX, 15, static fn (): int => 1_000_000, 0, static function (int $ms) use (&$sleeps): void {
+                $sleeps[] = $ms;
+            });
+            $h = $this->h(true, ['sleepDecoy' => new \Funnypot\App\Http\SleepDecoy($budget, $config, new \Funnypot\App\ThreatIntel\AttackClassifier(), static fn (int $c): int => $c)]);
+            $h->join();
+            $out = [];
+            foreach ($notes as $note) {
+                $form = $h->get('/settings/tokens/new');
+                $before = count($sleeps);
+                $r = $h->post('/settings/tokens', ['csrf_token' => MintHarness::csrf($form['body']), 'note' => $note, 'expiration' => '30', 'scopes' => ['read:user']]);
+                $out[] = ['status' => $r['status'], 'body' => preg_replace("~value='[^']+'~", '', $r['body']), 'slept' => array_slice($sleeps, $before)];
+            }
+            $other = $h->post('/contact.php', ['note' => $notes[0]]);
+            $state = $h->store->db()->query('SELECT state FROM mint_state')->fetchAll(\PDO::FETCH_COLUMN);
+
+            return ['answers' => $out, 'offPath' => array_slice($sleeps, -1), 'state' => $state, 'h' => $h];
+        };
+        $notes = ["x' AND SLEEP(3)-- ", "1' AND IF(SUBSTRING(a,1,1)='a',SLEEP(3),0)-- ", "1' AND IF(SUBSTRING(a,1,1)='b',SLEEP(3),0)-- "];
+        $on = $run(true, $notes);
+        $off = $run(false, $notes);
+        foreach ($on['answers'] as $i => $a) {
+            self::assertSame(422, $a['status']);
+            self::assertStringContainsString('Note may only contain', html_entity_decode($a['body']), 'the charset error, nothing data-bearing');
+            self::assertSame($off['answers'][$i]['body'], $a['body'], 'byte-identical with and without the delay');
+            self::assertSame([], $off['answers'][$i]['slept']);
+            self::assertNotEmpty($a['slept'], 'delayed like any field');
+            self::assertSame($on['offPath'], $a['slept'], 'the same delay as the same payload on a path the surface does not own');
+        }
+        self::assertSame($on['answers'][1]['slept'], $on['answers'][2]['slept'], 'an extraction guess pair times identically');
+        $strip = static fn (array $rows): array => array_map(static fn (string $j): string => (string) preg_replace('/"e":"[0-9a-f]{16}"/', '', $j), $rows);
+        self::assertSame($strip($off['state']), $strip($on['state']), 'the stored state, and so the picker inputs, never see the delay');
+    }
+
+    // --- 20. spray pin -------------------------------------------------------------------------------
+
+    public function test_a_spray_of_non_disclosing_answers_pins_at_the_unarmed_index(): void
+    {
+        $paths = [];
+        for ($i = 0; $i < 4; $i++) {
+            $paths[] = '/api/v2/users/nobody' . $i;
+            $paths[] = '/api/v2/orders/' . (300 + $i);
+            $paths[] = '/settings/applications/' . sprintf('%012x', 0xfed000 + $i);
+        }
+        $pinAt = function (bool $armed, string $ip, array $opts) use ($paths): ?int {
+            $h = $this->h($armed, $opts);
+            foreach ($paths as $i => $p) {
+                $h->get($p, '', 'nojar', $ip);
+                if ($h->hits->isBulkFlagged($ip)) {
+                    return $i;
+                }
+            }
+
+            return null;
+        };
+        $llm = ['llm' => 500, 'probeGate' => true];
+        $armedAt = $pinAt(true, '45.86.0.1', $llm);
+        $unarmedAt = $pinAt(false, '45.86.0.2', $llm);
+        self::assertNotNull($unarmedAt, 'sanity: the unarmed spray pins');
+        self::assertSame($unarmedAt, $armedAt, 'the same request index');
+
+        $few = $this->h(true, $llm);
+        foreach (array_slice($paths, 0, 4) as $p) {
+            $few->get($p, '', 'nojar', '45.86.0.3');
+        }
+        self::assertFalse($few->hits->isBulkFlagged('45.86.0.3'), 'fewer misses set no pin');
+        self::assertNull($pinAt(true, '45.86.0.4', $llm + ['allowIps' => ['45.86.0.4']]), 'an allowlisted IP is never pinned');
+        self::assertNull($pinAt(true, '45.86.0.5', []), 'LLM off: nothing pins armed');
+        self::assertNull($pinAt(false, '45.86.0.6', []), 'LLM off: nothing pins unarmed');
+
+        $h = $this->h(true, $llm);
+        $before = $h->get('/api/v2/users/zed', '', 'nojar', '45.86.0.7');
+        foreach ($paths as $p) {
+            $h->get($p, '', 'nojar', '45.86.0.7');
+        }
+        self::assertTrue($h->hits->isBulkFlagged('45.86.0.7'));
+        $after = $h->get('/api/v2/users/zed', '', 'nojar', '45.86.0.7');
+        self::assertSame($before['body'], $after['body'], 'a pin never changes the surface\'s answers');
     }
 }

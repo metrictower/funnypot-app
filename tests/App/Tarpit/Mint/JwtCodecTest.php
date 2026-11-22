@@ -65,7 +65,10 @@ final class JwtCodecTest extends TestCase
         $body = self::b64((string) json_encode(['sub' => 'u', 'exp' => self::NOW + 900]));
         $sig = self::b64(hash_hmac('sha256', $head . '.' . $body, self::KEY, true));
         self::assertSame('u', JwtCodec::decode($head . '.' . $body . '.' . $sig, self::KEY, self::NOW)['sub'] ?? null);
-        $prev = set_error_handler(static function (int $no, string $msg): bool {
+        set_error_handler(static function (int $no, string $msg): bool {
+            if ((error_reporting() & $no) === 0) {
+                return true;
+            }
             throw new \ErrorException($msg, 0, $no);
         });
         try {
@@ -73,7 +76,7 @@ final class JwtCodecTest extends TestCase
                 self::assertNull(JwtCodec::decode($bad, self::KEY, self::NOW), $bad);
             }
         } finally {
-            set_error_handler($prev);
+            restore_error_handler();
         }
     }
 }

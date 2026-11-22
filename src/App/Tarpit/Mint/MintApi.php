@@ -100,8 +100,9 @@ final class MintApi
         $serial = (int) $a['i'];
         $scopes = $tpos !== null ? (array) $a['k'][$tpos]['sc'] : ['read:user'];
 
+        $pattern = in_array($r->route, self::PATTERN_ENDPOINTS, true);
         if ($s->apiCalls($serial, $now, 60) >= self::SECONDARY_PER_60S) {
-            $plan = MintPlan::json(429, ['message' => MintVocabulary::text('api_secondary'), 'documentation_url' => '/docs/api'])->with('Retry-After', '60')->attribute(['outcome' => 'secondary_limit']);
+            $plan = MintPlan::json(429, ['message' => MintVocabulary::text('api_secondary'), 'documentation_url' => '/docs/api'], !$pattern)->with('Retry-After', '60')->attribute(['outcome' => 'secondary_limit']);
 
             return [$this->withRate($plan, $s, $pos, $tpos, $now, $deprecated, false), false];
         }
@@ -110,7 +111,6 @@ final class MintApi
             $s->d['a'][$pos]['k'][$tpos]['lu'] = $now;
         }
         $decision = AuthzPolicy::decide($r->route, $method, ['kind' => $cred['kind'], 'scopes' => $scopes]);
-        $pattern = in_array($r->route, self::PATTERN_ENDPOINTS, true);
         $change = false;
         switch ($decision['decision']) {
             case 'scope':

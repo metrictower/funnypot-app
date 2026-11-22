@@ -213,13 +213,17 @@ final class OAuthFlow
                 return MintContext::out(null, false, $units, self::oauthError('invalid_grant'));
             }
             $app = $s->d['a'][$pos]['ap'][$ap];
+            // A grant issued to another client reads exactly like one that does not exist.
+            if (!hash_equals((string) $app['ci'], $clientId)) {
+                return MintContext::out(null, false, $units, self::oauthError('invalid_grant'));
+            }
             $secretOk = false;
             foreach ($app['sx'] as $sx) {
                 if (hash_equals((string) $sx[1], $this->c->keys->secretHash($clientSecret))) {
                     $secretOk = true;
                 }
             }
-            if (!hash_equals((string) $app['ci'], $clientId) || !$secretOk) {
+            if (!$secretOk) {
                 return MintContext::out(null, false, $units, self::oauthError('invalid_client', 401));
             }
             if (!$refresh && $redirect !== null && $redirect !== '' && !hash_equals((string) $app['cb'], $redirect)) {

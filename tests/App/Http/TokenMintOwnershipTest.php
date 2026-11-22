@@ -1,0 +1,160 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Funnypot\Tests\App\Http;
+
+use Funnypot\App\Http\HoneypotController;
+use Funnypot\App\Render\PanelRoute;
+use Funnypot\App\Tarpit\Mint\MintForms;
+use Funnypot\App\Tarpit\Mint\MintRoutes;
+use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
+use Funnypot\Core\RequestContext;
+use Funnypot\Tests\App\Tarpit\Mint\MintCorpus;
+use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+
+/**
+ * Which paths the token-mint surface owns, derived against the installed engine at run time rather
+ * than trusted from a table: what core detects on each owned path, that no owned path collides with a
+ * core route or a backup-file decoy, that the surface's own benign traffic trips no attack class, and
+ * that its set is disjoint from the web-shell console's.
+ */
+final class TokenMintOwnershipTest extends TestCase
+{
+    private static function routes(): MintRoutes
+    {
+        return new MintRoutes(MintCorpus::slug());
+    }
+
+    /**
+     * Every attack class is detected on every owned path. Only a POST to an `auth/login` path is won
+     * by core's /login-suffix oracle instead. A core bump that changes a row prints the whole table.
+     */
+    public function test_engine_detects_each_attack_class_on_every_owned_path(): void
+    {
+        $hp = MintCorpus::engine();
+        $table = [];
+        $mismatch = 0;
+        foreach (MintCorpus::ownedPaths(MintCorpus::slug()) as $p) {
+            self::assertTrue(self::routes()->owns($p), "{$p} is owned");
+            foreach (MintCorpus::attacks() as $name => [$m, $q, $b, $h, $expected]) {
+                $ctx = new RequestContext($m, $p, $q, $h, $b);
+                $ids = $hp->detect($ctx)->templateIds();
+                $resp = $hp->respond($ctx);
+                $want = $m === 'POST' && str_ends_with($p, '/auth/login') ? 'attack-cpsrvd-login' : $expected;
+                $got = $ids[0] ?? '(none)';
+                $table[] = sprintf('%-6s %-34s %-10s detect=%-24s respond=%s', $m, $p, $name, $got, $resp?->status ?? 'null');
+                if ($got !== $want) {
+                    $mismatch++;
+                }
+            }
+        }
+        self::assertSame(0, $mismatch, "engine table changed:\n" . implode("\n", $table));
+        self::assertGreaterThanOrEqual(400, count($table));
+    }
+
+    public function test_no_owned_route_is_an_exact_core_route_key(): void
+    {
+        $compiled = require dirname(__DIR__, 3) . '/vendor/metrictower/funnypot-core/resources/compiled/nuclei-index.full.php';
+        $keys = array_flip(array_keys($compiled['routes']));
+        self::assertGreaterThan(1000, count($keys), 'sanity: the compiled route map is the real one');
+        foreach (MintCorpus::ownedPaths(MintCorpus::slug()) as $p) {
+            foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as $m) {
+                self::assertArrayNotHasKey("{$m} {$p}", $keys, "{$m} {$p} is a core route");
+            }
+        }
+    }
+
+    public function test_unowned_paths_stay_unowned_whatever_core_answers(): void
+    {
+        $r = self::routes();
+        foreach (MintCorpus::notOwned() as $p) {
+            self::assertFalse($r->owns($p), "{$p} must not be owned");
+        }
+        foreach (['.tar.gz', '.tar.bz2', '.tbz2', '.tgz', '.tar', '.gz', '.zip', '.sql', '.pem', '.cer', 'wallet.json'] as $suffix) {
+            foreach (['/api/v2/users/backup', '/v2/users/x', '/settings/applications/abcdefgh'] as $base) {
+                $p = $base . ($suffix[0] === '.' ? $suffix : '/' . $suffix);
+                self::assertNotNull(HoneypotController::decoyForPath($p));
+                self::assertFalse($r->owns($p), "{$p} is a backup-file decoy path");
+            }
+        }
+        foreach (MintCorpus::ownedPaths(MintCorpus::slug()) as $p) {
+            self::assertFalse(PanelRoute::mountedAtRoot($p), "{$p} must never be a root panel mount");
+            self::assertNull(HoneypotController::decoyForPath($p));
+        }
+    }
+
+    public function test_benign_owned_traffic_trips_no_attack_class(): void
+    {
+        self::assertCount(2, MintCorpus::EXEMPT, 'the exemption list is exactly the two documented login paths');
+        $hp = MintCorpus::engine();
+        $flagged = [];
+        foreach (MintCorpus::benign(MintCorpus::slug()) as [$m, $p, $q, $b, $h]) {
+            self::assertTrue(self::routes()->owns($p), $p);
+            $d = $hp->detect(new RequestContext($m, $p, $q, $h, $b));
+            if (in_array('attack', $d->tags(), true) && !in_array("{$m} {$p}", MintCorpus::EXEMPT, true)) {
+                $flagged[] = "{$m} {$p} " . implode(',', $d->templateIds());
+            }
+        }
+        self::assertSame([], $flagged);
+
+        // The names an earlier draft used are kept as negative fixtures: they would fail this invariant.
+        $slug = MintCorpus::slug();
+        foreach ([['POST', '/idp/' . $slug . '/login', 'username=a%40b.co&password=x'], ['POST', '/api/v2/orders/export', 'format=csv&since=2024-01-01'], ['POST', '/v2/orders/export', 'format=csv&since=2024-01-01']] as [$m, $p, $b]) {
+            self::assertContains('attack', $hp->detect(new RequestContext($m, $p, '', MintCorpus::F, $b))->tags(), "{$p} stays a negative fixture");
+            self::assertFalse(self::routes()->owns($p));
+        }
+    }
+
+    public function test_every_supported_callback_form_is_engine_clean_and_ipv6_loopback_is_refused(): void
+    {
+        $hp = MintCorpus::engine();
+        $routes = [
+            fn (string $cb): RequestContext => new RequestContext('POST', '/settings/applications', '', MintCorpus::F, MintCorpus::CSRF . '&name=my-app&homepage_url=https%3A%2F%2Fapp.example.com&callback_url=' . rawurlencode($cb) . '&description=build+bot'),
+            fn (string $cb): RequestContext => new RequestContext('GET', '/login/oauth/authorize', 'client_id=0123456789abcdef0123&redirect_uri=' . rawurlencode($cb) . '&scope=read%3Auser&state=abc', []),
+            fn (string $cb): RequestContext => new RequestContext('POST', '/login/oauth/access_token', '', MintCorpus::F, 'grant_type=authorization_code&code=0123456789abcdef0123&client_id=0123456789abcdef0123&client_secret=x&redirect_uri=' . rawurlencode($cb)),
+        ];
+        $forms = 0;
+        foreach (MintForms::CALLBACK_FORMS as $kind => $form) {
+            foreach ($form['examples'] as $cb) {
+                $forms++;
+                self::assertTrue(MintForms::validCallback($cb), "{$cb} ({$kind}) is accepted");
+                foreach ($routes as $i => $make) {
+                    self::assertSame([], $hp->detect($make($cb))->templateIds(), "{$cb} on route {$i} must be engine-clean");
+                }
+            }
+        }
+        self::assertGreaterThanOrEqual(15, $forms);
+        foreach (MintForms::REFUSED_CALLBACKS as $cb) {
+            self::assertFalse(MintForms::validCallback($cb), "{$cb} is refused");
+            foreach ($routes as $make) {
+                self::assertContains('attack-crs-rce', $hp->detect($make($cb))->templateIds(), "{$cb} stays flagged, which is why it is refused");
+            }
+        }
+    }
+
+    public function test_owned_set_is_disjoint_from_the_web_shell_console_grammar(): void
+    {
+        $r = self::routes();
+        $slug = MintCorpus::slug();
+        $samples = MintCorpus::ownedPaths($slug);
+        foreach (['shell.php', 'Shell.PHP', 'cmd.Php', 'c99.php', 'WSO.php', 'r57.PHP', 'b374k.php', 'alfa.php', 'indoxploit.php'] as $file) {
+            foreach (['/api/v2/users/', '/v2/users/', '/settings/applications/', '/api/v2/orders/', '/settings/tokens/1/', '/orgs/' . $slug . '/'] as $base) {
+                $p = $base . $file;
+                self::assertMatchesRegularExpression(MintCorpus::FP0814_SHELL_FILE, $p);
+                self::assertFalse($r->owns($p), "{$p} belongs to the console, never to this surface");
+            }
+        }
+        foreach ($samples as $p) {
+            self::assertNotContains($p, MintCorpus::FP0814_CONSOLE_PATHS);
+            self::assertDoesNotMatchRegularExpression(MintCorpus::FP0814_SHELL_FILE, $p);
+            self::assertStringStartsNotWith('/admin/', $p);
+        }
+        foreach (MintCorpus::FP0814_CONSOLE_PATHS as $p) {
+            self::assertFalse($r->owns($p));
+        }
+        $owns = new ReflectionMethod(TokenMintDecoy::class, 'owns');
+        self::assertSame(['path'], array_map(static fn ($p) => $p->getName(), $owns->getParameters()), 'ownership is a function of the path alone');
+    }
+}

@@ -592,6 +592,51 @@ final class ServedSurfacesFingerprintTest extends TestCase
         self::assertServedClean($html, "HomeController::login('POST') decoy response");
     }
 
+    // --- 3e2. The token-mint account surface ---------------------------------------------------------
+
+    /**
+     * Every page, form answer, JSON body, OAuth error and header the account surface renders, for
+     * eight personas, plus every message in its vocabulary. The crawl must actually reach the
+     * credential-bearing pages (a minted token, a client secret, recovery codes, an OAuth code), and a
+     * byte floor proves the scan did not silently go hollow.
+     */
+    public function test_token_mint_surfaces_carry_no_fingerprint_signature(): void
+    {
+        $kinds = [];
+        $bytes = 0;
+        for ($seed = 1; $seed <= 8; $seed++) {
+            $crawl = new \Funnypot\Tests\App\Tarpit\Mint\MintCrawl($seed);
+            try {
+                $out = $crawl->run();
+                foreach ([...$crawl->plans, ['home', $out['home']]] as [$label, $plan]) {
+                    self::assertServedClean($plan->body, "token-mint seed {$seed} {$label}");
+                    foreach ($plan->headers() as [$n, $v]) {
+                        self::assertServedClean("{$n}: {$v}", "token-mint seed {$seed} {$label} header {$n}");
+                    }
+                    $bytes += strlen($plan->body);
+                    foreach (['pat' => '/[a-z]{2,4}_pat_[0-9A-Za-z]{31}/', 'oat' => '/[a-z]{2,4}_oat_/', 'ort' => '/[a-z]{2,4}_ort_/', 'secret' => '~<p class=mono>[a-f0-9]{40}</p>~',
+                        'recovery' => '~<p class=mono>[a-z2-7]{5}-[a-z2-7]{5}<br>~', 'code' => '~Authorization code for~', 'consent' => '~Authorize ~', 'idp' => '~ Identity</h1>~',
+                        'docs' => '~<h1>[^<]+ API</h1>~', 'sso' => '~"sso_url"~', 'approval' => '~"approval_url"~', 'jwt' => '~"access_token":"eyJ~', 'oauth_error' => '~"error":"~',
+                        'friction' => '~This form has expired|Review and resubmit|too many requests|couldn&#039;t save~'] as $k => $re) {
+                        if (preg_match($re, $plan->body) === 1) {
+                            $kinds[$k] = true;
+                        }
+                    }
+                }
+                $persona = \Funnypot\App\Tarpit\Mint\MintPersona::fromSeed($seed);
+                foreach (array_keys(\Funnypot\App\Tarpit\Mint\MintVocabulary::MESSAGES) as $key) {
+                    $fill = array_intersect_key(['company' => $persona->company, 'wait' => '2 minutes', 'scope' => 'orders:read', 'app' => 'bot'], array_flip(\Funnypot\App\Tarpit\Mint\MintVocabulary::placeholders($key)));
+                    self::assertServedClean(\Funnypot\App\Tarpit\Mint\MintVocabulary::text($key, $fill), "token-mint message {$key}");
+                }
+            } finally {
+                $crawl->cleanup();
+            }
+        }
+        ksort($kinds);
+        self::assertSame(['approval', 'code', 'consent', 'docs', 'friction', 'idp', 'jwt', 'oat', 'oauth_error', 'ort', 'pat', 'recovery', 'secret', 'sso'], array_keys($kinds), 'the scan reached every credential-bearing kind of page');
+        self::assertGreaterThan(1_000_000, $bytes, "the scan covered the full output ({$bytes} bytes)");
+    }
+
     // --- 3f. HoneypotController::robots() — a small, self-contained static surface -------------------
 
     /**
