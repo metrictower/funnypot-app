@@ -669,11 +669,13 @@ final class TokenMintDecoyHandleTest extends TestCase
                 return (array) $row;
             };
             self::assertSame($strip($ru['main']), $strip($ra['main']), "main row for {$m} {$p} {$q}");
-            self::assertSame(
-                $ra['plan']->served,
-                !in_array($ra['plan']->status, [401], true) && !(in_array($ra['plan']->status, [303, 403, 404], true) && preg_match('~/(?:settings/(?:tokens|applications)/[^/]+|orgs/|idp/|users/|orders/[^/e])~', $p) === 1 && $ra['plan']->status !== 200),
-                "served flag for {$ra['plan']->status} {$m} {$p}"
-            );
+            // Unserved: every 401, and on an id-bearing path any answer that returns no object.
+            $st = $ra['plan']->status;
+            $outcome = $ra['plan']->turn['outcome'] ?? '';
+            $idPath = (bool) ((new \Funnypot\App\Tarpit\Mint\MintRoutes($slug))->match($p)['pattern'] ?? false);
+            $hidden = $st === 401 || ($idPath && (in_array($st, [204, 403, 404, 405, 413, 429], true)
+                || ($st === 422 && $outcome === 'csrf') || ($st === 303 && $outcome === 'no_session')));
+            self::assertSame(!$hidden, $ra['plan']->served, "served flag for {$st} {$m} {$p}");
         }
         $norm = static fn (array $r): array => ['abuse' => $r['abuse'], 'ti' => $r['ti']];
         self::assertSame($norm($unarmed->reports()), $norm($armed->reports()), 'identical report queues');
