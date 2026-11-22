@@ -943,6 +943,38 @@ final class TokenMintDecoyHandleTest extends TestCase
         self::assertSame(['recent' => 0, 'extended' => 0], $armed->hits->probeVelocity($ctl), 'served answers do not count');
     }
 
+    public function test_non_get_sprays_on_id_paths_count_like_misses(): void
+    {
+        $armed = $this->h();
+        $unarmed = $this->h(false);
+        $armed->join('velo2', 'Passw0rd!x', 'default', '45.87.0.1');
+        $legs = [
+            'PUT users' => ['PUT', fn (int $i): string => '/api/v2/users/nobody' . $i, '{}', ['Content-Type' => 'application/json'], 'nojar'],
+            'DELETE users' => ['DELETE', fn (int $i): string => '/v2/users/nobody' . $i, null, [], 'nojar'],
+            'POST users' => ['POST', fn (int $i): string => '/api/v2/users/nobody' . $i, 'a=1', [], 'nojar'],
+            'OPTIONS users' => ['OPTIONS', fn (int $i): string => '/api/v2/users/nobody' . $i, null, [], 'nojar'],
+            'POST orders' => ['POST', fn (int $i): string => '/api/v2/orders/' . (500 + $i), 'a=1', [], 'nojar'],
+            'csrf delete' => ['POST', fn (int $i): string => '/settings/tokens/' . sprintf('%012x', 0xbee000 + $i) . '/delete', 'csrf_token=x', [], 'default'],
+            'oversized' => ['POST', fn (int $i): string => '/settings/applications/' . sprintf('%012x', 0xcab000 + $i) . '/secrets', str_repeat('a', 17000), [], 'default'],
+        ];
+        $n = 0;
+        foreach ($legs as $name => [$m, $path, $body, $hd, $jar]) {
+            $ip = $jar === 'default' ? '45.87.0.1' : '45.88.0.' . (++$n);
+            $before = $armed->hits->probeVelocity($ip);
+            for ($i = 0; $i < 40; $i++) {
+                $a = $armed->request($m, $path($i), '', $body, $hd, $ip, $jar);
+                self::assertNotNull($a['plan'], "{$name} is answered by the surface");
+                self::assertFalse($a['main']['served'], "{$name}: {$a['plan']->status} discloses nothing");
+                $unarmed->request($m, $path($i), '', $body, $hd, $ip, $jar);
+            }
+            if ($jar === 'nojar') {
+                self::assertSame($unarmed->hits->probeVelocity($ip), $armed->hits->probeVelocity($ip), $name);
+            } else {
+                self::assertGreaterThan($before['recent'], $armed->hits->probeVelocity($ip)['recent'], "{$name} counts toward the window");
+            }
+        }
+    }
+
     // --- 18. timing parity ---------------------------------------------------------------------------
 
     public function test_the_serve_delay_is_paid_exactly_when_the_unarmed_branch_would_pay_it(): void

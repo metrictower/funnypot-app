@@ -76,6 +76,11 @@ final class TokenMintDecoy
             $r = MintRequest::parse($ctx, $match, $ip);
             $plan = $this->dispatch($r);
             $plan->attribute(['route' => $r->route]);
+            // On an id-bearing path, an answer that returns no object counts like the miss it replaces,
+            // whatever the method.
+            if ($r->pattern && self::nonDisclosing($plan)) {
+                $plan->served = false;
+            }
 
             return $r->isHead() ? $plan->forHead() : $plan;
         } catch (Throwable $e) {
@@ -84,6 +89,12 @@ final class TokenMintDecoy
 
             return null;
         }
+    }
+
+    private static function nonDisclosing(MintPlan $p): bool
+    {
+        return in_array($p->status, [204, 401, 403, 404, 405, 413, 429], true)
+            || ($p->status === 422 && ($p->turn['outcome'] ?? '') === 'csrf');
     }
 
     private function dispatch(MintRequest $r): MintPlan
