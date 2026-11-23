@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnypot\Tests\App\Tarpit\Ssrf;
 
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
+use Funnypot\App\Tarpit\Ssrf\SsrfForms;
 use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
 use Funnypot\Core\Support\PersonaIdentity;
 use Funnypot\Tests\App\Identity\IdentityTestSupport;
@@ -248,18 +249,99 @@ final class SsrfDecoyHandleTest extends TestCase
         $page = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($hookForm), 'content_type' => 'xml', 'events' => ['push'], 'active' => '1', 'payload_url' => 'https://www.google.com']);
         self::assertSame(422, $page['status']);
         $errText = static fn (string $body): string => preg_match_all('~<p class=err>(.*?)</p>~s', $body, $m) > 0 ? html_entity_decode(implode(' ', $m[1]), ENT_QUOTES) : '';
-        foreach ([...$ev[2], ...$ct[2]] as $label) {
+        foreach ([...$ev[2], ...$ct[2], ...$ev[1], ...$ct[1]] as $label) {
             self::assertStringContainsString($label, $errText($page['body']), "the form error names \"{$label}\"");
         }
         $imp = $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body']), 'kind' => 'git', 'source_url' => 'https://github.com/a/b']);
-        foreach ($kinds[2] as $label) {
+        foreach ([...$kinds[2], ...$kinds[1]] as $label) {
             self::assertStringContainsString($label, $errText($imp['body']));
         }
 
         $docs = self::text($h->get('/docs/api')['body']);
-        foreach ([...$ev[1], ...$ct[1], ...$kinds[1], 'bucket', 'access_key', 'secret_key', 'endpoint_url', 'source_url', 'A webhook delivers when you send it a test delivery'] as $needle) {
+        foreach ([...$ev[1], ...$ct[1], ...$kinds[1], 'bucket', 'access_key', 'secret_key', 'endpoint_url', 'source_url', 'A webhook delivers when you send it a test delivery', 'active (true or false, default true)'] as $needle) {
             self::assertStringContainsString($needle, $docs, "the API docs name {$needle}");
         }
+    }
+
+    /**
+     * Every value an error lists is accepted when sent back exactly as listed: each `allowed_values`
+     * entry on every API route that lists it (both spellings, create and edit), and each value a form
+     * error names on the form routes. Following an error never loops.
+     */
+    public function test_every_listed_value_is_accepted_as_listed(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $pat = $h->mint(['read:user', 'webhooks:write', 'imports:write', 'storage:write']);
+        $api = static function (string $m, string $path, array $body) use ($h, $pat): array {
+            $h->now += 21;
+            $r = $h->request($m, $path, '', (string) json_encode($body, JSON_UNESCAPED_SLASHES), ['Authorization' => 'Bearer ' . $pat, 'Content-Type' => 'application/json']);
+
+            return [$r['status'], json_decode($r['body'], true)];
+        };
+        $hook = $api('POST', '/api/v2/user/hooks', ['url' => 'http://172.16.0.5/h'])[1]['id'];
+        $bad = ['events' => ['push'], 'content_type' => 'xml', 'active' => 'yes'];
+        $hookRoutes = [['POST', '/api/v2/user/hooks'], ['POST', '/v2/user/hooks'], ['PATCH', '/api/v2/user/hooks/' . $hook], ['PATCH', '/v2/user/hooks/' . $hook]];
+        $sent = 0;
+        foreach ($hookRoutes as [$m, $path]) {
+            foreach ($bad as $field => $wrong) {
+                [$status, $j] = $api($m, $path, [$field => $wrong, 'url' => 'http://172.16.0.5/h']);
+                self::assertSame(422, $status, "{$m} {$path} {$field}");
+                $listed = array_column($j['errors'], 'allowed_values', 'field')[$field];
+                $sends = $field === 'events' ? [...array_map(static fn ($v): array => [$v], $listed), $listed] : $listed;
+                foreach ($sends as $v) {
+                    [$status, $j] = $api($m, $path, [$field => $v, 'url' => 'http://172.16.0.5/h']);
+                    self::assertSame(200, $status, "{$m} {$path} {$field}=" . json_encode($v) . ' as listed: ' . json_encode($j));
+                    $sent++;
+                    if ($m === 'POST') {
+                        $api('DELETE', '/api/v2/user/hooks/' . $j['id'], []);
+                    }
+                }
+            }
+        }
+        foreach (['True' => true, 'FALSE' => false, 'tRuE' => true] as $word => $want) {
+            [$status, $j] = $api('PATCH', '/api/v2/user/hooks/' . $hook, ['active' => $word]);
+            self::assertSame([200, $want], [$status, $j['active'] ?? null], "active={$word}: any case");
+        }
+        self::assertSame(422, $api('PATCH', '/api/v2/user/hooks/' . $hook, ['active' => 'yes'])[0], 'other words stay invalid');
+        foreach (['/api/v2/user/imports', '/v2/user/imports'] as $path) {
+            [, $j] = $api('POST', $path, ['kind' => 'git', 'source_url' => 'https://github.com/a/b']);
+            foreach ($j['errors'][0]['allowed_values'] as $kind) {
+                [$status, $out] = $api('POST', $path, ['kind' => $kind, 'source_url' => $kind === 'mirror' ? 'https://github.com/a/b' : 'http://172.16.0.5/o.csv']);
+                self::assertSame(200, $status, "{$path} kind={$kind} as listed: " . json_encode($out));
+                $sent++;
+            }
+        }
+        // A form error names each option's value; posting that value is accepted.
+        $named = static fn (string $body): array => preg_match_all('~(?:: |, | or )([a-z_.]+) for ~', html_entity_decode(implode(' ', preg_match_all('~<p class=err>(.*?)</p>~s', $body, $m) > 0 ? $m[1] : []), ENT_QUOTES), $mm) > 0 ? $mm[1] : [];
+        $form = $h->get('/settings/webhooks/new')['body'];
+        $err = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form), 'content_type' => 'xml', 'events' => ['push'], 'active' => '1', 'payload_url' => 'http://172.16.0.5/f']);
+        $values = $named($err['body']);
+        self::assertSame([...SsrfForms::CONTENT_TYPES, ...array_keys(SsrfForms::EVENTS)], $values, 'the form error names every value');
+        foreach (SsrfForms::CONTENT_TYPES as $ct) {
+            foreach (array_keys(SsrfForms::EVENTS) as $ev) {
+                $h->now += 21;
+                $r = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($h->get('/settings/webhooks/new')['body']), 'content_type' => $ct, 'events' => [$ev], 'active' => '1', 'payload_url' => 'http://172.16.0.5/f']);
+                if ($r['status'] === 422 && str_contains($r['body'], 'up to 5 webhooks')) {
+                    foreach (array_slice(self::hookIds($h), 0, 4) as $old) {
+                        $page = $h->get('/settings/webhooks/' . $old)['body'];
+                        $h->post('/settings/webhooks/' . $old . '/delete', ['csrf_token' => self::tokens($page)[2] ?? '']);
+                    }
+                    $r = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($h->get('/settings/webhooks/new')['body']), 'content_type' => $ct, 'events' => [$ev], 'active' => '1', 'payload_url' => 'http://172.16.0.5/f']);
+                }
+                self::assertSame(303, $r['status'], "form content_type={$ct} events[]={$ev}");
+                $sent++;
+            }
+        }
+        $kindErr = $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body']), 'kind' => 'git', 'source_url' => 'https://github.com/a/b']);
+        self::assertSame(array_keys(SsrfForms::KINDS), $named($kindErr['body']));
+        foreach (array_keys(SsrfForms::KINDS) as $kind) {
+            $h->now += 21;
+            $r = $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body']), 'kind' => $kind, 'source_url' => $kind === 'mirror' ? 'https://github.com/a/b' : 'http://172.16.0.5/o.csv']);
+            self::assertSame(303, $r['status'], "form kind={$kind}");
+            $sent++;
+        }
+        self::assertSame(53, $sent, "every listed value on every route that lists it");
     }
 
     public function test_bearer_use_touches_last_used_at_most_hourly(): void

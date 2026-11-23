@@ -92,7 +92,7 @@ final class SsrfRoutes
             ['GET', 'user/hooks', 'Your account webhooks', 'webhooks:write'],
             ['POST', 'user/hooks', 'Create a webhook. Fields: url (http or https); content_type (json or form, default json); secret '
                 . '(optional, signs each delivery with HMAC-SHA256); events (one or more of ' . implode(', ', array_keys(SsrfForms::EVENTS))
-                . '; default ' . SsrfForms::DEFAULT_EVENT . '); active (true or false). A webhook delivers when you send it a test delivery.', 'webhooks:write'],
+                . '; default ' . SsrfForms::DEFAULT_EVENT . '); active (true or false, default true). A webhook delivers when you send it a test delivery.', 'webhooks:write'],
             ['PATCH', 'user/hooks/{id}', 'Update a webhook: any create field; leave out url to keep the current one', 'webhooks:write'],
             ['POST', 'user/hooks/{id}/pings', 'Send a test delivery to the webhook\'s URL; the result appears in its recent deliveries', 'webhooks:write'],
             ['GET', 'user/hooks/{id}/deliveries', 'Recent deliveries', 'webhooks:write'],

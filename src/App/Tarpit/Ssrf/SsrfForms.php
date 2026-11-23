@@ -50,18 +50,28 @@ final class SsrfForms
         'storage_missing' => 'Save an export destination first.',
     ];
 
-    /** A form error's wording: an enumerated field names its options by the labels the form shows. */
+    /**
+     * A form error's wording: an enumerated field names each option by the value the form submits and the
+     * label it shows ("json for application/json"), so a hand-built post can follow it too.
+     */
     public static function message(string $key): string
     {
         $labels = match ($key) {
-            'events_invalid' => array_values(self::EVENTS),
-            'kind_invalid' => array_values(self::KINDS),
-            'content_type_invalid' => array_values(self::CONTENT_TYPE_LABELS),
+            'events_invalid' => self::EVENTS,
+            'kind_invalid' => self::KINDS,
+            'content_type_invalid' => self::CONTENT_TYPE_LABELS,
             default => null,
         };
         $text = self::MESSAGES[$key] ?? 'Check this field.';
+        if ($labels === null) {
+            return $text;
+        }
+        $options = [];
+        foreach ($labels as $value => $label) {
+            $options[] = $value . ' for ' . $label;
+        }
 
-        return $labels === null ? $text : substr($text, 0, -1) . ': ' . self::either($labels) . '.';
+        return substr($text, 0, -1) . ': ' . self::either($options) . '.';
     }
 
     /** @param list<string> $items "a, b or c" */
@@ -185,13 +195,19 @@ final class SsrfForms
         return is_string($value) && in_array($value, self::CONTENT_TYPES, true) ? [$value, null] : ['json', 'content_type_invalid'];
     }
 
-    /** @return array{0:bool,1:?string} */
+    /**
+     * A JSON boolean, 1 or 0, or the strings the API's error lists ("true", "false", any case).
+     *
+     * @return array{0:bool,1:?string}
+     */
     public static function active(mixed $value, bool $default = true): array
     {
+        $word = is_string($value) ? strtolower($value) : null;
+
         return match (true) {
             $value === null => [$default, null],
-            $value === true, $value === '1', $value === 1 => [true, null],
-            $value === false, $value === '0', $value === 0 => [false, null],
+            $value === true, $value === '1', $value === 1, $word === 'true' => [true, null],
+            $value === false, $value === '0', $value === 0, $word === 'false' => [false, null],
             default => [$default, 'active_invalid'],
         };
     }

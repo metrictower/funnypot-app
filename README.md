@@ -273,13 +273,14 @@ redeliver to the current URL), **imports** into a personal sandbox (orders CSV/J
 mirror a Git repository) and an S3-compatible **export destination** with "verify connection". The UI
 needs a live account session; the API (`/api/v2/user/hooks…`, `…/imports…`, `…/storage…`, both prefixes,
 byte-identical) needs a token with `webhooks:write`, `imports:write` or `storage:write`, scopes the token
-form offers only while this is wired. The account nav gains Webhooks, Imports and Export. `/docs/api`
-lists every field with its allowed values (the events, the import kinds `orders_csv`, `orders_json` and
-`mirror`, the storage fields) and says a webhook delivers on "Send test delivery"; a 422 names the
-allowed values of the field that failed (`allowed_values` in the API, the form's labels on a page), all
-from the constants the forms render. A token that is present but not valid gets the token-mint API's own
-401, byte for byte, recorded as `bad_credentials`; a missing one keeps its "authentication required"
-answer, recorded as `unauthorized`.
+form offers only while this is wired. The account nav gains Webhooks, Imports and Export. `/docs/api` lists
+every field with its allowed values (the events, the import kinds `orders_csv`, `orders_json` and `mirror`,
+the storage fields) and says a webhook delivers on "Send test delivery"; a 422 names the allowed values of
+the field that failed (`allowed_values` in the API, each value with its label on a page, as in "json for
+application/json"), all from the constants the forms render, and every listed value is accepted as listed
+(`active` takes `true`/`false` as JSON booleans, 1/0, or the strings, any case). A token that is present but
+not valid gets the token-mint API's own 401, byte for byte, recorded as `bad_credentials`; a missing one
+keeps its "authentication required" answer, recorded as `unauthorized`.
 
 - **Nothing is fetched.** There is no fetch, DNS or socket code: a fake network decides where a request
   would have gone and what it would have got, and the result is shown as escaped text. Four checks keep it

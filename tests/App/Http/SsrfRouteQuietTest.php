@@ -54,7 +54,11 @@ final class SsrfRouteQuietTest extends TestCase
         $values = [];
         foreach (['events_invalid' => 'events', 'kind_invalid' => 'kind', 'content_type_invalid' => 'content_type', 'active_invalid' => 'active'] as $key => $field) {
             foreach ((array) SsrfForms::allowed($key) as $v) {
-                $values[] = [$field, $field === 'events' ? [$v] : ($field === 'active' ? $v === 'true' : $v)];
+                // Exactly as the error lists it, and as the boolean a client may send instead.
+                $values[] = [$field, $field === 'events' ? [$v] : $v];
+                if ($field === 'active') {
+                    $values[] = [$field, $v === 'true'];
+                }
             }
         }
         $values[] = ['events', array_keys(SsrfForms::EVENTS)];
