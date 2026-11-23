@@ -165,6 +165,103 @@ final class SsrfDecoyHandleTest extends TestCase
         self::assertSame(404, $lru->get('/settings/webhooks/' . $old)['status'], 'a row evicted and re-created gets a new epoch');
     }
 
+    /**
+     * A bad token answers the same on the SSRF API as on the token-mint API (status, body and every
+     * header), so the agent cannot tell the two surfaces apart by their auth answers. A missing token
+     * keeps the SSRF API's own "authentication required" answer.
+     */
+    public function test_a_bad_token_reads_the_same_on_the_ssrf_and_token_mint_apis(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $pat = $h->mint(['read:user', 'webhooks:write', 'imports:write']);
+        $expiring = $h->mint(['read:user', 'webhooks:write'], 'expiring');
+        $flip = $pat;
+        $flip[12] = $flip[12] === 'a' ? 'b' : 'a';
+        $bad = [
+            'malformed' => [['Authorization' => 'Bearer not-a-token'], ''],
+            'one character changed' => [['Authorization' => 'Bearer ' . $flip], ''],
+            'placeholder' => [['Authorization' => 'Bearer <TOKEN>'], ''],
+            'another scheme' => [['Authorization' => 'Basic ' . base64_encode('root:root')], ''],
+            'api key header' => [['X-Api-Key' => $flip], ''],
+            'deprecated query' => [[], 'access_token=' . $flip],
+        ];
+        $answer = static fn (array $r): array => [$r['status'], $r['body'], $r['plan']?->headers(), $r['main']['served']];
+        $outcomes = [];
+        foreach ($bad as $what => [$headers, $query]) {
+            $mint = $answer($h->request('GET', '/api/v2/user', $query, null, $headers, MintHarness::IP, 'api'));
+            self::assertSame(401, $mint[0], $what);
+            foreach ([['GET', '/api/v2/user/hooks', null], ['POST', '/v2/user/imports', '{"kind":"orders_csv","source_url":"http://172.16.0.5/a.csv"}']] as [$m, $path, $body]) {
+                $r = $h->request($m, $path, $query, $body, $headers + ($body !== null ? ['Content-Type' => 'application/json'] : []), MintHarness::IP, 'api');
+                self::assertSame($mint, $answer($r), "{$what}: {$m} {$path} answers as the token-mint API does");
+                $outcomes[] = $r['plan']?->turn['outcome'] ?? '';
+            }
+        }
+        self::assertSame(['bad_credentials'], array_values(array_unique($outcomes)), 'recorded as bad credentials');
+        $h->now += 31 * 86400;
+        $mint = $answer($h->request('GET', '/api/v2/user', '', null, ['Authorization' => 'Bearer ' . $expiring], MintHarness::IP, 'api'));
+        self::assertSame(401, $mint[0], 'an expired token');
+        self::assertSame($mint, $answer($h->request('GET', '/api/v2/user/hooks', '', null, ['Authorization' => 'Bearer ' . $expiring], MintHarness::IP, 'api')), 'an expired token');
+
+        $missing = $h->request('GET', '/api/v2/user/hooks', '', null, [], MintHarness::IP, 'api');
+        self::assertSame(401, $missing['status']);
+        self::assertSame('Authentication required. Send a token as a bearer credential.', json_decode($missing['body'], true)['message']);
+        self::assertSame('unauthorized', $missing['plan']?->turn['outcome'] ?? '');
+        $stored = $h->ssrfStore->db()->query("SELECT outcome, count(*) FROM ssrf_turns WHERE outcome IN ('unauthorized', 'bad_credentials') GROUP BY outcome")->fetchAll(\PDO::FETCH_KEY_PAIR);
+        self::assertSame(['bad_credentials' => 13, 'unauthorized' => 1], $stored, 'the store keeps the two causes apart for the metrics');
+    }
+
+    /**
+     * Every error on an enumerated field names what it accepts, the API by value and the forms by label,
+     * and the API docs list the same values: all three read the constants the forms render.
+     */
+    public function test_errors_and_docs_name_the_values_the_forms_offer(): void
+    {
+        $h = $this->h();
+        $h->join();
+        $pat = $h->mint(['read:user', 'webhooks:write', 'imports:write', 'storage:write']);
+        $api = static fn (string $m, string $path, array $body): array => $h->request($m, $path, '', (string) json_encode($body), ['Authorization' => 'Bearer ' . $pat, 'Content-Type' => 'application/json']);
+        $hookForm = $h->get('/settings/webhooks/new')['body'];
+        preg_match_all("~name='events\\[\\]' value='([^']+)'[^>]*>([^<]+)<~", $hookForm, $ev);
+        preg_match_all("~<option value='([^']+)'[^>]*>([^<]+)</option>~", $hookForm, $ct);
+        preg_match_all("~<option value='([^']+)'[^>]*>([^<]+)</option>~", $h->get('/settings/imports/new')['body'], $kinds);
+        self::assertCount(4, $ev[1]);
+        self::assertSame(['json', 'form'], $ct[1]);
+        self::assertCount(3, $kinds[1]);
+
+        $r = $api('POST', '/api/v2/user/hooks', ['content_type' => 'xml', 'events' => ['push'], 'active' => 'yes', 'url' => 'https://www.google.com']);
+        self::assertSame(422, $r['status']);
+        $errors = array_column(json_decode($r['body'], true)['errors'], null, 'field');
+        foreach (['events' => $ev[1], 'content_type' => $ct[1], 'active' => ['true', 'false']] as $field => $values) {
+            self::assertSame($values, $errors[$field]['allowed_values'], "{$field}: the API names what the form offers");
+            foreach ($values as $v) {
+                self::assertStringContainsString($v, $errors[$field]['message'], $field);
+            }
+        }
+        $r = $api('POST', '/api/v2/user/imports', ['kind' => 'git', 'source_url' => 'https://github.com/torvalds/linux']);
+        $kindError = json_decode($r['body'], true)['errors'][0];
+        self::assertSame(['kind', $kinds[1]], [$kindError['field'], $kindError['allowed_values']]);
+        self::assertStringContainsString('mirror', $kindError['message']);
+        self::assertSame(200, $api('POST', '/api/v2/user/imports', ['kind' => 'mirror', 'source_url' => 'https://github.com/torvalds/linux'])['status'], 'following the error works');
+        self::assertSame(200, $api('POST', '/api/v2/user/hooks', ['content_type' => $errors['content_type']['allowed_values'][1], 'events' => $errors['events']['allowed_values'], 'active' => true, 'url' => 'https://www.google.com'])['status']);
+
+        $page = $h->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($hookForm), 'content_type' => 'xml', 'events' => ['push'], 'active' => '1', 'payload_url' => 'https://www.google.com']);
+        self::assertSame(422, $page['status']);
+        $errText = static fn (string $body): string => preg_match_all('~<p class=err>(.*?)</p>~s', $body, $m) > 0 ? html_entity_decode(implode(' ', $m[1]), ENT_QUOTES) : '';
+        foreach ([...$ev[2], ...$ct[2]] as $label) {
+            self::assertStringContainsString($label, $errText($page['body']), "the form error names \"{$label}\"");
+        }
+        $imp = $h->post('/settings/imports', ['csrf_token' => MintHarness::csrf($h->get('/settings/imports/new')['body']), 'kind' => 'git', 'source_url' => 'https://github.com/a/b']);
+        foreach ($kinds[2] as $label) {
+            self::assertStringContainsString($label, $errText($imp['body']));
+        }
+
+        $docs = self::text($h->get('/docs/api')['body']);
+        foreach ([...$ev[1], ...$ct[1], ...$kinds[1], 'bucket', 'access_key', 'secret_key', 'endpoint_url', 'source_url', 'A webhook delivers when you send it a test delivery'] as $needle) {
+            self::assertStringContainsString($needle, $docs, "the API docs name {$needle}");
+        }
+    }
+
     public function test_bearer_use_touches_last_used_at_most_hourly(): void
     {
         $h = $this->h();

@@ -18,6 +18,7 @@ use Funnypot\App\Tarpit\Mint\MintContext;
 use Funnypot\App\Tarpit\Mint\MintPlan;
 use Funnypot\App\Tarpit\Mint\MintRequest;
 use Funnypot\App\Tarpit\Mint\MintState;
+use Funnypot\App\Tarpit\Mint\MintVocabulary;
 use Funnypot\App\Tarpit\Mint\TokenMintDecoy;
 use Funnypot\Core\RequestContext;
 use Throwable;
@@ -358,7 +359,8 @@ final class SsrfDecoy implements SsrfDecision
         }
         $list = [];
         foreach ($errors as $field => $key) {
-            $list[] = ['field' => $field, 'code' => $key, 'message' => SsrfForms::message($key)];
+            $allowed = SsrfForms::allowed($key);
+            $list[] = ['field' => $field, 'code' => $key, 'message' => SsrfForms::apiMessage($key)] + ($allowed !== null ? ['allowed_values' => $allowed] : []);
         }
 
         return [MintPlan::json(422, ['message' => 'Validation failed', 'errors' => $list])->attribute(['outcome' => 'validation']), null, false];
@@ -894,16 +896,31 @@ final class SsrfDecoy implements SsrfDecision
         return '/api/v2/';
     }
 
+    /**
+     * A credential that is present but not valid (malformed, revoked, expired, or its account gone) gets
+     * the token-mint API's own answer, so the same bad token reads the same on every /api/v2 path.
+     */
+    private function badCredentials(bool $deprecated): MintPlan
+    {
+        $plan = MintPlan::json(401, ['message' => MintVocabulary::text('api_bad_credentials'), 'documentation_url' => '/docs/api'], false)
+            ->with('WWW-Authenticate', 'Bearer realm="' . $this->c->persona->company . ' API"')->attribute(['outcome' => 'bad_credentials']);
+
+        return $deprecated ? $plan->with('Deprecation', 'true') : $plan;
+    }
+
     private function api(MintRequest $r, string $ip): MintPlan
     {
         if ($r->badJson) {
             return MintPlan::json(400, ['message' => 'The request body is not valid JSON.'])->attribute(['outcome' => 'bad_body']);
         }
         $now = $this->c->now();
-        [$cred] = $this->principals->bearer($r, $now);
-        if ($cred === null || $cred['kind'] === 'bad') {
+        [$cred, $deprecated] = $this->principals->bearer($r, $now);
+        if ($cred === null) {
             return MintPlan::json(401, ['message' => 'Authentication required. Send a token as a bearer credential.', 'documentation_url' => '/docs/api'], false)
                 ->with('WWW-Authenticate', 'Bearer realm="' . $this->c->persona->company . ' API"')->attribute(['outcome' => 'unauthorized']);
+        }
+        if ($cred['kind'] === 'bad') {
+            return $this->badCredentials($deprecated);
         }
         $need = SsrfRoutes::SCOPES[SsrfRoutes::family($r->route)];
         if ($cred['kind'] === 'jwt' || !in_array($need, (array) ($cred['scopes'] ?? []), true)) {
@@ -912,7 +929,7 @@ final class SsrfDecoy implements SsrfDecision
         }
         $row = $this->c->store->load((string) $cred['k']);
         if ($row === null || $row->accountPosBySerial((int) $cred['acct']) === null) {
-            return MintPlan::json(401, ['message' => 'Authentication required. Send a token as a bearer credential.'], false)->attribute(['outcome' => 'unauthorized']);
+            return $this->badCredentials($deprecated);
         }
         $pos = (int) $row->accountPosBySerial((int) $cred['acct']);
         $who = ['owner' => $this->sk->owner((string) $cred['k'], $row->epoch(), (int) $cred['acct']), 'login' => (string) $row->d['a'][$pos]['u']];

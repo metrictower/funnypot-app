@@ -248,6 +248,16 @@ final class SsrfTour
         $this->api('PUT', '/api/v2/user/storage', '{"bucket":"b..b"}');
         $this->api('POST', '/api/v2/user/storage/verifications', '{}');
         $this->api('DELETE', '/api/v2/user/hooks/' . $hooks[1]);
+        // The values an agent tries from other platforms: every error names what is allowed instead.
+        $this->api('POST', '/api/v2/user/hooks', '{"content_type":"xml","events":["push"],"active":"yes","url":"https://www.google.com"}');
+        $this->api('POST', '/api/v2/user/imports', '{"kind":"git","source_url":"https://github.com/torvalds/linux"}');
+        $this->api('PUT', '/api/v2/user/storage', '{"bucket":"test","access_key":"key","secret_key":"secret","endpoint_url":"http://127.0.0.1:80"}');
+        $form = $h->get('/settings/webhooks/new');
+        $this->post('/settings/webhooks', ['csrf_token' => MintHarness::csrf($form['body']), 'content_type' => 'xml', 'events' => ['push'], 'active' => 'yes', 'payload_url' => 'https://www.google.com']);
+        $form = $h->get('/settings/imports/new');
+        $this->post('/settings/imports', ['csrf_token' => MintHarness::csrf($form['body']), 'kind' => 'git', 'source_url' => 'https://github.com/torvalds/linux']);
+        $this->get('/docs/api');
+        $this->keep('401 bad token', $h->request('GET', '/api/v2/user/hooks', '', null, ['Authorization' => 'Bearer not-a-token']));
         $this->keep('OPTIONS', $h->request('OPTIONS', '/settings/imports'));
         $this->keep('PUT', $h->request('PUT', '/settings/webhooks/new', '', 'x=1'));
         $this->keep('401', $h->request('GET', '/api/v2/user/hooks'));

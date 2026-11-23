@@ -25,6 +25,7 @@ final class SsrfForms
     public const DEFAULT_EVENT = 'token.created';
     public const KINDS = ['orders_csv' => 'Orders (CSV)', 'orders_json' => 'Orders (JSON)', 'mirror' => 'Mirror a Git repository'];
     public const CONTENT_TYPES = ['json', 'form'];
+    public const CONTENT_TYPE_LABELS = ['json' => 'application/json', 'form' => 'application/x-www-form-urlencoded'];
 
     public const MESSAGES = [
         'url_missing' => 'Enter a URL.',
@@ -35,8 +36,8 @@ final class SsrfForms
         'repo_shape' => 'Repository URL must look like https://github.com/<owner>/<repo>.',
         'repo_host' => 'Orders imports need a direct file URL; repository hosts are not supported.',
         'secret_invalid' => 'Use up to 64 letters, digits or the characters . _ ~ + / = -',
-        'events_invalid' => 'Choose events from the list.',
-        'content_type_invalid' => 'Choose json or form.',
+        'events_invalid' => 'Choose one or more events.',
+        'content_type_invalid' => 'Choose a content type.',
         'active_invalid' => 'Choose active or inactive.',
         'kind_invalid' => 'Choose an import kind.',
         'bucket_invalid' => 'Bucket names are 3 to 63 lowercase letters, digits, dots or hyphens.',
@@ -49,9 +50,58 @@ final class SsrfForms
         'storage_missing' => 'Save an export destination first.',
     ];
 
+    /** A form error's wording: an enumerated field names its options by the labels the form shows. */
     public static function message(string $key): string
     {
-        return self::MESSAGES[$key] ?? 'Check this field.';
+        $labels = match ($key) {
+            'events_invalid' => array_values(self::EVENTS),
+            'kind_invalid' => array_values(self::KINDS),
+            'content_type_invalid' => array_values(self::CONTENT_TYPE_LABELS),
+            default => null,
+        };
+        $text = self::MESSAGES[$key] ?? 'Check this field.';
+
+        return $labels === null ? $text : substr($text, 0, -1) . ': ' . self::either($labels) . '.';
+    }
+
+    /** @param list<string> $items "a, b or c" */
+    private static function either(array $items): string
+    {
+        $rest = array_slice($items, 0, -1);
+        $last = (string) ($items[count($items) - 1] ?? '');
+
+        return $rest === [] ? $last : implode(', ', $rest) . ' or ' . $last;
+    }
+
+    /**
+     * The values an enumerated field accepts, by its error key, as the API takes them. The forms render
+     * the same constants as their options, so a page and an API error never disagree.
+     *
+     * @return list<string>|null
+     */
+    public static function allowed(string $key): ?array
+    {
+        return match ($key) {
+            'events_invalid' => array_keys(self::EVENTS),
+            'kind_invalid' => array_keys(self::KINDS),
+            'content_type_invalid' => self::CONTENT_TYPES,
+            'active_invalid' => ['true', 'false'],
+            default => null,
+        };
+    }
+
+    /** An API error's wording: an enumerated field names the values it accepts; any other uses the form's. */
+    public static function apiMessage(string $key): string
+    {
+        $allowed = self::allowed($key);
+
+        return match ($key) {
+            'events_invalid' => 'events must list one or more of: ' . implode(', ', (array) $allowed) . '.',
+            'kind_invalid' => 'kind must be one of: ' . self::either((array) $allowed) . '.',
+            'content_type_invalid' => 'content_type must be ' . self::either((array) $allowed) . '.',
+            'active_invalid' => 'active must be true or false.',
+            default => self::message($key),
+        };
     }
 
     /**

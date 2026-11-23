@@ -76,7 +76,7 @@ final class SsrfNoOutboundTest extends TestCase
         'Funnypot\\App\\Tarpit\\Mint\\MintPlan::empty', 'Funnypot\\App\\Tarpit\\Mint\\MintPlan::html', 'Funnypot\\App\\Tarpit\\Mint\\MintPlan::json',
         'Funnypot\\App\\Tarpit\\Mint\\MintPlan::redirect', 'Funnypot\\App\\Tarpit\\Mint\\MintRequest::parse', 'Funnypot\\App\\Tarpit\\Mint\\TokenMintDecoy::nonDisclosing',
         'Funnypot\\App\\Tarpit\\Mint\\AccountPages::e', 'Funnypot\\App\\Http\\HoneypotController::decoyForPath', 'Funnypot\\App\\Tarpit\\Mint\\MintRoutes::coreKeyed',
-        'Funnypot\\App\\Tarpit\\Mint\\MintRoutes::normalise', 'Funnypot\\App\\Storage\\Sqlite::open',
+        'Funnypot\\App\\Tarpit\\Mint\\MintRoutes::normalise', 'Funnypot\\App\\Storage\\Sqlite::open', 'Funnypot\\App\\Tarpit\\Mint\\MintVocabulary::text',
     ];
 
     /** The one network-capable class client the namespace may reach, and only from the stores. */

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnypot\Tests\App\Http;
 
+use Funnypot\App\Tarpit\Ssrf\SsrfForms;
 use Funnypot\App\Tarpit\Ssrf\SsrfRoutes;
 use Funnypot\Core\RequestContext;
 use Funnypot\Tests\App\Tarpit\Mint\MintHarness;
@@ -41,6 +42,43 @@ final class SsrfRouteQuietTest extends TestCase
         self::assertGreaterThanOrEqual($routes, $sent);
         self::assertGreaterThanOrEqual(count(SsrfRoutes::examples()) * 8, $routes, 'every route and method, for every seed');
         self::assertSame([], SsrfRoutes::QUIET_EXEMPT, 'no route is exempt');
+    }
+
+    /**
+     * Every value the API docs and errors name, sent back as its field (alone, and every event together)
+     * on each create and edit route in both encodings, is quiet: following the docs never gets an agent
+     * logged as an attacker.
+     */
+    public function test_every_documented_value_is_quiet_where_it_is_sent(): void
+    {
+        $values = [];
+        foreach (['events_invalid' => 'events', 'kind_invalid' => 'kind', 'content_type_invalid' => 'content_type', 'active_invalid' => 'active'] as $key => $field) {
+            foreach ((array) SsrfForms::allowed($key) as $v) {
+                $values[] = [$field, $field === 'events' ? [$v] : ($field === 'active' ? $v === 'true' : $v)];
+            }
+        }
+        $values[] = ['events', array_keys(SsrfForms::EVENTS)];
+        $url = 'http://172.16.0.5:8080/hooks';
+        $sent = 0;
+        $reqs = [];
+        foreach ($values as [$field, $value]) {
+            $last = $field === 'kind' ? 'source_url' : 'payload_url';
+            $routes = $field === 'kind' ? ['/settings/imports'] : ['/settings/webhooks', '/settings/webhooks/4b7e19a2c0a1'];
+            $apiRoutes = $field === 'kind' ? [['POST', '/api/v2/user/imports'], ['POST', '/v2/user/imports']]
+                : [['POST', '/api/v2/user/hooks'], ['POST', '/v2/user/hooks'], ['PATCH', '/api/v2/user/hooks/4b7e19a2c0a1']];
+            $form = is_bool($value) ? ($value ? '1' : '0') : $value;
+            foreach ($routes as $path) {
+                $reqs[] = new RequestContext('POST', $path, '', SsrfCorpus::F, http_build_query(['csrf_token' => SsrfCorpus::CSRF, $field => $form, $last => $url]));
+            }
+            foreach ($apiRoutes as [$m, $path]) {
+                $reqs[] = new RequestContext($m, $path, '', SsrfCorpus::J, (string) json_encode([$field => $value, $field === 'kind' ? 'source_url' : 'url' => $url], JSON_UNESCAPED_SLASHES));
+            }
+        }
+        foreach ($reqs as $r) {
+            $sent++;
+            self::assertFalse(SsrfCorpus::flags($r), "{$r->method} {$r->path} " . $r->rawBody . ' flagged ' . json_encode(SsrfCorpus::why($r)));
+        }
+        self::assertGreaterThanOrEqual(40, $sent);
     }
 
     public function test_the_pair_rule_controls(): void

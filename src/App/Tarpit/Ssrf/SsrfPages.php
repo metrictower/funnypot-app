@@ -89,7 +89,7 @@ final class SsrfPages
         $active = (bool) ($values['active'] ?? true);
         $opts = '';
         foreach (SsrfForms::CONTENT_TYPES as $c) {
-            $opts .= "<option value='{$c}'" . ($ct === $c ? ' selected' : '') . '>application/' . ($c === 'json' ? 'json' : 'x-www-form-urlencoded') . '</option>';
+            $opts .= "<option value='{$c}'" . ($ct === $c ? ' selected' : '') . '>' . SsrfForms::CONTENT_TYPE_LABELS[$c] . '</option>';
         }
         $boxes = '';
         foreach (SsrfForms::EVENTS as $ev => $label) {

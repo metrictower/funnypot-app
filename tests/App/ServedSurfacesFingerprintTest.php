@@ -682,10 +682,14 @@ final class ServedSurfacesFingerprintTest extends TestCase
             }
             self::assertNotSame([], self::scanAll($body . "\nModSecurity paranoia-level OWASP_CRS"), "planted in a {$k} answer, the scan flags it");
         }
-        foreach (\Funnypot\App\Tarpit\Ssrf\SsrfForms::MESSAGES as $key => $text) {
-            self::assertServedClean($text, "ssrf message {$key}");
+        foreach (array_keys(\Funnypot\App\Tarpit\Ssrf\SsrfForms::MESSAGES) as $key) {
+            self::assertServedClean(\Funnypot\App\Tarpit\Ssrf\SsrfForms::message($key), "ssrf form message {$key}");
+            self::assertServedClean(\Funnypot\App\Tarpit\Ssrf\SsrfForms::apiMessage($key), "ssrf API message {$key}");
         }
         self::assertGreaterThanOrEqual(20, count($kinds), 'page and JSON kinds');
+        foreach (['POST /api/v2/user/hooks 422', 'POST /api/v2/user/imports 422', 'POST /settings/webhooks 422', 'GET /docs/api 200', '401 bad token 401'] as $k) {
+            self::assertArrayHasKey($k, $kinds, "the scan read the {$k} answer (allowed values, docs, bad-token 401)");
+        }
         self::assertGreaterThan(1_000_000, $bytes, "the scan covered the full output ({$bytes} bytes)");
     }
 

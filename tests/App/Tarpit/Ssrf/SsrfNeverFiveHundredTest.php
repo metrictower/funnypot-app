@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
 final class SsrfNeverFiveHundredTest extends TestCase
 {
     private const REQUESTS = 5000;
-    private const PRE_AUTH = ['csrf', 'no_session', 'unauthorized', 'method', 'too_large', 'scope_403', 'bad_body', ''];
+    private const PRE_AUTH = ['csrf', 'no_session', 'unauthorized', 'bad_credentials', 'method', 'too_large', 'scope_403', 'bad_body', ''];
 
     public function test_random_requests_never_leave_the_closed_set(): void
     {

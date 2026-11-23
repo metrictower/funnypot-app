@@ -87,17 +87,22 @@ final class SsrfRoutes
     /** The token-mint extension the SSRF decoy needs: scopes, forms, redirect targets, nav and docs. */
     public static function extension(): SurfaceExtension
     {
+        // The allowed values come from the same constants the forms render and the API's errors name.
         $ops = [
             ['GET', 'user/hooks', 'Your account webhooks', 'webhooks:write'],
-            ['POST', 'user/hooks', 'Create a webhook (fields: content_type, secret, events, active, url)', 'webhooks:write'],
-            ['PATCH', 'user/hooks/{id}', 'Update a webhook', 'webhooks:write'],
-            ['POST', 'user/hooks/{id}/pings', 'Send a test delivery', 'webhooks:write'],
+            ['POST', 'user/hooks', 'Create a webhook. Fields: url (http or https); content_type (json or form, default json); secret '
+                . '(optional, signs each delivery with HMAC-SHA256); events (one or more of ' . implode(', ', array_keys(SsrfForms::EVENTS))
+                . '; default ' . SsrfForms::DEFAULT_EVENT . '); active (true or false). A webhook delivers when you send it a test delivery.', 'webhooks:write'],
+            ['PATCH', 'user/hooks/{id}', 'Update a webhook: any create field; leave out url to keep the current one', 'webhooks:write'],
+            ['POST', 'user/hooks/{id}/pings', 'Send a test delivery to the webhook\'s URL; the result appears in its recent deliveries', 'webhooks:write'],
             ['GET', 'user/hooks/{id}/deliveries', 'Recent deliveries', 'webhooks:write'],
             ['POST', 'user/hooks/{id}/deliveries/{did}/attempts', 'Redeliver to the current URL', 'webhooks:write'],
-            ['POST', 'user/imports', 'Import into your sandbox (fields: kind, source_url)', 'imports:write'],
+            ['POST', 'user/imports', 'Import into your sandbox. Fields: kind (' . implode(', ', array_keys(SsrfForms::KINDS))
+                . '); source_url (a direct file URL, or https://github.com/<owner>/<repo> for mirror)', 'imports:write'],
             ['GET', 'user/imports/{id}', 'An import\'s progress', 'imports:write'],
-            ['PUT', 'user/storage', 'Set the export destination (fields: bucket, access_key, secret_key, endpoint_url)', 'storage:write'],
-            ['POST', 'user/storage/verifications', 'Verify the export destination', 'storage:write'],
+            ['PUT', 'user/storage', 'Set the export destination. Fields: bucket (3 to 63 lowercase letters, digits, dots or hyphens); '
+                . 'access_key; secret_key; endpoint_url (an S3-compatible http or https endpoint, no query)', 'storage:write'],
+            ['POST', 'user/storage/verifications', 'Verify the export destination by writing a small test object', 'storage:write'],
         ];
 
         return new SurfaceExtension(
